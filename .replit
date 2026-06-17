@@ -1,4 +1,4 @@
-run = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+run = "pip install -q -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 entrypoint = "app/main.py"
 modules = ["python-3.11"]
 
@@ -6,7 +6,7 @@ modules = ["python-3.11"]
 channel = "stable-24_05"
 
 [deployment]
-run = ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
+run = ["sh", "-c", "pip install -q -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
 
 [[ports]]
 localPort = 8000
