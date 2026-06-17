@@ -1,0 +1,16 @@
+run = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+entrypoint = "app/main.py"
+modules = ["python-3.11"]
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
+
+[[ports]]
+localPort = 8000
+externalPort = 80
+
+[env]
+PORT = "8000"

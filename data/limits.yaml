@@ -1,0 +1,64 @@
+# Personal Flight Decision Card — encoded limits (Jeremy / CYFD)
+# Edit these to tune the tool. All winds in knots, visibility in statute miles,
+# ceilings in feet AGL. Cross-country (XC) values are used for destination flights.
+
+hard_limits:
+  wind:
+    sustained_max_kt: 20
+    gust_spread_max_kt: 10      # gust minus steady
+    crosswind_max_kt: 9
+  ceiling_agl_ft:
+    day_circuit: 2000
+    day_xc: 4000
+    night_circuit: 3000
+    night_xc_cloud_base: 12000
+  visibility_sm:
+    day_circuit: 5
+    day_xc: 9
+    night_circuit: 6
+    night_xc: 9
+  weather_flags:                # any present in METAR/TAF -> NO-GO
+    - convective_sigmet
+    - thunderstorm            # TS
+    - embedded_thunderstorm   # embedded TS
+    - freezing_rain           # FZRA
+    - forecast_icing
+    - moderate_turbulence_low # below 3000 ft
+    - low_level_wind_shear    # LLWS / WS
+    - widespread_ifr
+  recent_experience:
+    min_hours_last_30_days: 5
+  fuel_reserve_hr:
+    vfr: 1.0
+    ifr: 1.5
+
+# TWO-TRIGGER THREAT STACKING
+# Count of major threats present -> rule. 0 normal, 1 mitigate, 2 no-go solo, 3 no-go.
+threat_stacking:
+  major_threats:
+    - night_operations
+    - actual_imc
+    - icing_potential
+    - convective_nearby
+    - strong_or_gusty_winds
+    - moderate_turbulence_or_shear
+    - terrain_critical
+    - single_pilot_ifr_no_autopilot
+    - unfamiliar_or_complex_airspace
+  rule:
+    "0": GO
+    "1": MITIGATE
+    "2": NO-GO        # no-go solo
+    "3": NO-GO
+
+# Thresholds used to derive threats/scoring from forecast model data (outlook)
+outlook:
+  good_max_wind_kt: 12
+  marginal_max_wind_kt: 18
+  good_max_crosswind_kt: 7
+  good_max_cloud_pct: 50
+  good_max_precip_mm: 0.2
+  marginal_max_precip_mm: 2.0
+  cape_convective: 300        # J/kg suggesting convective potential
+  pressure_falling_hpa_per_6h: -1.5   # steeper fall than this = low approaching
+  pressure_rising_hpa_per_6h: 1.0     # rise above this = high building

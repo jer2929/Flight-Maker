@@ -1,0 +1,10 @@
+ident,name,latitude_deg,longitude_deg,elevation_ft,municipality,type
+CYFD,Brantford Municipal Airport,43.1314,-80.3425,815,Brantford,small_airport
+CYHM,John C. Munro Hamilton International Airport,43.1736,-79.9350,780,Hamilton,large_airport
+CYKF,Region of Waterloo International Airport,43.4608,-80.3786,1055,Kitchener,medium_airport
+CYSN,Niagara District Airport,43.1917,-79.1717,321,St. Catharines,small_airport
+CYXU,London International Airport,43.0356,-81.1539,912,London,medium_airport
+CNC3,Brampton-Caledon Airport,43.7603,-79.8750,935,Brampton,small_airport
+CYTZ,Billy Bishop Toronto City Airport,43.6275,-79.3961,252,Toronto,medium_airport
+CYOO,Oshawa Executive Airport,43.9228,-78.8950,460,Oshawa,small_airport
+KBUF,Buffalo Niagara International Airport,42.9405,-78.7322,728,Buffalo,large_airport

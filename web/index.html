@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flight-Maker</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>✈️ Flight-Maker</h1>
+    <p id="origin-line">Loading…</p>
+  </header>
+
+  <!-- Personal self-assessment: gates the whole session -->
+  <section class="panel" id="self-check">
+    <h2>Self-assessment <span class="hint">(decision card)</span></h2>
+    <div class="checks-grid">
+      <fieldset>
+        <legend>Pilot fitness — do not fly if any apply</legend>
+        <label><input type="checkbox" class="gate" /> Illness or feeling unwell</label>
+        <label><input type="checkbox" class="gate" /> Medication affecting alertness</label>
+        <label><input type="checkbox" class="gate" /> Alcohol within 12 hours</label>
+        <label><input type="checkbox" class="gate" /> Significant fatigue / poor sleep</label>
+        <label><input type="checkbox" class="gate" /> High stress or distraction</label>
+        <label><input type="checkbox" class="gate" /> Poor hydration / no food</label>
+      </fieldset>
+      <fieldset>
+        <legend>External pressure — pause &amp; reassess</legend>
+        <label><input type="checkbox" class="gate" /> Schedule pressure</label>
+        <label><input type="checkbox" class="gate" /> Other pilots flying</label>
+        <label><input type="checkbox" class="gate" /> Training pressure / behind</label>
+        <label><input type="checkbox" class="gate" /> Passengers waiting</label>
+      </fieldset>
+    </div>
+    <div id="gate-banner" class="banner hidden">
+      ⚠️ One or more personal factors checked — <strong>PAUSE and reassess.</strong>
+      Would you be comfortable explaining a GO decision to your instructor?
+    </div>
+  </section>
+
+  <!-- Controls -->
+  <section class="panel">
+    <div class="controls">
+      <label class="control">Radius
+        <input type="range" id="radius" min="20" max="300" step="10" value="100" />
+        <output id="radius-out">100 nm</output>
+      </label>
+      <label class="control">Mode
+        <select id="mode">
+          <option value="day">Day</option>
+          <option value="night">Night</option>
+        </select>
+      </label>
+      <details class="control threats">
+        <summary>Active threats</summary>
+        <div id="threats-list"></div>
+      </details>
+    </div>
+    <div class="tabs">
+      <button class="tab active" data-tab="now">Fly now</button>
+      <button class="tab" data-tab="outlook">Next 10 days</button>
+    </div>
+  </section>
+
+  <!-- Now tab -->
+  <section id="tab-now" class="tab-pane">
+    <button id="run-now" class="primary">Find flights now</button>
+    <div id="now-results" class="results"></div>
+  </section>
+
+  <!-- Outlook tab -->
+  <section id="tab-outlook" class="tab-pane hidden">
+    <button id="run-outlook" class="primary">Load 10-day outlook</button>
+    <div id="outlook-strip" class="strip"></div>
+    <h3 id="day-heading" class="hidden"></h3>
+    <div id="day-results" class="results"></div>
+  </section>
+
+  <footer>
+    <p>Tactical data: NAV CANADA CFPS (METAR/TAF/NOTAM/SIGMET). Outlook: Open-Meteo model.
+       Runways: OurAirports. <strong>Always confirm with an official briefing before flight.</strong></p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
