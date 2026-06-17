@@ -23,10 +23,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FM_", env_file=".env", extra="ignore")
 
     # Home base and aircraft profile
-    origin: str = "CYFD"  # Brantford Municipal, ON
+    origin: str = "CYFD"  # Brantford Municipal, ON — default departure
     cruise_kt: float = 110.0  # Cessna 172-class true airspeed
 
-    # Candidate search
+    # Candidate search (discovery tab)
     default_radius_nm: float = 100.0
     max_radius_nm: float = 300.0
 
@@ -34,12 +34,13 @@ class Settings(BaseSettings):
     cfps_cache_ttl: int = 300
     openmeteo_cache_ttl: int = 1800
 
-    # Outlook horizon
-    outlook_days: int = 10
+    # Route timeline horizon (hours)
+    timeline_hours: int = 48
 
     # Upstream endpoints (overridable for testing/mirrors)
     cfps_base: str = "https://plan.navcanada.ca/weather/api/alpha/"
-    openmeteo_base: str = "https://api.open-meteo.com/v1/forecast"
+    openmeteo_base: str = "https://api.open-meteo.com/v1/gem"
+    openmeteo_model: str = "gem_seamless"  # HRDPS 2.5 km near-term
 
     request_timeout: float = 20.0
 

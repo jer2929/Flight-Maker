@@ -40,8 +40,8 @@ def test_cfps_metar_live():
 
 
 @pytest.mark.skipif(not OM_UP, reason="Open-Meteo unreachable (egress blocked)")
-def test_openmeteo_forecast_live():
-    fc = asyncio.run(openmeteo.forecast(43.13, -80.34, 3))
+def test_openmeteo_hrdps_forecast_live():
+    fc = asyncio.run(openmeteo.forecast(43.13, -80.34, 2))
     assert "hourly" in fc
-    assert "pressure_msl" in fc["hourly"]
-    assert "windspeed_850hPa" in fc["hourly"]
+    assert fc["hourly"].get("time")
+    assert "windspeed_10m" in fc["hourly"]

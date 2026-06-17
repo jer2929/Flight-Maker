@@ -1,70 +1,47 @@
-"""Glue layer: assemble live data into tactical assessments and the day outlook.
+"""Glue layer: assemble live data into route assessments and the discovery scan.
 
-Degrades gracefully when upstreams are unreachable (e.g. offline / egress
-blocked): assessments still return distances, runways and a cautious verdict.
+Degrades gracefully when upstreams are unreachable (offline / egress blocked):
+results still return distances, runways and a cautious verdict.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import datetime, timezone
 
 from app.config import get_settings
 from app.models import (
     AirportAssessment,
     AltitudeRecommendation,
-    DayOutlook,
+    Airport,
+    RouteAssessment,
+    Source,
     Verdict,
     WeatherSummary,
     WindAloft,
 )
+from app.services import timeline as tl
 from app.services import weather as wx
 from app.services.evaluator import evaluate
-from app.services.geo import flight_time_hr, haversine_nm, initial_bearing_true
-from app.services.outlook import build_outlook
+from app.services.geo import flight_time_hr, initial_bearing_true, haversine_nm
 from app.services.runway import best_runway
 from app.services.winds_aloft import recommend_altitude
 from app.sources import airports as ap
 from app.sources import cfps, openmeteo
 
-
-def _merge_weather(metar: str | None, taf: str | None) -> WeatherSummary:
-    """Build a conservative WeatherSummary from current METAR + forecast TAF."""
-    m = wx.parse_metar(metar or "")
-    t = wx.parse_taf(taf or "")
-    hazards = sorted(set(m["hazards"]) | set(t["hazards"]))
-
-    # Use the worse of current vs forecast for the hard-limit-relevant fields.
-    wind = _worse_max(m["wind_kt"], t["max_wind_kt"])
-    gust = _worse_max(m["gust_kt"], t["max_gust_kt"])
-    vis = _worse_min(m["visibility_sm"], t["min_visibility_sm"])
-    ceil = _worse_min(m["ceiling_agl_ft"], t["min_ceiling_agl_ft"])
-
-    return WeatherSummary(
-        raw_metar=metar, raw_taf=taf,
-        wind_dir_true=m["wind_dir_true"],
-        wind_kt=wind, gust_kt=gust,
-        visibility_sm=vis, ceiling_agl_ft=ceil,
-        hazards=hazards,
-    )
+_SEVERITY = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
 
 
-def _worse_max(a, b):
-    vals = [v for v in (a, b) if v is not None]
-    return max(vals) if vals else None
-
-
-def _worse_min(a, b):
-    vals = [v for v in (a, b) if v is not None]
-    return min(vals) if vals else None
+def _worse_verdict(a: Verdict, b: Verdict) -> Verdict:
+    return a if _SEVERITY[a] >= _SEVERITY[b] else b
 
 
 def _current_index(forecast: dict) -> int:
-    """Index of the hourly entry nearest 'now' in the forecast's local time."""
     times = forecast.get("hourly", {}).get("time", [])
     if not times:
         return 0
     offset = forecast.get("utc_offset_seconds", 0)
-    now_local = datetime.now(timezone.utc) + timedelta(seconds=offset)
-    target = now_local.strftime("%Y-%m-%dT%H:00")
+    now_local = datetime.now(timezone.utc).timestamp() + offset
+    target = datetime.utcfromtimestamp(now_local).strftime("%Y-%m-%dT%H:00")
     for i, t in enumerate(times):
         if t >= target:
             return i
@@ -83,103 +60,158 @@ def _winds_aloft_now(forecast: dict) -> list[WindAloft]:
     return out
 
 
+def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None) -> WeatherSummary:
+    """Build a 'now' WeatherSummary with provenance: METAR observation preferred,
+    then TAF, then HRDPS model. TAF worsening is merged for the hard-limit check."""
+    ws = WeatherSummary(raw_metar=metar, raw_taf=taf, source=Source.NONE)
+    segs = wx.parse_taf_segments(taf) if taf else []
+    taf_now = wx.conditions_at(segs, datetime.now(timezone.utc)) if segs else None
+    model_now = tl.model_conditions(fc, _current_index(fc)) if fc else None
+
+    if metar:
+        m = wx.parse_metar(metar)
+        ws.source = Source.OBSERVED
+        ws.wind_dir_true, ws.wind_kt, ws.gust_kt = m["wind_dir_true"], m["wind_kt"], m["gust_kt"]
+        ws.visibility_sm, ws.ceiling_agl_ft = m["visibility_sm"], m["ceiling_agl_ft"]
+        ws.hazards = list(m["hazards"])
+        tm = re.search(r"\b(\d{6})Z\b", metar)
+        ws.as_of = tm.group(1) + "Z" if tm else None
+        if model_now and model_now.get("wind_kt") is not None and m["wind_kt"] is not None:
+            ws.model_vs_obs_wind_kt = round(model_now["wind_kt"] - m["wind_kt"], 1)
+        _merge_worse(ws, taf_now)
+    elif taf_now:
+        ws.source = Source.TAF
+        _apply(ws, taf_now)
+    elif model_now:
+        ws.source = Source.MODEL
+        _apply(ws, model_now)
+    return ws
+
+
+def _apply(ws: WeatherSummary, c: dict) -> None:
+    ws.wind_dir_true = c.get("wind_dir_true")
+    ws.wind_kt = c.get("wind_kt")
+    ws.gust_kt = c.get("gust_kt")
+    ws.visibility_sm = c.get("visibility_sm")
+    ws.ceiling_agl_ft = c.get("ceiling_agl_ft")
+    ws.hazards = sorted(set(ws.hazards) | set(c.get("hazards", [])))
+
+
+def _merge_worse(ws: WeatherSummary, c: dict | None) -> None:
+    if not c:
+        return
+    if c.get("wind_kt") is not None and (ws.wind_kt is None or c["wind_kt"] > ws.wind_kt):
+        ws.wind_kt = c["wind_kt"]
+        if c.get("wind_dir_true") is not None:
+            ws.wind_dir_true = c["wind_dir_true"]
+    if c.get("gust_kt") is not None and (ws.gust_kt is None or c["gust_kt"] > ws.gust_kt):
+        ws.gust_kt = c["gust_kt"]
+    if c.get("visibility_sm") is not None and (ws.visibility_sm is None or c["visibility_sm"] < ws.visibility_sm):
+        ws.visibility_sm = c["visibility_sm"]
+    if c.get("ceiling_agl_ft") is not None and (ws.ceiling_agl_ft is None or c["ceiling_agl_ft"] < ws.ceiling_agl_ft):
+        ws.ceiling_agl_ft = c["ceiling_agl_ft"]
+    ws.hazards = sorted(set(ws.hazards) | set(c.get("hazards", [])))
+
+
+def _assess_endpoint(
+    airport: Airport, metar, taf, fc, notams, mode, manual_threats,
+    distance_nm: float, bearing: float, alt: AltitudeRecommendation | None,
+) -> AirportAssessment:
+    settings = get_settings()
+    runways = ap.get_runways(airport.ident)
+    weather = _endpoint_weather(metar, taf, fc)
+    rw = best_runway(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt)
+    verdict, reasons, n = evaluate(weather, rw, mode, ap.is_complex_airspace(airport.ident), manual_threats)
+    if weather.source == Source.NONE:
+        verdict = Verdict.MITIGATE if verdict == Verdict.GO else verdict
+        reasons.append("No live weather available — verify manually")
+    gs = alt.groundspeed_kt if alt else None
+    site_notams = notams.get(airport.ident, [])
+    return AirportAssessment(
+        airport=airport, distance_nm=round(distance_nm, 1), bearing_true=round(bearing),
+        flight_time_hr=round(flight_time_hr(distance_nm, settings.cruise_kt, gs), 2),
+        verdict=verdict, reasons=reasons, threat_count=n,
+        weather=weather, best_runway=rw,
+        notam_count=len(site_notams), notams=site_notams[:10], altitude=alt,
+    )
+
+
+async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threats: list[str]) -> RouteAssessment | None:
+    settings = get_settings()
+    dep = ap.get_airport(dep_ident)
+    dest = ap.get_airport(dest_ident)
+    if dep is None or dest is None:
+        return None
+
+    sites = [dep.ident, dest.ident]
+    metars = await _safe(cfps.metars(sites), {})
+    tafs = await _safe(cfps.tafs(sites), {})
+    notams = await _safe(cfps.notams(sites), {})
+    sigmets = await _safe(cfps.sigmets((dep.lat, dep.lon)), [])
+
+    dep_fc = await _safe(openmeteo.forecast(dep.lat, dep.lon, days_for(settings.timeline_hours)), {})
+    dest_fc = await _safe(openmeteo.forecast(dest.lat, dest.lon, days_for(settings.timeline_hours)), {})
+
+    distance = haversine_nm(dep.lat, dep.lon, dest.lat, dest.lon)
+    bearing = initial_bearing_true(dep.lat, dep.lon, dest.lat, dest.lon)
+    alt = recommend_altitude(_winds_aloft_now(dep_fc), bearing, settings.cruise_kt) if dep_fc else None
+
+    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None)
+    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt)
+
+    verdict_now = _worse_verdict(dep_a.verdict, dest_a.verdict)
+    reasons_now = [f"{dep.ident}: {r}" for r in dep_a.reasons] + [f"{dest.ident}: {r}" for r in dest_a.reasons]
+    if sigmets:
+        verdict_now = _worse_verdict(verdict_now, Verdict.MITIGATE)
+        reasons_now.append(f"{len(sigmets)} active SIGMET on/near route")
+
+    timeline = tl.build_timeline(
+        dep_fc, dest_fc,
+        wx.parse_taf_segments(tafs.get(dep.ident) or ""),
+        wx.parse_taf_segments(tafs.get(dest.ident) or ""),
+        ap.get_runways(dep.ident), ap.get_runways(dest.ident),
+        manual_threats, ap.is_complex_airspace(dep.ident) or ap.is_complex_airspace(dest.ident),
+        settings.timeline_hours,
+    )
+    windows = tl.best_windows(timeline, daylight_only=(mode == "day"))
+
+    return RouteAssessment(
+        departure=dep_a, destination=dest_a,
+        distance_nm=round(distance, 1), bearing_true=round(bearing),
+        flight_time_hr=dest_a.flight_time_hr,
+        verdict_now=verdict_now, reasons_now=reasons_now, altitude=alt,
+        sigmets=sigmets[:5], timeline=timeline, best_windows=windows,
+    )
+
+
 async def suggest(radius_nm: float, mode: str, manual_threats: list[str]) -> list[AirportAssessment]:
+    """Discovery scan: where can I go within radius right now (METAR/TAF based)."""
     settings = get_settings()
     origin = ap.get_airport(settings.origin)
     if origin is None:
         return []
-
     candidates = ap.airports_within(settings.origin, radius_nm)
     sites = [settings.origin] + [a.ident for a, _ in candidates]
-
     metars = await _safe(cfps.metars(sites), {})
     tafs = await _safe(cfps.tafs(sites), {})
     notams = await _safe(cfps.notams(sites), {})
-
-    # One Open-Meteo call at the origin gives current winds aloft for altitude advice.
     origin_fc = await _safe(openmeteo.forecast(origin.lat, origin.lon, 2), {})
     levels_now = _winds_aloft_now(origin_fc) if origin_fc else []
 
     results: list[AirportAssessment] = []
     for airport, dist in candidates:
         bearing = initial_bearing_true(origin.lat, origin.lon, airport.lat, airport.lon)
-        runways = ap.get_runways(airport.ident)
-
-        weather = _merge_weather(metars.get(airport.ident), tafs.get(airport.ident))
-        rw = best_runway(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt)
-
-        alt_rec: AltitudeRecommendation | None = recommend_altitude(levels_now, bearing, settings.cruise_kt)
-        gs = alt_rec.groundspeed_kt if alt_rec else None
-
-        verdict, reasons, n = evaluate(
-            weather, rw, mode, ap.is_complex_airspace(airport.ident), manual_threats,
-        )
-        if weather.raw_metar is None and weather.raw_taf is None:
-            verdict = Verdict.MITIGATE if verdict == Verdict.GO else verdict
-            reasons.append("No live weather available — verify manually")
-
-        site_notams = notams.get(airport.ident, [])
-        results.append(AirportAssessment(
-            airport=airport,
-            distance_nm=round(dist, 1),
-            bearing_true=round(bearing),
-            flight_time_hr=round(flight_time_hr(dist, settings.cruise_kt, gs), 2),
-            verdict=verdict, reasons=reasons, threat_count=n,
-            weather=weather, best_runway=rw,
-            notam_count=len(site_notams), notams=site_notams[:10],
-            altitude=alt_rec,
+        alt = recommend_altitude(levels_now, bearing, settings.cruise_kt)
+        results.append(_assess_endpoint(
+            airport, metars.get(airport.ident), tafs.get(airport.ident), None,
+            notams, mode, manual_threats, dist, bearing, alt,
         ))
-
-    severity = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
-    results.sort(key=lambda a: (severity[a.verdict], a.distance_nm))
+    results.sort(key=lambda a: (_SEVERITY[a.verdict], a.distance_nm))
     return results
 
 
-async def outlook(airport_ident: str, days: int) -> list[DayOutlook]:
-    airport = ap.get_airport(airport_ident)
-    if airport is None:
-        return []
-    fc = await _safe(openmeteo.forecast(airport.lat, airport.lon, days), {})
-    if not fc:
-        return []
-    return build_outlook(fc, ap.get_runways(airport.ident))
-
-
-async def day_plan(date: str, radius_nm: float) -> list[dict]:
-    """For a chosen forecast date, return per-destination surface wind, best
-    runway/crosswind, recommended cruise altitude and winds aloft."""
-    settings = get_settings()
-    origin = ap.get_airport(settings.origin)
-    if origin is None:
-        return []
-
-    out: list[dict] = []
-    for airport, dist in ap.airports_within(settings.origin, radius_nm):
-        days = await outlook(airport.ident, settings.outlook_days)
-        day = next((d for d in days if d.date == date), None)
-        if day is None:
-            continue
-        bearing = initial_bearing_true(origin.lat, origin.lon, airport.lat, airport.lon)
-        runways = ap.get_runways(airport.ident)
-        rw = best_runway(runways, day.surface_wind_dir_true, day.surface_wind_kt, day.surface_gust_kt)
-        alt = recommend_altitude(day.winds_aloft, bearing, settings.cruise_kt)
-        out.append({
-            "airport": airport.model_dump(),
-            "distance_nm": round(dist, 1),
-            "bearing_true": round(bearing),
-            "flight_time_hr": round(
-                flight_time_hr(dist, settings.cruise_kt, alt.groundspeed_kt if alt else None), 2),
-            "rating": day.rating.value,
-            "reasons": day.reasons,
-            "surface_wind_dir_true": day.surface_wind_dir_true,
-            "surface_wind_kt": day.surface_wind_kt,
-            "surface_gust_kt": day.surface_gust_kt,
-            "best_runway": rw.model_dump() if rw else None,
-            "altitude": alt.model_dump() if alt else None,
-        })
-    rating_rank = {"GOOD": 0, "MARGINAL": 1, "POOR": 2}
-    out.sort(key=lambda d: (rating_rank.get(d["rating"], 3), d["distance_nm"]))
-    return out
+def days_for(hours: int) -> int:
+    return max(2, (hours + 23) // 24 + 1)
 
 
 async def _safe(coro, default):

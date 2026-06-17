@@ -1,7 +1,9 @@
-"""Open-Meteo client (free, no API key) for the 10-day outlook and winds aloft.
+"""Open-Meteo client using Canada's HRDPS high-resolution model.
 
-Provides hourly surface wind, winds at pressure levels (mapped to approximate
-altitudes), MSL pressure, cloud cover, precipitation, CAPE and visibility.
+For "critically accurate, hour-to-hour" forecasts we use the GEM endpoint with
+``gem_seamless``, which serves the 2.5 km HRDPS continental model for the
+near-term where available (southern Ontario included) and blends the global GEM
+for pressure-level winds. Free, no API key.
 """
 from __future__ import annotations
 
@@ -19,9 +21,12 @@ PRESSURE_LEVELS_FT: dict[str, float] = {
     "500hPa": 18300,
 }
 
+# Surface variables. Requested defensively — Open-Meteo silently omits any a
+# given model doesn't carry, so downstream code treats missing series as None.
 _SURFACE_VARS = [
-    "pressure_msl", "cloudcover", "precipitation", "cape", "visibility",
     "windspeed_10m", "winddirection_10m", "windgusts_10m",
+    "cloudcover", "cloud_base", "precipitation", "weathercode",
+    "visibility", "temperature_2m", "is_day",
 ]
 
 
@@ -33,10 +38,10 @@ def _hourly_vars() -> list[str]:
     return vars_
 
 
-async def forecast(lat: float, lon: float, days: int) -> dict:
-    """Return Open-Meteo hourly forecast for a point (winds in knots)."""
+async def forecast(lat: float, lon: float, days: int = 2) -> dict:
+    """HRDPS hourly forecast for a point (winds in knots, local timezone)."""
     settings = get_settings()
-    key = f"om:{lat:.3f},{lon:.3f}:{days}"
+    key = f"hrdps:{lat:.3f},{lon:.3f}:{days}"
     cached = cache.get(key)
     if cached is not None:
         return cached
@@ -45,6 +50,7 @@ async def forecast(lat: float, lon: float, days: int) -> dict:
         "latitude": lat,
         "longitude": lon,
         "forecast_days": days,
+        "models": settings.openmeteo_model,
         "hourly": ",".join(_hourly_vars()),
         "windspeed_unit": "kn",
         "timezone": "auto",
@@ -55,3 +61,17 @@ async def forecast(lat: float, lon: float, days: int) -> dict:
         data = resp.json()
     cache.put(key, data, settings.openmeteo_cache_ttl)
     return data
+
+
+def cloud_base_to_ceiling_ft(cloud_base_m: float | None) -> float | None:
+    """Convert Open-Meteo cloud_base (metres AGL) to feet, else None."""
+    if cloud_base_m is None:
+        return None
+    return round(cloud_base_m * 3.28084)
+
+
+def visibility_to_sm(vis_m: float | None) -> float | None:
+    """Convert metres to statute miles (Open-Meteo visibility is in metres)."""
+    if vis_m is None:
+        return None
+    return round(vis_m / 1609.344, 1)

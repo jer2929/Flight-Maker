@@ -1,90 +1,106 @@
-"""Download OurAirports data and write a filtered, reduced subset to data/.
+"""Download OurAirports data and build the airport/runway dataset.
 
-Run where the network is open (locally or on Replit):
+Scope: every Canadian aerodrome (the free practical proxy for "has a CFS entry")
+plus US airports within ~100 nm of the Canadian border (cross-border trips).
 
-    python scripts/refresh_airport_data.py --radius 300
-
-Filters to airports within ``radius`` nm of the origin (CYFD) and emits
-``data/airports_ca.csv`` and ``data/runways_ca.csv`` in the reduced schema the
-loader expects. Free source, no API key.
+Usable two ways:
+  * CLI (run where the network is open, e.g. Replit):
+        python scripts/refresh_airport_data.py
+  * Imported: ``ensure_airport_data()`` is called lazily on first app load and
+    populates the dataset if it's missing and the network is reachable. Falls
+    back silently to the bundled seed otherwise.
 """
 from __future__ import annotations
 
-import argparse
 import csv
 import io
 import sys
 from pathlib import Path
 
-import httpx
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import DATA_DIR, get_settings  # noqa: E402
+from app.config import DATA_DIR  # noqa: E402
 from app.services.geo import haversine_nm  # noqa: E402
 
 AIRPORTS_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
 RUNWAYS_URL = "https://davidmegginson.github.io/ourairports-data/runways.csv"
 
 KEEP_TYPES = {"small_airport", "medium_airport", "large_airport"}
+US_BORDER_NM = 100.0
+
+AIRPORT_FIELDS = ["ident", "name", "latitude_deg", "longitude_deg",
+                  "elevation_ft", "municipality", "type"]
+RUNWAY_FIELDS = ["airport_ident", "length_ft", "surface", "closed",
+                 "le_ident", "le_heading_degT", "he_ident", "he_heading_degT"]
 
 
-def fetch_csv(url: str) -> list[dict]:
+def _fetch_csv(url: str) -> list[dict]:
+    import httpx
     resp = httpx.get(url, timeout=120, follow_redirects=True)
     resp.raise_for_status()
     return list(csv.DictReader(io.StringIO(resp.text)))
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--radius", type=float, default=300.0, help="radius nm around origin")
-    ap.add_argument("--origin", default=get_settings().origin)
-    args = ap.parse_args()
+def _coord(row: dict) -> tuple[float, float] | None:
+    try:
+        return float(row["latitude_deg"]), float(row["longitude_deg"])
+    except (ValueError, KeyError, TypeError):
+        return None
 
-    print(f"Downloading OurAirports data (filter: {args.radius} nm around {args.origin})...")
-    airports = fetch_csv(AIRPORTS_URL)
-    runways = fetch_csv(RUNWAYS_URL)
 
-    origin = next((a for a in airports if a["ident"] == args.origin), None)
-    if origin is None:
-        sys.exit(f"Origin {args.origin} not found in OurAirports data.")
-    olat, olon = float(origin["latitude_deg"]), float(origin["longitude_deg"])
+def build_airport_data() -> tuple[int, int]:
+    """Download, filter, and write the dataset. Returns (n_airports, n_runways)."""
+    airports = _fetch_csv(AIRPORTS_URL)
+    runways = _fetch_csv(RUNWAYS_URL)
 
-    kept_idents: set[str] = set()
-    out_airports = []
+    ca, ca_ref = [], []
     for a in airports:
-        if a["type"] not in KEEP_TYPES:
+        if a["type"] not in KEEP_TYPES or a["iso_country"] != "CA":
             continue
-        try:
-            d = haversine_nm(olat, olon, float(a["latitude_deg"]), float(a["longitude_deg"]))
-        except ValueError:
-            continue
-        if d > args.radius:
-            continue
-        kept_idents.add(a["ident"])
-        out_airports.append({
-            "ident": a["ident"], "name": a["name"],
-            "latitude_deg": a["latitude_deg"], "longitude_deg": a["longitude_deg"],
-            "elevation_ft": a["elevation_ft"], "municipality": a["municipality"],
-            "type": a["type"],
-        })
+        ca.append(a)
+        if a["type"] in ("medium_airport", "large_airport") and _coord(a):
+            ca_ref.append(_coord(a))
 
-    out_runways = []
-    for r in runways:
-        if r["airport_ident"] not in kept_idents:
+    # US airports within US_BORDER_NM of any Canadian medium/large field.
+    us = []
+    for a in airports:
+        if a["type"] not in KEEP_TYPES or a["iso_country"] != "US":
             continue
-        out_runways.append({
-            "airport_ident": r["airport_ident"], "length_ft": r["length_ft"],
-            "surface": r["surface"], "closed": r.get("closed", "0"),
-            "le_ident": r["le_ident"], "le_heading_degT": r["le_heading_degT"],
-            "he_ident": r["he_ident"], "he_heading_degT": r["he_heading_degT"],
-        })
+        c = _coord(a)
+        if not c:
+            continue
+        lat = c[0]
+        if lat < 40 or lat > 55:  # cheap pre-filter to the northern tier
+            continue
+        if any(haversine_nm(c[0], c[1], r[0], r[1]) <= US_BORDER_NM for r in ca_ref):
+            us.append(a)
 
-    _write(DATA_DIR / "airports_ca.csv", out_airports,
-           ["ident", "name", "latitude_deg", "longitude_deg", "elevation_ft", "municipality", "type"])
-    _write(DATA_DIR / "runways_ca.csv", out_runways,
-           ["airport_ident", "length_ft", "surface", "closed", "le_ident", "le_heading_degT", "he_ident", "he_heading_degT"])
-    print(f"Wrote {len(out_airports)} airports and {len(out_runways)} runways to {DATA_DIR}")
+    kept = ca + us
+    kept_idents = {a["ident"] for a in kept}
+
+    out_airports = [{k: a.get(k, "") for k in AIRPORT_FIELDS} for a in kept]
+    out_runways = [
+        {k: r.get(k, "") for k in RUNWAY_FIELDS}
+        for r in runways if r["airport_ident"] in kept_idents
+    ]
+    _write(DATA_DIR / "airports_ca.csv", out_airports, AIRPORT_FIELDS)
+    _write(DATA_DIR / "runways_ca.csv", out_runways, RUNWAY_FIELDS)
+    return len(out_airports), len(out_runways)
+
+
+def ensure_airport_data() -> bool:
+    """Populate the dataset if missing and the network is reachable.
+
+    Returns True if the full dataset is present (already or freshly built),
+    False if we should fall back to the bundled seed.
+    """
+    if (DATA_DIR / "airports_ca.csv").exists():
+        return True
+    try:
+        build_airport_data()
+        return True
+    except Exception:
+        return False  # offline / egress blocked -> seed fallback
 
 
 def _write(path: Path, rows: list[dict], fields: list[str]) -> None:
@@ -95,4 +111,6 @@ def _write(path: Path, rows: list[dict], fields: list[str]) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    print("Downloading OurAirports data (all Canada + US border)...")
+    n_a, n_r = build_airport_data()
+    print(f"Wrote {n_a} airports and {n_r} runways to {DATA_DIR}")

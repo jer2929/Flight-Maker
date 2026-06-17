@@ -8,6 +8,7 @@ any hazard keywords, which is what the hard-limit checks need.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from metar import Metar
@@ -105,7 +106,7 @@ def parse_taf(raw: str) -> dict:
             out["min_visibility_sm"] = vis if out["min_visibility_sm"] is None else min(out["min_visibility_sm"], vis)
 
     # Ceilings: lowest BKN/OVC/VV layer (height in hundreds of ft)
-    for m in re.finditer(r"\b(BKN|OVC|VV)(\d{3})\b", text):
+    for m in re.finditer(r"\b(BKN|OVC|VV)(\d{3})(?:CB|TCU)?\b", text):
         ceil = float(m.group(2)) * 100
         out["min_ceiling_agl_ft"] = ceil if out["min_ceiling_agl_ft"] is None else min(out["min_ceiling_agl_ft"], ceil)
 
@@ -122,3 +123,131 @@ def _vis_value(m: re.Match) -> Optional[float]:
     if m.group(4) and m.group(5):
         return float(m.group(4)) / float(m.group(5))
     return None
+
+
+# ---------------------------------------------------------------------------
+# TAF time-segmentation: turn a TAF into validity-windowed segments so we can
+# ask "what does the TAF say at 19:00Z tomorrow?" for the hourly route timeline.
+# ---------------------------------------------------------------------------
+
+def _parse_group(text: str) -> dict:
+    """Extract wind / vis / ceiling / hazards from a single TAF group's body."""
+    cond: dict = {
+        "wind_dir_true": None, "wind_kt": None, "gust_kt": None,
+        "visibility_sm": None, "ceiling_agl_ft": None, "hazards": [],
+    }
+    up = text.upper()
+    wm = re.search(r"\b(\d{3}|VRB)(\d{2,3})(?:G(\d{2,3}))?KT\b", up)
+    if wm:
+        if wm.group(1) != "VRB":
+            cond["wind_dir_true"] = float(wm.group(1))
+        cond["wind_kt"] = float(wm.group(2))
+        if wm.group(3):
+            cond["gust_kt"] = float(wm.group(3))
+    vm = re.search(r"\bP?(\d{1,2})(?:\s+(\d)/(\d))?SM\b|\b(\d)/(\d)SM\b", up)
+    if vm:
+        cond["visibility_sm"] = _vis_value(vm)
+    ceil = None
+    for cm in re.finditer(r"\b(BKN|OVC|VV)(\d{3})(?:CB|TCU)?\b", up):
+        h = float(cm.group(2)) * 100
+        ceil = h if ceil is None else min(ceil, h)
+    cond["ceiling_agl_ft"] = ceil
+    cond["hazards"] = detect_hazards(up)
+    return cond
+
+
+def _dhm(day: int, hour: int, ref: datetime) -> datetime:
+    """Resolve a TAF day/hour (UTC) to a datetime near the issue time ``ref``,
+    handling 24:00 and month rollover."""
+    extra = 0
+    if hour == 24:
+        hour = 0
+        extra = 1
+    month, year = ref.month, ref.year
+    if day < ref.day - 5:  # wrapped into next month
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+    return datetime(year, month, day, hour, tzinfo=timezone.utc) + timedelta(days=extra)
+
+
+def parse_taf_segments(raw: str) -> list[dict]:
+    """Parse a TAF into ``{kind, start, end, cond}`` segments (UTC times).
+
+    ``kind`` is ``"base"`` for the main/FM/BECMG forecast (selected by latest
+    start) or ``"overlay"`` for TEMPO/PROB (possible temporary worsening).
+    Returns ``[]`` if it can't parse — callers then fall back to model data.
+    """
+    if not raw:
+        return []
+    try:
+        up = " ".join(raw.upper().split())
+        issue = re.search(r"\b(\d{2})(\d{2})(\d{2})Z\b", up)
+        period = re.search(r"\b(\d{2})(\d{2})/(\d{2})(\d{2})\b", up)
+        if not issue or not period:
+            return []
+        ref = _dhm(int(issue.group(1)), int(issue.group(2)), datetime.now(timezone.utc))
+        main_start = _dhm(int(period.group(1)), int(period.group(2)), ref)
+        main_end = _dhm(int(period.group(3)), int(period.group(4)), ref)
+
+        body = up[period.end():]
+        chunks = re.split(r"\s+(?=FM\d{6}|BECMG\b|TEMPO\b|PROB\d{2}\b)", body.strip())
+
+        segments: list[dict] = []
+        for chunk in chunks:
+            if not chunk:
+                continue
+            fm = re.match(r"FM(\d{2})(\d{2})(\d{2})", chunk)
+            win = re.search(r"\b(\d{2})(\d{2})/(\d{2})(\d{2})\b", chunk)
+            if fm:
+                start = _dhm(int(fm.group(1)), int(fm.group(2)), ref)
+                segments.append({"kind": "base", "start": start, "end": main_end,
+                                 "cond": _parse_group(chunk)})
+            elif chunk.startswith("BECMG") and win:
+                start = _dhm(int(win.group(1)), int(win.group(2)), ref)
+                segments.append({"kind": "base", "start": start, "end": main_end,
+                                 "cond": _parse_group(chunk)})
+            elif (chunk.startswith("TEMPO") or chunk.startswith("PROB")) and win:
+                start = _dhm(int(win.group(1)), int(win.group(2)), ref)
+                end = _dhm(int(win.group(3)), int(win.group(4)), ref)
+                segments.append({"kind": "overlay", "start": start, "end": end,
+                                 "cond": _parse_group(chunk)})
+            else:
+                # First chunk = the main/base forecast body.
+                segments.append({"kind": "base", "start": main_start, "end": main_end,
+                                 "cond": _parse_group(chunk)})
+        return segments
+    except Exception:
+        return []
+
+
+def conditions_at(segments: list[dict], dt: datetime) -> Optional[dict]:
+    """Effective TAF conditions at UTC ``dt``: latest applicable base, with any
+    TEMPO/PROB overlay merged in conservatively (worse wind/vis/ceiling)."""
+    if not segments:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    bases = [s for s in segments if s["kind"] == "base" and s["start"] <= dt <= s["end"]]
+    if not bases:
+        return None
+    eff = dict(max(bases, key=lambda s: s["start"])["cond"])
+    eff["prob_overlay"] = False
+    for ov in segments:
+        if ov["kind"] != "overlay" or not (ov["start"] <= dt <= ov["end"]):
+            continue
+        c = ov["cond"]
+        if c["wind_kt"] is not None and (eff["wind_kt"] is None or c["wind_kt"] > eff["wind_kt"]):
+            eff["wind_kt"] = c["wind_kt"]
+            if c["wind_dir_true"] is not None:
+                eff["wind_dir_true"] = c["wind_dir_true"]
+        if c["gust_kt"] is not None and (eff["gust_kt"] is None or c["gust_kt"] > eff["gust_kt"]):
+            eff["gust_kt"] = c["gust_kt"]
+        if c["visibility_sm"] is not None and (eff["visibility_sm"] is None or c["visibility_sm"] < eff["visibility_sm"]):
+            eff["visibility_sm"] = c["visibility_sm"]
+        if c["ceiling_agl_ft"] is not None and (eff["ceiling_agl_ft"] is None or c["ceiling_agl_ft"] < eff["ceiling_agl_ft"]):
+            eff["ceiling_agl_ft"] = c["ceiling_agl_ft"]
+        if c["hazards"]:
+            eff["hazards"] = sorted(set(eff["hazards"]) | set(c["hazards"]))
+            eff["prob_overlay"] = True
+    return eff

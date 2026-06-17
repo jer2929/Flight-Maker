@@ -22,14 +22,35 @@ async def config():
     s = get_settings()
     origin = ap.get_airport(s.origin)
     return {
-        "origin": s.origin,
-        "origin_name": origin.name if origin else s.origin,
+        "departure": s.origin,
+        "departure_name": origin.name if origin else s.origin,
         "cruise_kt": s.cruise_kt,
         "default_radius_nm": s.default_radius_nm,
         "max_radius_nm": s.max_radius_nm,
-        "outlook_days": s.outlook_days,
+        "timeline_hours": s.timeline_hours,
         "major_threats": get_limits()["threat_stacking"]["major_threats"],
     }
+
+
+@app.get("/api/airports/search")
+async def airports_search(q: str = Query(default=""), limit: int = Query(default=20, ge=1, le=50)):
+    return JSONResponse([a.model_dump() for a in ap.search_airports(q, limit)])
+
+
+@app.get("/api/route")
+async def route(
+    dep: str = Query(default=None),
+    dest: str = Query(...),
+    mode: str = Query(default="day", pattern="^(day|night)$"),
+    threats: str = Query(default=""),
+):
+    s = get_settings()
+    dep = dep or s.origin
+    manual = [t for t in threats.split(",") if t]
+    result = await orchestrator.assess_route(dep, dest, mode, manual)
+    if result is None:
+        return JSONResponse({"error": "unknown departure or destination"}, status_code=404)
+    return JSONResponse(result.model_dump())
 
 
 @app.get("/api/suggest")
@@ -43,28 +64,6 @@ async def suggest(
     manual = [t for t in threats.split(",") if t]
     results = await orchestrator.suggest(radius, mode, manual)
     return JSONResponse([r.model_dump() for r in results])
-
-
-@app.get("/api/outlook")
-async def outlook(
-    airport: str = Query(default=None),
-    days: int = Query(default=None, ge=1, le=16),
-):
-    s = get_settings()
-    airport = airport or s.origin
-    days = days or s.outlook_days
-    results = await orchestrator.outlook(airport, days)
-    return JSONResponse([r.model_dump() for r in results])
-
-
-@app.get("/api/day")
-async def day(
-    date: str = Query(...),
-    radius: float = Query(default=None, ge=1, le=500),
-):
-    s = get_settings()
-    radius = radius or s.default_radius_nm
-    return JSONResponse(await orchestrator.day_plan(date, radius))
 
 
 @app.get("/api/airport/{ident}")

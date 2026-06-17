@@ -13,10 +13,13 @@ class Verdict(str, Enum):
     NOGO = "NO-GO"
 
 
-class DayRating(str, Enum):
-    GOOD = "GOOD"
-    MARGINAL = "MARGINAL"
-    POOR = "POOR"
+class Source(str, Enum):
+    """Provenance of a weather value, shown to the pilot."""
+
+    OBSERVED = "Observed"   # METAR
+    TAF = "TAF"             # aviation forecast
+    MODEL = "HRDPS"         # Open-Meteo HRDPS high-res model
+    NONE = "—"
 
 
 class Airport(BaseModel):
@@ -71,7 +74,10 @@ class WeatherSummary(BaseModel):
     gust_kt: Optional[float] = None
     visibility_sm: Optional[float] = None
     ceiling_agl_ft: Optional[float] = None
-    hazards: list[str] = []  # e.g. ["TS", "FZRA"]
+    hazards: list[str] = []  # e.g. ["thunderstorm", "freezing_rain"]
+    source: Source = Source.NONE       # where wind/conditions came from
+    as_of: Optional[str] = None        # observation/model time (ISO)
+    model_vs_obs_wind_kt: Optional[float] = None  # confidence hint when both exist
 
 
 class AirportAssessment(BaseModel):
@@ -89,21 +95,39 @@ class AirportAssessment(BaseModel):
     altitude: Optional[AltitudeRecommendation] = None
 
 
-class PressureTrend(BaseModel):
-    label: str  # "High building", "Low approaching", "Steady"
-    hpa_per_6h: float  # average change rate over the day
+class HourCondition(BaseModel):
+    """One hour of the 24-48 h route timeline."""
 
-
-class DayOutlook(BaseModel):
-    date: str  # ISO date
-    rating: DayRating
-    score: float
+    time: str                  # ISO local time
+    verdict: Verdict
+    wind_dir_true: Optional[float] = None
+    wind_kt: Optional[float] = None
+    gust_kt: Optional[float] = None
+    crosswind_kt: Optional[float] = None
+    ceiling_agl_ft: Optional[float] = None
+    visibility_sm: Optional[float] = None
+    hazards: list[str] = []
+    source: Source = Source.MODEL
     reasons: list[str] = []
-    pressure: Optional[PressureTrend] = None
-    surface_wind_dir_true: Optional[float] = None
-    surface_wind_kt: Optional[float] = None
-    surface_gust_kt: Optional[float] = None
-    cloud_cover_pct: Optional[float] = None
-    precip_mm: Optional[float] = None
-    cape: Optional[float] = None
-    winds_aloft: list[WindAloft] = []
+    daylight: bool = True
+
+
+class BestWindow(BaseModel):
+    start: str
+    end: str
+    hours: int
+    summary: str
+
+
+class RouteAssessment(BaseModel):
+    departure: AirportAssessment
+    destination: AirportAssessment
+    distance_nm: float
+    bearing_true: float
+    flight_time_hr: float
+    verdict_now: Verdict
+    reasons_now: list[str] = []
+    altitude: Optional[AltitudeRecommendation] = None
+    sigmets: list[str] = []
+    timeline: list[HourCondition] = []
+    best_windows: list[BestWindow] = []

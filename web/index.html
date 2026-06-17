@@ -9,7 +9,7 @@
 <body>
   <header>
     <h1>✈️ Flight-Maker</h1>
-    <p id="origin-line">Loading…</p>
+    <p id="dep-line">Loading…</p>
   </header>
 
   <!-- Personal self-assessment: gates the whole session -->
@@ -39,13 +39,13 @@
     </div>
   </section>
 
-  <!-- Controls -->
   <section class="panel">
+    <div class="tabs">
+      <button class="tab active" data-tab="route">Route</button>
+      <button class="tab" data-tab="discovery">Discovery</button>
+    </div>
+
     <div class="controls">
-      <label class="control">Radius
-        <input type="range" id="radius" min="20" max="300" step="10" value="100" />
-        <output id="radius-out">100 nm</output>
-      </label>
       <label class="control">Mode
         <select id="mode">
           <option value="day">Day</option>
@@ -57,29 +57,49 @@
         <div id="threats-list"></div>
       </details>
     </div>
-    <div class="tabs">
-      <button class="tab active" data-tab="now">Fly now</button>
-      <button class="tab" data-tab="outlook">Next 10 days</button>
+  </section>
+
+  <!-- Route tab -->
+  <section id="tab-route" class="tab-pane">
+    <div class="panel route-inputs">
+      <div class="ac">
+        <label>Departure</label>
+        <input id="dep" autocomplete="off" placeholder="CYFD" />
+        <div class="ac-list hidden" id="dep-list"></div>
+      </div>
+      <div class="ac">
+        <label>Destination</label>
+        <input id="dest" autocomplete="off" placeholder="Type ident or city…" />
+        <div class="ac-list hidden" id="dest-list"></div>
+      </div>
+      <button id="run-route" class="primary">Assess route</button>
     </div>
+
+    <div id="route-verdict"></div>
+    <div id="route-summary"></div>
+    <div id="route-endpoints" class="results two-col"></div>
+    <div id="route-windows"></div>
+    <div id="route-timeline"></div>
   </section>
 
-  <!-- Now tab -->
-  <section id="tab-now" class="tab-pane">
-    <button id="run-now" class="primary">Find flights now</button>
-    <div id="now-results" class="results"></div>
-  </section>
-
-  <!-- Outlook tab -->
-  <section id="tab-outlook" class="tab-pane hidden">
-    <button id="run-outlook" class="primary">Load 10-day outlook</button>
-    <div id="outlook-strip" class="strip"></div>
-    <h3 id="day-heading" class="hidden"></h3>
-    <div id="day-results" class="results"></div>
+  <!-- Discovery tab -->
+  <section id="tab-discovery" class="tab-pane hidden">
+    <div class="panel">
+      <label class="control">Radius
+        <input type="range" id="radius" min="20" max="300" step="10" value="100" />
+        <output id="radius-out">100 nm</output>
+      </label>
+      <button id="run-discovery" class="primary">Find flights now</button>
+    </div>
+    <div id="discovery-results" class="results"></div>
   </section>
 
   <footer>
-    <p>Tactical data: NAV CANADA CFPS (METAR/TAF/NOTAM/SIGMET). Outlook: Open-Meteo model.
-       Runways: OurAirports. <strong>Always confirm with an official briefing before flight.</strong></p>
+    <p><strong>Sources:</strong> METAR/TAF/NOTAM/SIGMET = NAV CANADA CFPS (authoritative).
+       Hourly forecast = Open-Meteo <strong>HRDPS</strong> (Canada 2.5 km model). Runways = OurAirports
+       (free CFS proxy). Every value is labelled <span class="src OBSERVED">Observed</span>
+       <span class="src TAF">TAF</span> <span class="src HRDPS">HRDPS</span>.
+       Forecasts are not observations — <strong>always confirm with an official NAV CANADA briefing before flight.</strong></p>
   </footer>
 
   <script src="/app.js"></script>
