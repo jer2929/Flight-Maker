@@ -21,6 +21,15 @@ PRESSURE_LEVELS_FT: dict[str, float] = {
     "500hPa": 18300,
 }
 
+# Pressure level -> MSL height (ft, standard atmosphere) for the ceiling
+# derivation. GEM doesn't carry ``cloud_base``, so we infer a ceiling from the
+# lowest level that is saturated (high relative humidity).
+PRESSURE_CLOUD_LEVELS_FT: dict[str, float] = {
+    "1000hPa": 364, "950hPa": 1800, "925hPa": 2500, "900hPa": 3243,
+    "850hPa": 4781, "800hPa": 6394, "700hPa": 9882,
+}
+CLOUD_RH_PCT = 95.0  # relative humidity at/above this = broken+ cloud likely
+
 # Surface variables. Requested defensively — Open-Meteo silently omits any a
 # given model doesn't carry, so downstream code treats missing series as None.
 _SURFACE_VARS = [
@@ -35,6 +44,8 @@ def _hourly_vars() -> list[str]:
     for lvl in PRESSURE_LEVELS_FT:
         vars_.append(f"windspeed_{lvl}")
         vars_.append(f"winddirection_{lvl}")
+    for lvl in PRESSURE_CLOUD_LEVELS_FT:
+        vars_.append(f"relative_humidity_{lvl}")
     return vars_
 
 
@@ -105,3 +116,27 @@ def visibility_to_sm(vis_m: float | None) -> float | None:
     if vis_m is None:
         return None
     return round(vis_m / 1609.344, 1)
+
+
+def field_elevation_ft(fc: dict) -> float | None:
+    """Model surface elevation (ft) at the point, from the response."""
+    el = fc.get("elevation")
+    return el * 3.28084 if el is not None else None
+
+
+def derive_ceiling_ft(hourly: dict, i: int, elevation_ft: float | None) -> float | None:
+    """Estimate ceiling (ft AGL) from the lowest saturated pressure level.
+
+    Used when the model has no ``cloud_base``. Returns None if no humidity data
+    or no saturated layer is found.
+    """
+    if elevation_ft is None:
+        return None
+    for lvl, msl_ft in sorted(PRESSURE_CLOUD_LEVELS_FT.items(), key=lambda kv: kv[1]):
+        arr = hourly.get(f"relative_humidity_{lvl}", [])
+        rh = arr[i] if i < len(arr) else None
+        if rh is not None and rh >= CLOUD_RH_PCT:
+            agl = msl_ft - elevation_ft
+            if agl > 100:  # ignore levels below the field
+                return round(agl)
+    return None
