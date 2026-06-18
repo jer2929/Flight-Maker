@@ -161,12 +161,24 @@ function endpointCard(a, role) {
       ${to ? `<div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)}) · headwind ${Math.round(to.headwind_kt)} kt · xwind ${to.crosswind_kt} kt${dims(to)}</div>` : ""}
       ${ld ? `<div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)}) · xwind ${ld.crosswind_kt} kt${ld.crosswind_kt_gust ? ` (gust ${ld.crosswind_kt_gust})` : ""}${dims(ld)}</div>` : ""}
     </div>
+    ${trendsBlock(a)}
     ${runwaysBlock(a)}
     <div class="links">${linksHtml(a)}</div>
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
     ${w.raw_metar ? `<div class="raw">METAR ${w.raw_metar}</div>` : ""}
     ${w.raw_taf ? `<div class="raw">TAF ${w.raw_taf}</div>` : ""}
+    ${metarHistory(a)}
   </div>`;
+}
+
+function trendsBlock(a) {
+  if (!a.trends || !a.trends.length) return "";
+  return `<div class="trends"><div class="trends-h">Trends (from recent METARs)</div>${a.trends.map((t) => `<div class="trend">${t}</div>`).join("")}</div>`;
+}
+function metarHistory(a) {
+  const h = a.metar_history || [];
+  if (h.length < 2) return "";
+  return `<details class="mhist"><summary>METAR history (${h.length})</summary>${h.map((m) => `<div class="raw">${escapeHtml(m)}</div>`).join("")}</details>`;
 }
 
 function runwaysBlock(a) {

@@ -56,6 +56,27 @@ async def metars(sites: list[str]) -> dict[str, str]:
     return out
 
 
+def _metar_time_key(raw: str) -> str:
+    """DDHHMM from the METAR timestamp, for chronological sorting."""
+    m = re.search(r"\b(\d{6})Z\b", raw or "")
+    return m.group(1) if m else ""
+
+
+async def metar_history(sites: list[str], limit: int = 8) -> dict[str, list[str]]:
+    """Recent raw METARs per site, newest first (deduplicated)."""
+    by_site: dict[str, list[str]] = {s.upper(): [] for s in sites}
+    for item in await _fetch("metar", sites):
+        loc = _location(item)
+        if loc in by_site:
+            by_site[loc].append(_text(item))
+    out: dict[str, list[str]] = {}
+    for loc, texts in by_site.items():
+        uniq = list(dict.fromkeys(t for t in texts if t))
+        uniq.sort(key=_metar_time_key, reverse=True)
+        out[loc] = uniq[:limit]
+    return out
+
+
 async def tafs(sites: list[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     for item in await _fetch("taf", sites):

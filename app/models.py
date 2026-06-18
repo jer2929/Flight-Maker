@@ -156,6 +156,8 @@ class AirportAssessment(BaseModel):
     cfs_url: Optional[str] = None
     info_url: Optional[str] = None
     altitude: Optional[AltitudeRecommendation] = None
+    metar_history: list[str] = []   # recent raw METARs, newest first
+    trends: list[str] = []          # inferred aviation trends from that history
 
 
 class HourCondition(BaseModel):
@@ -172,6 +174,7 @@ class HourCondition(BaseModel):
     wind_source: Optional[str] = None        # which airport drove the wind
     ceiling_agl_ft: Optional[float] = None
     visibility_sm: Optional[float] = None
+    cloud_cover_pct: Optional[float] = None
     hazards: list[str] = []
     source: Source = Source.MODEL
     reasons: list[str] = []
