@@ -34,6 +34,7 @@ class Airport(BaseModel):
 class Runway(BaseModel):
     airport_ident: str
     length_ft: Optional[float] = None
+    width_ft: Optional[float] = None
     surface: Optional[str] = None
     # Low and high runway ends
     le_ident: str
@@ -47,11 +48,29 @@ class RunwayWind(BaseModel):
 
     runway_ident: str  # e.g. "23"
     heading_true: float
+    heading_mag: Optional[float] = None
     headwind_kt: float  # negative = tailwind
     crosswind_kt: float
     crosswind_kt_gust: Optional[float] = None  # using gust + half-gust factor
     length_ft: Optional[float] = None
+    width_ft: Optional[float] = None
     surface: Optional[str] = None
+    surface_label: Optional[str] = None
+
+
+class RunwayComponent(BaseModel):
+    """Wind components on one runway end (for the full per-airport list)."""
+
+    ident: str
+    heading_true: float
+    heading_mag: Optional[float] = None
+    length_ft: Optional[float] = None
+    width_ft: Optional[float] = None
+    surface: Optional[str] = None
+    surface_label: Optional[str] = None
+    headwind_kt: float       # positive = headwind, negative = tailwind
+    crosswind_kt: float      # magnitude
+    tailwind_kt: float       # positive only when there is a tailwind, else 0
 
 
 class LimitCheck(BaseModel):
@@ -66,6 +85,7 @@ class LimitCheck(BaseModel):
     applicable: bool = True
     advisory: bool = False  # passed, but needs human GFA/chart review
     source: Optional[str] = None  # where the value came from
+    location: Optional[str] = None  # e.g. "CYHM (destination)"
 
 
 class ThreatCheck(BaseModel):
@@ -86,6 +106,7 @@ class Notam(BaseModel):
 class WindAloft(BaseModel):
     altitude_ft: float
     direction_true: float
+    direction_mag: Optional[float] = None
     speed_kt: float
     temperature_c: Optional[float] = None
 
@@ -94,6 +115,7 @@ class AltitudeRecommendation(BaseModel):
     altitude_ft: float
     headwind_kt: float  # along route; negative = tailwind
     groundspeed_kt: float
+    course_mag: Optional[float] = None
     levels: list[WindAloft] = []
 
 
@@ -101,6 +123,7 @@ class WeatherSummary(BaseModel):
     raw_metar: Optional[str] = None
     raw_taf: Optional[str] = None
     wind_dir_true: Optional[float] = None
+    wind_dir_mag: Optional[float] = None
     wind_kt: Optional[float] = None
     gust_kt: Optional[float] = None
     visibility_sm: Optional[float] = None
@@ -119,12 +142,19 @@ class AirportAssessment(BaseModel):
     verdict: Verdict
     reasons: list[str] = []
     threat_count: int = 0
+    threat_result_label: Optional[str] = None
     weather: WeatherSummary = WeatherSummary()
     best_runway: Optional[RunwayWind] = None
+    best_takeoff: Optional[RunwayWind] = None
+    best_landing: Optional[RunwayWind] = None
+    runway_components: list[RunwayComponent] = []
+    variation_deg: Optional[float] = None
     limit_checks: list[LimitCheck] = []
     threat_checks: list[ThreatCheck] = []
     notam_count: int = 0
     notams: list[Notam] = []
+    cfs_url: Optional[str] = None
+    info_url: Optional[str] = None
     altitude: Optional[AltitudeRecommendation] = None
 
 
@@ -134,9 +164,12 @@ class HourCondition(BaseModel):
     time: str                  # ISO local time
     verdict: Verdict
     wind_dir_true: Optional[float] = None
+    wind_dir_mag: Optional[float] = None
     wind_kt: Optional[float] = None
     gust_kt: Optional[float] = None
     crosswind_kt: Optional[float] = None
+    crosswind_runway: Optional[str] = None   # mag ident the xwind is on
+    wind_source: Optional[str] = None        # which airport drove the wind
     ceiling_agl_ft: Optional[float] = None
     visibility_sm: Optional[float] = None
     hazards: list[str] = []
@@ -158,8 +191,10 @@ class RouteAssessment(BaseModel):
     distance_nm: float
     bearing_true: float
     flight_time_hr: float
+    bearing_mag: Optional[float] = None
     verdict_now: Verdict
     reasons_now: list[str] = []
+    threat_result_label: Optional[str] = None
     limit_checks: list[LimitCheck] = []       # route-level at-a-glance checklist
     threat_checks: list[ThreatCheck] = []
     altitude: Optional[AltitudeRecommendation] = None

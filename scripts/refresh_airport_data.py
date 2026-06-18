@@ -30,7 +30,7 @@ US_BORDER_NM = 100.0
 
 AIRPORT_FIELDS = ["ident", "name", "latitude_deg", "longitude_deg",
                   "elevation_ft", "municipality", "type"]
-RUNWAY_FIELDS = ["airport_ident", "length_ft", "surface", "closed",
+RUNWAY_FIELDS = ["airport_ident", "length_ft", "width_ft", "surface", "closed",
                  "le_ident", "le_heading_degT", "he_ident", "he_heading_degT"]
 
 

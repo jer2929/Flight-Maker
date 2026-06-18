@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.models import BestWindow, HourCondition, Runway, Source, Verdict, WeatherSummary
+from app.services import magvar
 from app.services import weather as wx
 from app.services.evaluator import evaluate
 from app.services.runway import best_runway
@@ -90,6 +91,16 @@ def _endpoint_hour(fc: dict, taf_segs: list[dict], i: int, dt_utc: datetime) -> 
     return merged, True
 
 
+def _start_index(times: list[str], offset: int) -> int:
+    """First hour at or after 'now' (local), so windows never look backward."""
+    now_local = datetime.now(timezone.utc).timestamp() + offset
+    target = datetime.utcfromtimestamp(now_local).strftime("%Y-%m-%dT%H:00")
+    for i, t in enumerate(times):
+        if t >= target:
+            return i
+    return len(times)
+
+
 def build_timeline(
     dep_fc: dict,
     dest_fc: dict,
@@ -100,14 +111,24 @@ def build_timeline(
     manual_threats: list[str] | None = None,
     is_complex: bool = False,
     hours: int = 48,
+    dep_ident: str = "dep",
+    dest_ident: str = "dest",
+    dep_lat: float | None = None,
+    dep_lon: float | None = None,
+    dest_lat: float | None = None,
+    dest_lon: float | None = None,
+    static_hazards: set[str] | None = None,
 ) -> list[HourCondition]:
     times = _series(dep_fc, "time")
     if not times:
         return []
     offset = dep_fc.get("utc_offset_seconds", 0)
+    start = _start_index(times, offset)        # future only
+    static_hazards = static_hazards or set()
 
     timeline: list[HourCondition] = []
-    for i, tstr in enumerate(times[:hours]):
+    for i in range(start, min(start + hours, len(times))):
+        tstr = times[i]
         dt_utc = datetime.strptime(tstr, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc) - timedelta(seconds=offset)
 
         dep_cond, dep_taf = _endpoint_hour(dep_fc, dep_taf_segs, i, dt_utc)
@@ -115,26 +136,37 @@ def build_timeline(
 
         rw_dep = best_runway(runways_dep, dep_cond.get("wind_dir_true"), dep_cond.get("wind_kt"), dep_cond.get("gust_kt"))
         rw_dest = best_runway(runways_dest, dest_cond.get("wind_dir_true"), dest_cond.get("wind_kt"), dest_cond.get("gust_kt"))
-        rw = max(
-            [r for r in (rw_dep, rw_dest) if r],
-            key=lambda r: r.crosswind_kt_gust or r.crosswind_kt,
-            default=None,
-        )
+
+        # Which endpoint has the stronger wind drives the displayed wind + runway.
+        dw = dep_cond.get("wind_kt") or 0
+        tw = dest_cond.get("wind_kt") or 0
+        if tw > dw:
+            wind_src, rw, w_lat, w_lon = f"{dest_ident} (dest)", rw_dest, dest_lat, dest_lon
+        else:
+            wind_src, rw, w_lat, w_lon = f"{dep_ident} (dep)", rw_dep, dep_lat, dep_lon
 
         combined = _worse(dep_cond, dest_cond)
+        haz = sorted(set(combined.get("hazards", [])) | static_hazards)
         daylight = bool(_at(dep_fc, "is_day", i)) if _series(dep_fc, "is_day") else True
         ws = WeatherSummary(
             wind_dir_true=combined.get("wind_dir_true"), wind_kt=combined.get("wind_kt"),
             gust_kt=combined.get("gust_kt"), visibility_sm=combined.get("visibility_sm"),
-            ceiling_agl_ft=combined.get("ceiling_agl_ft"), hazards=combined.get("hazards", []),
+            ceiling_agl_ft=combined.get("ceiling_agl_ft"), hazards=haz,
         )
         mode = "day" if daylight else "night"
         verdict, reasons, _ = evaluate(ws, rw, mode, is_complex, manual_threats)
 
+        wind_dir_mag = None
+        if ws.wind_dir_true is not None and w_lat is not None:
+            wind_dir_mag = round(magvar.to_magnetic(ws.wind_dir_true, w_lat, w_lon))
+
         timeline.append(HourCondition(
             time=tstr, verdict=verdict,
-            wind_dir_true=ws.wind_dir_true, wind_kt=ws.wind_kt, gust_kt=ws.gust_kt,
+            wind_dir_true=ws.wind_dir_true, wind_dir_mag=wind_dir_mag,
+            wind_kt=ws.wind_kt, gust_kt=ws.gust_kt,
             crosswind_kt=(rw.crosswind_kt if rw else None),
+            crosswind_runway=(rw.runway_ident if rw else None),
+            wind_source=wind_src,
             ceiling_agl_ft=ws.ceiling_agl_ft, visibility_sm=ws.visibility_sm,
             hazards=ws.hazards,
             source=Source.TAF if (dep_taf or dest_taf) else Source.MODEL,
