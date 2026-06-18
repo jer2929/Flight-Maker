@@ -28,13 +28,21 @@ THREAT_LABELS = {
     "unfamiliar_or_complex_airspace": "Unfamiliar / complex airspace",
 }
 
+# Two-trigger threat-stacking outcome wording (straight off the decision card).
+THREAT_RESULT = {0: "Normal flight", 1: "Mitigate carefully", 2: "No-go solo", 3: "No-go"}
+
+
+def threat_result_label(count: int) -> str:
+    return THREAT_RESULT[min(count, 3)]
+
 
 def _worse(a: Verdict, b: Verdict) -> Verdict:
     return a if _SEVERITY[a] >= _SEVERITY[b] else b
 
 
 def conditions_checks(
-    weather: WeatherSummary, best_runway: RunwayWind | None, mode: str
+    weather: WeatherSummary, best_runway: RunwayWind | None, mode: str,
+    location: str | None = None,
 ) -> list[LimitCheck]:
     """Applicable wind / ceiling / visibility hard-limit rows (cross-country)."""
     L = get_limits()["hard_limits"]
@@ -85,6 +93,9 @@ def conditions_checks(
         actual_text=(", ".join(h.replace("_", " ") for h in present) if present else "none reported"),
         passed=not present, group="weather", source=src,
     ))
+    if location:
+        for c in checks:
+            c.location = location
     return checks
 
 

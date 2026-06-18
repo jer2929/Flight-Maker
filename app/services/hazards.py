@@ -53,8 +53,12 @@ def weather_checks(
     freezing_level_ft: Optional[float],
     personal_vis_sm: float,
     gfa: dict[str, str],
+    metar_taf_text: str = "",      # METAR/TAF only (for source attribution)
+    area_text: str = "",           # SIGMET/AIRMET/PIREP only
 ) -> list[LimitCheck]:
     blob = raw_text.upper()
+    mt = metar_taf_text.upper()
+    area = area_text.upper()
     checks: list[LimitCheck] = []
 
     def add(key, label, failed, actual, *, advisory=False, applicable=True):
@@ -64,21 +68,33 @@ def weather_checks(
             advisory=advisory, applicable=applicable,
         ))
 
-    # 1. Convective SIGMET or thunderstorms on route. Note TS/CB appear inside
-    # tokens (TSRA, 030CB), so don't require a leading word boundary.
-    conv = ("thunderstorm" in hazards) or _has(blob, r"\bTS", r"CONVECTIV", r"CB\b")
-    add("convective", "Convective SIGMET / thunderstorms",
-        conv, "thunderstorm reported" if conv else "none detected")
+    def _src(metar_flag: bool, area_flag: bool) -> str:
+        srcs = []
+        if metar_flag:
+            srcs.append("METAR/TAF")
+        if area_flag:
+            srcs.append("SIGMET/AIRMET")
+        return " + ".join(srcs) or "route data"
+
+    # 1. Convective SIGMET or thunderstorms on route. TS/CB appear inside tokens
+    # (TSRA, 030CB), so don't require a leading word boundary.
+    ts_metar = ("thunderstorm" in hazards) or _has(mt or blob, r"\bTS", r"CB\b")
+    ts_area = bool(area) and _has(area, r"\bTS", r"CONVECTIV", r"\bCB\b")
+    conv = ts_metar or ts_area
+    conv_actual = ("thunderstorm — " + _src(ts_metar, ts_area)) if conv else "none detected"
+    add("convective", "Convective SIGMET / thunderstorms", conv, conv_actual)
 
     # 2. Embedded thunderstorms
     embd = _has(blob, r"\bEMBD\b.*\b(TS|CB)\b", r"\bEMBEDDED\b")
     add("embedded_ts", "Embedded thunderstorms", embd,
-        "EMBD TS noted" if embd else "none detected")
+        ("EMBD TS — SIGMET/area forecast" if embd else "none detected"))
 
     # 3. Freezing rain forecast
-    fzra = ("freezing_rain" in hazards) or _has(blob, r"\bFZRA\b", r"\bFZDZ\b", r"FRZA")
-    add("freezing_rain", "Freezing rain", fzra,
-        "FZRA reported/forecast" if fzra else "none detected")
+    fz_metar = ("freezing_rain" in hazards) or _has(mt or blob, r"\bFZRA\b", r"\bFZDZ\b")
+    fz_area = bool(area) and _has(area, r"\bFZRA\b", r"FREEZING")
+    fzra = fz_metar or fz_area
+    fzra_actual = ("FZRA — " + _src(fz_metar, fz_area)) if fzra else "none detected"
+    add("freezing_rain", "Freezing rain", fzra, fzra_actual)
 
     # 4. Forecast icing in planned altitude band (AIRMET/SIGMET text; else advisory)
     icing_txt = _has(blob, r"\bICG\b", r"\bICE\b", r"ICING")

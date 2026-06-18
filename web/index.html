@@ -46,12 +46,12 @@
     </div>
 
     <div class="controls">
-      <label class="control">Mode
-        <select id="mode">
-          <option value="day">Day</option>
-          <option value="night">Night</option>
-        </select>
-      </label>
+      <div class="control">Time of day
+        <div class="seg" id="mode-seg">
+          <button type="button" class="seg-btn active" data-mode="day">Day flight</button>
+          <button type="button" class="seg-btn" data-mode="night">Night flight</button>
+        </div>
+      </div>
       <details class="control threats">
         <summary>Active threats</summary>
         <div id="threats-list"></div>

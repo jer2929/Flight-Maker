@@ -63,6 +63,36 @@ async def forecast(lat: float, lon: float, days: int = 2) -> dict:
     return data
 
 
+async def forecast_many(points: list[tuple[float, float]], days: int = 2) -> list[dict]:
+    """HRDPS forecast for many points in a single request (discovery scan).
+
+    Open-Meteo accepts comma-separated latitude/longitude and returns a list of
+    forecast objects in the same order. Falls back to an empty dict per point on
+    failure so callers degrade gracefully.
+    """
+    if not points:
+        return []
+    settings = get_settings()
+    lats = ",".join(f"{p[0]:.4f}" for p in points)
+    lons = ",".join(f"{p[1]:.4f}" for p in points)
+    key = f"hrdps_many:{hash((lats, lons, days))}"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    params = {
+        "latitude": lats, "longitude": lons, "forecast_days": days,
+        "models": settings.openmeteo_model, "hourly": ",".join(_hourly_vars()),
+        "windspeed_unit": "kn", "timezone": "auto",
+    }
+    async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
+        resp = await client.get(settings.openmeteo_base, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+    out = data if isinstance(data, list) else [data]
+    cache.put(key, out, settings.openmeteo_cache_ttl)
+    return out
+
+
 def cloud_base_to_ceiling_ft(cloud_base_m: float | None) -> float | None:
     """Convert Open-Meteo cloud_base (metres AGL) to feet, else None."""
     if cloud_base_m is None:

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Route timeline horizon (hours)
     timeline_hours: int = 48
 
+    # FltPlan CFS cycle folder (e.g. "22JAN2026") to enable direct CFS PDF links.
+    cfs_cycle: str = ""
+
     # Upstream endpoints (overridable for testing/mirrors)
     cfps_base: str = "https://plan.navcanada.ca/weather/api/alpha/"
     openmeteo_base: str = "https://api.open-meteo.com/v1/gem"

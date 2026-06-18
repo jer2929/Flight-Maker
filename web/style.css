@@ -153,6 +153,25 @@ select, input[type=text], .route-inputs input {
 .legend span::before { content: "■ "; }
 .legend .go::before { color: var(--go); } .legend .mit::before { color: var(--mitigate); } .legend .nogo::before { color: var(--nogo); }
 
+/* Day/Night segmented control */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg-btn { background: #0f1419; color: var(--muted); border: none; padding: 7px 14px; cursor: pointer; font-size: .9rem; }
+.seg-btn.active { background: var(--accent); color: #fff; }
+
+/* checklist location + source chips */
+.chk .act .loc { color: #8fbcff; }
+.chk .act .src-mini { font-size: .68rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 5px; }
+
+/* runway lines + components */
+.rwy-lines { font-size: .86rem; margin: 8px 0; display: grid; gap: 3px; }
+.rwy-lines strong { color: var(--ink); }
+details.runways { margin: 6px 0; font-size: .82rem; }
+details.runways summary { cursor: pointer; color: var(--accent); }
+.rwy-comp { color: var(--muted); padding: 3px 0 3px 14px; }
+.links { font-size: .82rem; }
+.links a { color: var(--accent); }
+.nogo-reasons li { color: #ffb4ab; }
+
 .hidden { display: none !important; }
 footer { max-width: 1000px; margin: 20px auto; padding: 0 20px 30px; color: var(--muted); font-size: .8rem; }
 .empty { color: var(--muted); padding: 14px; }

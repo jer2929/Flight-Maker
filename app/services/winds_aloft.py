@@ -1,10 +1,9 @@
-"""Winds-aloft analysis and best-cruise-altitude recommendation.
+"""Best-cruise-altitude recommendation from winds aloft.
 
-Given winds at several altitudes and the route bearing, find the legal VFR
-cruising altitude that maximises tailwind (minimises headwind) and hence
-groundspeed. VFR cruising altitudes (above 3000 ft AGL) follow the hemispheric
-rule: magnetic track 0-179 -> odd thousands + 500; 180-359 -> even + 500.
-We approximate magnetic track with the true bearing (good enough for selection).
+Evaluates the legal VFR cruising altitudes (hemispheric rule, **capped below
+12,500 ft** so no oxygen is required) and picks the one with the most tailwind
+(best groundspeed). Winds at each candidate altitude are interpolated from the
+model's pressure-level winds. The hemispheric rule uses the *magnetic* course.
 """
 from __future__ import annotations
 
@@ -14,46 +13,77 @@ from typing import Optional
 from app.models import AltitudeRecommendation, WindAloft
 from app.services.runway import angular_difference
 
+# VFR cruising altitudes (thousands+500), capped < 12,500 ft.
+_EASTBOUND = [3500, 5500, 7500, 9500, 11500]   # magnetic track 0-179, odd+500
+_WESTBOUND = [4500, 6500, 8500, 10500]         # magnetic track 180-359, even+500
+
 
 def route_wind_component(wind_dir_true: float, wind_kt: float, course_true: float) -> float:
     """Headwind component along the course (positive = headwind, negative = tail)."""
-    # Wind direction is where wind comes FROM; headwind when it opposes the course.
     delta = math.radians(angular_difference(wind_dir_true, course_true))
     return wind_kt * math.cos(delta)
 
 
-def is_legal_vfr_cruise(altitude_ft: float, course_true: float, terrain_floor_ft: float = 3000.0) -> bool:
-    """True if altitude is a valid VFR cruising altitude for the course."""
-    if altitude_ft < terrain_floor_ft:
-        return False
-    # Must be a thousands+500 level.
-    if abs((altitude_ft % 1000) - 500) > 1:
-        return False
-    thousands = int(altitude_ft // 1000)
-    eastbound = course_true < 180.0
-    return (thousands % 2 == 1) if eastbound else (thousands % 2 == 0)
+def _uv(direction_from: float, speed: float) -> tuple[float, float]:
+    r = math.radians(direction_from)
+    return (-speed * math.sin(r), -speed * math.cos(r))
+
+
+def _from_uv(u: float, v: float) -> tuple[float, float]:
+    speed = math.hypot(u, v)
+    direction_from = math.degrees(math.atan2(-u, -v)) % 360.0
+    return direction_from, speed
+
+
+def _interp_wind(levels: list[WindAloft], altitude_ft: float) -> Optional[tuple[float, float]]:
+    """Interpolate (direction_true, speed_kt) at altitude from sorted levels."""
+    if not levels:
+        return None
+    lv = sorted(levels, key=lambda x: x.altitude_ft)
+    if altitude_ft <= lv[0].altitude_ft:
+        return lv[0].direction_true, lv[0].speed_kt
+    if altitude_ft >= lv[-1].altitude_ft:
+        return lv[-1].direction_true, lv[-1].speed_kt
+    for a, b in zip(lv, lv[1:]):
+        if a.altitude_ft <= altitude_ft <= b.altitude_ft:
+            f = (altitude_ft - a.altitude_ft) / (b.altitude_ft - a.altitude_ft)
+            ua, va = _uv(a.direction_true, a.speed_kt)
+            ub, vb = _uv(b.direction_true, b.speed_kt)
+            return _from_uv(ua + (ub - ua) * f, va + (vb - va) * f)
+    return lv[-1].direction_true, lv[-1].speed_kt
+
+
+def candidate_altitudes(course_mag: float) -> list[int]:
+    return _EASTBOUND if course_mag < 180.0 else _WESTBOUND
 
 
 def recommend_altitude(
     levels: list[WindAloft],
     course_true: float,
     cruise_kt: float,
-    only_legal_vfr: bool = True,
+    course_mag: Optional[float] = None,
 ) -> Optional[AltitudeRecommendation]:
-    """Pick the altitude with the best (most negative) headwind component."""
+    """Pick the legal VFR altitude (<12,500) with the most tailwind."""
     if not levels:
         return None
-    candidates = [
-        lv for lv in levels
-        if not only_legal_vfr or is_legal_vfr_cruise(lv.altitude_ft, course_true)
-    ]
-    pool = candidates or levels  # fall back to any level if none are "legal"
-    best = min(pool, key=lambda lv: route_wind_component(lv.direction_true, lv.speed_kt, course_true))
+    cm = course_mag if course_mag is not None else course_true
+    cands = candidate_altitudes(cm)
+
+    winds_at: list[WindAloft] = []
+    for alt in cands:
+        w = _interp_wind(levels, alt)
+        if w is None:
+            continue
+        winds_at.append(WindAloft(altitude_ft=alt, direction_true=round(w[0]), speed_kt=round(w[1])))
+    if not winds_at:
+        return None
+
+    best = min(winds_at, key=lambda w: route_wind_component(w.direction_true, w.speed_kt, course_true))
     hw = route_wind_component(best.direction_true, best.speed_kt, course_true)
-    groundspeed = max(0.0, cruise_kt - hw)
     return AltitudeRecommendation(
         altitude_ft=best.altitude_ft,
         headwind_kt=round(hw, 1),
-        groundspeed_kt=round(groundspeed, 1),
-        levels=sorted(levels, key=lambda lv: lv.altitude_ft),
+        groundspeed_kt=round(max(0.0, cruise_kt - hw), 1),
+        course_mag=round(cm) if cm is not None else None,
+        levels=winds_at,
     )

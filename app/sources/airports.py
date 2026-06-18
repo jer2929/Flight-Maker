@@ -75,6 +75,7 @@ def load_runways() -> dict[str, list[Runway]]:
                 Runway(
                     airport_ident=ident,
                     length_ft=_to_float(row.get("length_ft")),
+                    width_ft=_to_float(row.get("width_ft")),
                     surface=(row.get("surface") or None),
                     le_ident=(row.get("le_ident") or "").strip(),
                     le_heading_true=_to_float(row.get("le_heading_degT")),
