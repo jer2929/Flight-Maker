@@ -26,7 +26,7 @@ PRESSURE_LEVELS_FT: dict[str, float] = {
 _SURFACE_VARS = [
     "windspeed_10m", "winddirection_10m", "windgusts_10m",
     "cloudcover", "cloud_base", "precipitation", "weathercode",
-    "visibility", "temperature_2m", "is_day",
+    "visibility", "temperature_2m", "is_day", "freezing_level_height",
 ]
 
 

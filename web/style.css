@@ -86,6 +86,35 @@ select, input[type=text], .route-inputs input {
 .reasons { margin: 8px 0 0; padding-left: 18px; font-size: .86rem; }
 .reasons li { margin: 2px 0; }
 .raw { color: var(--muted); font-family: ui-monospace, monospace; font-size: .76rem; margin-top: 8px; word-break: break-word; }
+.ok-line { color: #6ee7a0; font-size: .9rem; margin: 6px 0; }
+.meta .warn { color: #ff9b8f; }
+.control.checkbox { flex-direction: row; align-items: center; gap: 6px; }
+
+/* At-a-glance decision checklist */
+.checklist { display: grid; gap: 16px; }
+.cl-group h3 { margin: 0 0 8px; font-size: .95rem; display: flex; align-items: center; gap: 8px; }
+.chk {
+  display: grid; grid-template-columns: 20px 1fr auto auto; gap: 10px; align-items: baseline;
+  padding: 5px 8px; border-radius: 6px; font-size: .88rem; border-left: 3px solid transparent;
+}
+.chk:nth-child(even) { background: rgba(255,255,255,.02); }
+.chk .mark { font-weight: 700; text-align: center; }
+.chk .lbl { color: var(--ink); }
+.chk .act { color: var(--muted); text-align: right; }
+.chk .lim { color: var(--muted); font-size: .8rem; min-width: 86px; text-align: right; }
+.chk.pass { border-left-color: var(--go); } .chk.pass .mark { color: #6ee7a0; }
+.chk.fail { border-left-color: var(--nogo); background: rgba(192,57,43,.08); } .chk.fail .mark { color: #ff9b8f; }
+.chk.fail .lbl { font-weight: 600; }
+.chk.advisory { border-left-color: var(--mitigate); } .chk.advisory .mark { color: #f5c451; }
+.chk.na { opacity: .5; }
+.chk a { color: var(--accent); }
+
+/* NOTAM expansion */
+.notam-btn { cursor: pointer; color: var(--accent); }
+.notam-list { margin: 8px 0 0; display: grid; gap: 6px; }
+.notam { font-size: .8rem; color: var(--ink); background: rgba(255,255,255,.03);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.notam a { color: var(--accent); font-weight: 700; margin-right: 6px; white-space: nowrap; }
 
 /* source chips */
 .src { font-size: .68rem; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); }

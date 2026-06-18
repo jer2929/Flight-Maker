@@ -1,7 +1,23 @@
 import math
 
 from app.models import Runway
-from app.services.runway import angular_difference, best_runway, wind_components
+from app.services.runway import angular_difference, best_runway, surface_is_hard, wind_components
+
+
+def test_surface_classification():
+    assert surface_is_hard("ASP") is True
+    assert surface_is_hard("Asphalt") is True
+    assert surface_is_hard("CON") is True
+    assert surface_is_hard("TURF") is False
+    assert surface_is_hard("Gravel") is False
+    assert surface_is_hard(None) is None
+
+
+def test_best_runway_carries_length_surface():
+    rws = [Runway(airport_ident="T", length_ft=5000, surface="ASP",
+                  le_ident="05", le_heading_true=50, he_ident="23", he_heading_true=230)]
+    sol = best_runway(rws, 40, 12)
+    assert sol.length_ft == 5000 and sol.surface == "ASP"
 
 
 def rwy(le_id, le_hdg, he_id, he_hdg):

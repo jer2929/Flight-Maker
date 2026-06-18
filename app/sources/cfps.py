@@ -5,10 +5,15 @@ sites. Endpoint: ``https://plan.navcanada.ca/weather/api/alpha/``.
 """
 from __future__ import annotations
 
+import json
+import re
+
 import httpx
 
 from app.config import get_settings
 from app.sources import cache
+
+_NOTAM_NUM = re.compile(r"\b([A-Z]\d{3,4}/\d{2})\b")
 
 
 async def _fetch(alpha: str, sites: list[str]) -> list[dict]:
@@ -60,23 +65,41 @@ async def tafs(sites: list[str]) -> dict[str, str]:
     return out
 
 
-async def notams(sites: list[str]) -> dict[str, list[str]]:
-    out: dict[str, list[str]] = {s.upper(): [] for s in sites}
+def _notam_text(item: dict) -> str:
+    """NOTAM ``text`` is sometimes a JSON string with raw/translated bodies."""
+    raw = item.get("text")
+    if isinstance(raw, str):
+        s = raw.strip()
+        if s.startswith("{"):
+            try:
+                obj = json.loads(s)
+                return (obj.get("raw") or obj.get("english")
+                        or obj.get("translatedText") or s)
+            except Exception:
+                return s
+        return s
+    return str(raw) if raw is not None else ""
+
+
+async def notams(sites: list[str]) -> dict[str, list[dict]]:
+    """Per-site NOTAMs as ``{number, text}`` dicts."""
+    out: dict[str, list[dict]] = {s.upper(): [] for s in sites}
     for item in await _fetch("notam", sites):
         loc = _location(item)
         if loc in out:
-            out[loc].append(_text(item))
+            text = _notam_text(item)
+            num = _NOTAM_NUM.search(text)
+            out[loc].append({"number": num.group(1) if num else None, "text": text})
     return out
 
 
-async def sigmets(point: tuple[float, float] | None = None) -> list[str]:
-    """Active SIGMET texts. CFPS supports point queries for area products."""
+async def _area_texts(alpha: str, point: tuple[float, float] | None) -> list[str]:
     settings = get_settings()
-    key = f"cfps:sigmet:{point}"
+    key = f"cfps:{alpha}:{point}"
     cached = cache.get(key)
     if cached is not None:
         return cached
-    params = [("alpha", "sigmet")]
+    params = [("alpha", alpha)]
     if point:
         params.append(("point", f"{point[0]},{point[1]}"))
     async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
@@ -86,6 +109,27 @@ async def sigmets(point: tuple[float, float] | None = None) -> list[str]:
     texts = [_text(i) for i in data]
     cache.put(key, texts, settings.cfps_cache_ttl)
     return texts
+
+
+async def sigmets(point: tuple[float, float] | None = None) -> list[str]:
+    """Active SIGMET texts (convective, severe icing/turbulence)."""
+    return await _area_texts("sigmet", point)
+
+
+async def airmets(point: tuple[float, float] | None = None) -> list[str]:
+    """Active AIRMET texts (icing, turbulence, IFR, mountain obscuration)."""
+    try:
+        return await _area_texts("airmet", point)
+    except Exception:
+        return []
+
+
+async def pireps(point: tuple[float, float] | None = None) -> list[str]:
+    """Recent PIREP texts (actual reports of icing/turbulence)."""
+    try:
+        return await _area_texts("pirep", point)
+    except Exception:
+        return []
 
 
 async def upperwind_raw(sites: list[str]) -> dict[str, str]:
