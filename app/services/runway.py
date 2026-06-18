@@ -8,9 +8,35 @@ airport coordinates needed for the variation lookup.
 from __future__ import annotations
 
 import math
+import re
 from typing import Optional
 
 from app.models import Runway, RunwayComponent, RunwayWind
+from app.services import magvar
+
+
+def _heading_from_ident(ident: str | None, lat: float, lon: float) -> Optional[float]:
+    """Derive a true heading from a runway number (e.g. '23' -> 230° magnetic ->
+    true via local variation). Returns None for non-numeric idents (e.g. 'H1')."""
+    m = re.match(r"\s*0*(\d{1,2})", ident or "")
+    if not m:
+        return None
+    num = int(m.group(1))
+    if not 1 <= num <= 36:
+        return None
+    return magvar.to_true(num * 10.0, lat, lon)
+
+
+def fill_headings(runways: list[Runway], lat: float, lon: float) -> list[Runway]:
+    """Return runways with any missing true headings derived from the runway
+    number, so fields whose OurAirports rows lack ``*_heading_degT`` still get a
+    best-runway / crosswind solution."""
+    out: list[Runway] = []
+    for rw in runways:
+        le = rw.le_heading_true if rw.le_heading_true is not None else _heading_from_ident(rw.le_ident, lat, lon)
+        he = rw.he_heading_true if rw.he_heading_true is not None else _heading_from_ident(rw.he_ident, lat, lon)
+        out.append(rw.model_copy(update={"le_heading_true": le, "he_heading_true": he}))
+    return out
 
 # OurAirports surface codes -> readable label + hard/soft.
 _HARD = {"ASP", "ASPH", "CON", "CONC", "PEM", "PER", "BIT", "TAR", "PAVED",

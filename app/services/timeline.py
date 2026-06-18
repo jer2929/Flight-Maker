@@ -38,14 +38,33 @@ def _model_conditions(fc: dict, i: int) -> dict:
     hazards = []
     if code is not None and int(code) in _WMO_HAZARDS:
         hazards.append(_WMO_HAZARDS[int(code)])
+    ceiling = openmeteo.cloud_base_to_ceiling_ft(_at(fc, "cloud_base", i))
+    if ceiling is None:  # GEM has no cloud_base — infer from saturated layers
+        ceiling = openmeteo.derive_ceiling_ft(fc.get("hourly", {}), i, openmeteo.field_elevation_ft(fc))
     return {
         "wind_dir_true": _at(fc, "winddirection_10m", i),
         "wind_kt": _at(fc, "windspeed_10m", i),
         "gust_kt": _at(fc, "windgusts_10m", i),
-        "ceiling_agl_ft": openmeteo.cloud_base_to_ceiling_ft(_at(fc, "cloud_base", i)),
+        "ceiling_agl_ft": ceiling,
         "visibility_sm": openmeteo.visibility_to_sm(_at(fc, "visibility", i)),
+        "cloud_cover_pct": _at(fc, "cloudcover", i),
         "hazards": hazards,
     }
+
+
+def cloud_category(pct: float | None) -> str | None:
+    """Map total cloud cover % to a METAR-style amount (FEW/SCT/BKN/OVC)."""
+    if pct is None:
+        return None
+    if pct < 12:
+        return "SKC"
+    if pct < 38:
+        return "FEW"
+    if pct < 63:
+        return "SCT"
+    if pct < 88:
+        return "BKN"
+    return "OVC"
 
 
 model_conditions = _model_conditions  # public alias for reuse by the orchestrator
@@ -60,7 +79,7 @@ def _worse(a: dict, b: dict | None) -> dict:
         out["wind_kt"] = b["wind_kt"]
         if b.get("wind_dir_true") is not None:
             out["wind_dir_true"] = b["wind_dir_true"]
-    for k in ("gust_kt",):
+    for k in ("gust_kt", "cloud_cover_pct"):
         if b.get(k) is not None and (out.get(k) is None or b[k] > out[k]):
             out[k] = b[k]
     for k in ("visibility_sm", "ceiling_agl_ft"):
@@ -168,6 +187,7 @@ def build_timeline(
             crosswind_runway=(rw.runway_ident if rw else None),
             wind_source=wind_src,
             ceiling_agl_ft=ws.ceiling_agl_ft, visibility_sm=ws.visibility_sm,
+            cloud_cover_pct=combined.get("cloud_cover_pct"),
             hazards=ws.hazards,
             source=Source.TAF if (dep_taf or dest_taf) else Source.MODEL,
             reasons=reasons, daylight=daylight,
@@ -219,4 +239,9 @@ def _summarise(run: list[HourCondition]) -> str:
         parts.append(f"ceiling ≥{round(min(ceils)):,} ft")
     if vis:
         parts.append(f"vis ≥{min(vis):g} SM")
+    clouds = [h.cloud_cover_pct for h in run if h.cloud_cover_pct is not None]
+    if clouds:
+        cat = cloud_category(max(clouds))
+        if cat:
+            parts.append(f"cloud {cat}")
     return ", ".join(parts)

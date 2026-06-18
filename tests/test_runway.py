@@ -73,3 +73,22 @@ def test_gust_crosswind_uses_half_gust_factor():
     assert sol.crosswind_kt_gust is not None
     assert sol.crosswind_kt_gust > sol.crosswind_kt
     assert math.isclose(sol.crosswind_kt_gust, 19, abs_tol=0.5)
+
+
+def test_fill_headings_derives_from_runway_number():
+    from app.services.runway import fill_headings
+    rw = Runway(airport_ident="X", le_ident="05", he_ident="23",
+                le_heading_true=None, he_heading_true=None)
+    out = fill_headings([rw], 43.0, -80.0)[0]
+    assert out.le_heading_true is not None and out.he_heading_true is not None
+    # 05 -> ~050 mag -> true (within a variation of 50)
+    assert 30 <= out.le_heading_true <= 65
+    assert 210 <= out.he_heading_true <= 250
+
+
+def test_fill_headings_skips_non_numeric():
+    from app.services.runway import fill_headings
+    rw = Runway(airport_ident="X", le_ident="H1", he_ident="H1",
+                le_heading_true=None, he_heading_true=None)
+    out = fill_headings([rw], 43.0, -80.0)[0]
+    assert out.le_heading_true is None

@@ -24,6 +24,7 @@ from app.models import (
 )
 from app.services import cfs_links, hazards as hz
 from app.services import magvar
+from app.services import trends
 from app.services import timeline as tl
 from app.services import weather as wx
 from app.models import RunwayComponent
@@ -36,7 +37,7 @@ from app.services.evaluator import (
     threat_verdict,
 )
 from app.services.geo import flight_time_hr, initial_bearing_true, haversine_nm
-from app.services.runway import all_runway_components, best_runway, surface_is_hard
+from app.services.runway import all_runway_components, best_runway, fill_headings, surface_is_hard
 from app.services.winds_aloft import recommend_altitude
 from app.sources import airports as ap
 from app.sources import cfps, openmeteo
@@ -85,8 +86,11 @@ def _point_now(fc: dict) -> dict:
         arr = hourly.get(name, [])
         return arr[i] if i < len(arr) else None
 
+    ceiling = openmeteo.cloud_base_to_ceiling_ft(at("cloud_base"))
+    if ceiling is None:  # GEM lacks cloud_base -> infer from saturated layers
+        ceiling = openmeteo.derive_ceiling_ft(hourly, i, openmeteo.field_elevation_ft(fc))
     return {
-        "ceiling_ft": openmeteo.cloud_base_to_ceiling_ft(at("cloud_base")),
+        "ceiling_ft": ceiling,
         "vis_sm": openmeteo.visibility_to_sm(at("visibility")),
         "wind_kt": at("windspeed_10m"),
         "gust_kt": at("windgusts_10m"),
@@ -117,9 +121,11 @@ def _ceiling_dropping(fc: dict) -> bool:
 # Endpoint "now" weather (METAR > TAF > model), with provenance.
 # ---------------------------------------------------------------------------
 def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None) -> WeatherSummary:
+    # The "now" hard-limit values come ONLY from the METAR observation, falling
+    # back to the HRDPS model when there's no METAR. A TAF is a *forecast*, never
+    # a current limit, so it's kept for display/timeline but does not drive the
+    # go/no-go verdict here.
     ws = WeatherSummary(raw_metar=metar, raw_taf=taf, source=Source.NONE)
-    segs = wx.parse_taf_segments(taf) if taf else []
-    taf_now = wx.conditions_at(segs, datetime.now(timezone.utc)) if segs else None
     model_now = tl.model_conditions(fc, _current_index(fc)) if fc else None
 
     if metar:
@@ -132,10 +138,6 @@ def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None) -> We
         ws.as_of = tm.group(1) + "Z" if tm else None
         if model_now and model_now.get("wind_kt") is not None and m["wind_kt"] is not None:
             ws.model_vs_obs_wind_kt = round(model_now["wind_kt"] - m["wind_kt"], 1)
-        _merge_worse(ws, taf_now)
-    elif taf_now:
-        ws.source = Source.TAF
-        _apply(ws, taf_now)
     elif model_now:
         ws.source = Source.MODEL
         _apply(ws, model_now)
@@ -196,12 +198,18 @@ def _rw_with_mag(rw: RunwayWind | None, lat: float, lon: float) -> RunwayWind | 
 def _assess_endpoint(
     airport: Airport, metar, taf, fc, notams, mode, manual_threats,
     distance_nm: float, bearing: float, alt: AltitudeRecommendation | None,
+    history: list[str] | None = None,
 ) -> AirportAssessment:
     settings = get_settings()
     lat, lon = airport.lat, airport.lon
-    runways = ap.get_runways(airport.ident)
+    runways = fill_headings(ap.get_runways(airport.ident), lat, lon)
     weather = _endpoint_weather(metar, taf, fc)
     weather.wind_dir_mag = _mag(weather.wind_dir_true, lat, lon)
+
+    trend_notes: list[str] = []
+    if history:
+        parsed = [wx.parse_metar(r) for r in reversed(history)]  # oldest first
+        trend_notes, _low = trends.analyze(parsed)
 
     rw = _rw_with_mag(best_runway(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt), lat, lon)
     verdict, checks, tchecks, n = decision(
@@ -232,6 +240,7 @@ def _assess_endpoint(
         limit_checks=checks, threat_checks=tchecks,
         notam_count=len(site_notams), notams=site_notams,
         cfs_url=links["cfs_url"], info_url=links["info_url"], altitude=alt,
+        metar_history=(history or [])[:8], trends=trend_notes,
     )
 
 
@@ -269,19 +278,25 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str) -> l
     and destination — each row says WHERE the worst value is."""
     L = get_limits()["hard_limits"]
     w = L["wind"]
-    # Points carrying surface wind + ceiling + vis, with a human label.
-    pts = [(f"{dep_a.airport.ident} (departure)", dep_a.weather.wind_kt, dep_a.weather.gust_kt,
-            dep_a.weather.ceiling_agl_ft, dep_a.weather.visibility_sm, dep_a.weather.source.value)]
+    # Endpoint points (departure + destination) — wind/gust/crosswind are a
+    # takeoff/landing concern, so they're evaluated ONLY at the two ends.
+    endpoint_pts = [
+        (f"{dep_a.airport.ident} (departure)", dep_a.weather.wind_kt, dep_a.weather.gust_kt,
+         dep_a.weather.ceiling_agl_ft, dep_a.weather.visibility_sm, dep_a.weather.source.value),
+        (f"{dest_a.airport.ident} (destination)", dest_a.weather.wind_kt, dest_a.weather.gust_kt,
+         dest_a.weather.ceiling_agl_ft, dest_a.weather.visibility_sm, dest_a.weather.source.value),
+    ]
+    # All points (ends + enroute samples) — ceiling/vis apply along the route.
+    pts = [endpoint_pts[0]]
     for i, e in enumerate(enroute, 1):
         pts.append((f"enroute {i}", e.get("wind_kt"), e.get("gust_kt"),
                     e.get("ceiling_ft"), e.get("vis_sm"), "HRDPS"))
-    pts.append((f"{dest_a.airport.ident} (destination)", dest_a.weather.wind_kt, dest_a.weather.gust_kt,
-                dest_a.weather.ceiling_agl_ft, dest_a.weather.visibility_sm, dest_a.weather.source.value))
+    pts.append(endpoint_pts[1])
 
     checks: list[LimitCheck] = []
 
-    # Sustained wind — worst (max) across points.
-    wind_pts = [(lbl, wk, src) for lbl, wk, _g, _c, _v, src in pts if wk is not None]
+    # Sustained wind — worst (max) at the endpoints only.
+    wind_pts = [(lbl, wk, src) for lbl, wk, _g, _c, _v, src in endpoint_pts if wk is not None]
     if wind_pts:
         lbl, val, src = max(wind_pts, key=lambda t: t[1])
         checks.append(LimitCheck(key="wind", label="Sustained wind", limit_text=f"≤ {w['sustained_max_kt']} kt",
@@ -291,8 +306,8 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str) -> l
         checks.append(LimitCheck(key="wind", label="Sustained wind", limit_text=f"≤ {w['sustained_max_kt']} kt",
                                  actual_text="no data", passed=True))
 
-    # Gust spread.
-    spreads = [(lbl, gk - wk, src) for lbl, wk, gk, _c, _v, src in pts if wk is not None and gk is not None]
+    # Gust spread — endpoints only.
+    spreads = [(lbl, gk - wk, src) for lbl, wk, gk, _c, _v, src in endpoint_pts if wk is not None and gk is not None]
     if spreads:
         lbl, val, src = max(spreads, key=lambda t: t[1])
         checks.append(LimitCheck(key="gust_spread", label="Gust spread", limit_text=f"≤ {w['gust_spread_max_kt']} kt",
@@ -343,6 +358,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
 
     sites = [dep.ident, dest.ident]
     metars = await _safe(cfps.metars(sites), {})
+    metar_hist = await _safe(cfps.metar_history(sites), {})
     tafs = await _safe(cfps.tafs(sites), {})
     notams = await _safe(cfps.notams(sites), {})
     mid = ((dep.lat + dest.lat) / 2, (dep.lon + dest.lon) / 2)
@@ -362,8 +378,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         for lv in alt.levels:
             lv.direction_mag = _mag(lv.direction_true, dep.lat, dep.lon)
 
-    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None)
-    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt)
+    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []))
+    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []))
 
     # --- Sample conditions along the route (enroute ceilings/vis/LLJ/freezing) ---
     enroute = []
@@ -379,7 +395,14 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     freezing_ft = min(frz) if frz else None
     enroute_ceiling = min([c for c in ceiling_points if c is not None], default=None)
     enroute_vis = min([v for v in vis_points if v is not None], default=None)
-    lowering = _ceiling_dropping(dep_fc) or _ceiling_dropping(dest_fc)
+    # Lowering ceilings: from the model trend OR observed in recent METAR history.
+    def _hist_lowering(ident):
+        h = metar_hist.get(ident, [])
+        if not h:
+            return False
+        return trends.analyze([wx.parse_metar(r) for r in reversed(h)])[1]
+    lowering = (_ceiling_dropping(dep_fc) or _ceiling_dropping(dest_fc)
+                or _hist_lowering(dep.ident) or _hist_lowering(dest.ident))
     cruise_alt = alt.altitude_ft if alt else None
     cloud_at_cruise = bool(cruise_alt and enroute_ceiling is not None and enroute_ceiling < cruise_alt)
 
@@ -447,7 +470,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         dep_fc, dest_fc,
         wx.parse_taf_segments(tafs.get(dep.ident) or ""),
         wx.parse_taf_segments(tafs.get(dest.ident) or ""),
-        ap.get_runways(dep.ident), ap.get_runways(dest.ident),
+        fill_headings(ap.get_runways(dep.ident), dep.lat, dep.lon),
+        fill_headings(ap.get_runways(dest.ident), dest.lat, dest.lon),
         manual_threats, ap.is_complex_airspace(dep.ident) or ap.is_complex_airspace(dest.ident),
         settings.timeline_hours,
         dep_ident=dep.ident, dest_ident=dest.ident,

@@ -42,10 +42,13 @@ def parse_metar(raw: str) -> dict:
     out: dict = {
         "wind_dir_true": None, "wind_kt": None, "gust_kt": None,
         "visibility_sm": None, "ceiling_agl_ft": None, "hazards": [],
+        "temp_c": None, "dewpoint_c": None, "altimeter_inhg": None, "time_z": None,
     }
     if not raw:
         return out
     text = raw.strip()
+    tm = re.search(r"\b(\d{6})Z\b", text)
+    out["time_z"] = tm.group(1) + "Z" if tm else None
     try:
         obs = Metar.Metar(text.replace("METAR ", "", 1))
         if obs.wind_dir is not None:
@@ -57,6 +60,12 @@ def parse_metar(raw: str) -> dict:
         if obs.vis is not None:
             out["visibility_sm"] = round(obs.vis.value("SM"), 1)
         out["ceiling_agl_ft"] = _ceiling_from_sky(obs.sky)
+        if obs.temp is not None:
+            out["temp_c"] = obs.temp.value("C")
+        if obs.dewpt is not None:
+            out["dewpoint_c"] = obs.dewpt.value("C")
+        if obs.press is not None:
+            out["altimeter_inhg"] = round(obs.press.value("IN"), 2)
     except Exception:
         _regex_wind(text, out)
     out["hazards"] = detect_hazards(text)

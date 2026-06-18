@@ -41,3 +41,10 @@ def to_magnetic(true_deg: float | None, lat: float, lon: float) -> float | None:
     if true_deg is None:
         return None
     return (true_deg - declination(lat, lon)) % 360.0
+
+
+def to_true(mag_deg: float | None, lat: float, lon: float) -> float | None:
+    """Convert a magnetic bearing/heading to true (0-360)."""
+    if mag_deg is None:
+        return None
+    return (mag_deg + declination(lat, lon)) % 360.0

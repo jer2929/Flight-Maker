@@ -161,19 +161,35 @@ function endpointCard(a, role) {
       ${to ? `<div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)}) · headwind ${Math.round(to.headwind_kt)} kt · xwind ${to.crosswind_kt} kt${dims(to)}</div>` : ""}
       ${ld ? `<div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)}) · xwind ${ld.crosswind_kt} kt${ld.crosswind_kt_gust ? ` (gust ${ld.crosswind_kt_gust})` : ""}${dims(ld)}</div>` : ""}
     </div>
+    ${trendsBlock(a)}
     ${runwaysBlock(a)}
     <div class="links">${linksHtml(a)}</div>
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
     ${w.raw_metar ? `<div class="raw">METAR ${w.raw_metar}</div>` : ""}
     ${w.raw_taf ? `<div class="raw">TAF ${w.raw_taf}</div>` : ""}
+    ${metarHistory(a)}
   </div>`;
+}
+
+function trendsBlock(a) {
+  if (!a.trends || !a.trends.length) return "";
+  return `<div class="trends"><div class="trends-h">Trends (from recent METARs)</div>${a.trends.map((t) => `<div class="trend">${t}</div>`).join("")}</div>`;
+}
+function metarHistory(a) {
+  const h = a.metar_history || [];
+  if (h.length < 2) return "";
+  return `<details class="mhist"><summary>METAR history (${h.length})</summary>${h.map((m) => `<div class="raw">${escapeHtml(m)}</div>`).join("")}</details>`;
 }
 
 function runwaysBlock(a) {
   const comps = a.runway_components || [];
-  if (!comps.length) return "";
-  const rows = comps.map((c) => `<div class="rwy-comp">RWY ${c.ident} ${dirM(c.heading_mag, c.heading_true)} · ${dimsText(c)} · head ${Math.round(c.headwind_kt)} / xwind ${c.crosswind_kt}${c.tailwind_kt > 0 ? ` / <span class="warn">tail ${c.tailwind_kt}</span>` : ""}</div>`).join("");
-  return `<details class="runways"><summary>Total runways: ${comps.length}</summary>${rows}</details>`;
+  if (!comps.length) return `<div class="rwy-na">🛬 Runway data unavailable</div>`;
+  // Only the ends usable into wind — you never land with a tailwind component.
+  const usable = comps.filter((c) => c.tailwind_kt <= 0).sort((x, y) => y.headwind_kt - x.headwind_kt);
+  if (!usable.length) return "";
+  const rows = usable.map((c) =>
+    `<div class="rwy-comp">RWY ${c.ident} ${dirM(c.heading_mag, c.heading_true)} · ${dimsText(c)} · head ${Math.round(c.headwind_kt)} kt / xwind ${c.crosswind_kt} kt</div>`).join("");
+  return `<details class="runways"><summary>Usable runways into wind: ${usable.length} <span class="hint">(no tailwind component)</span></summary>${rows}</details>`;
 }
 
 function linksHtml(a) {
@@ -247,8 +263,10 @@ function discoveryCard(a) {
       <span>⏱ ${fmtHrMin(a.flight_time_hr)}</span>
       <span>${srcChip(w.source)}</span>
       <span>💨 ${windStr(w)}</span>
+      ${w.ceiling_agl_ft != null ? `<span>☁ ${fmtFt(w.ceiling_agl_ft)}</span>` : ""}
+      ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
     </div>
-    ${rw ? `<div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${rw.crosswind_kt} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div>` : ""}
+    ${rw ? `<div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${rw.crosswind_kt} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
     ${runwaysBlock(a)}
     <div class="meta"><span>📋 ${a.notam_count} NOTAM</span><span class="links">${linksHtml(a)}</span></div>
     ${a.reasons.length ? `<ul class="reasons">${a.reasons.map((x) => `<li>${x}</li>`).join("")}</ul>` : ""}
