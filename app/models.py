@@ -50,6 +50,37 @@ class RunwayWind(BaseModel):
     headwind_kt: float  # negative = tailwind
     crosswind_kt: float
     crosswind_kt_gust: Optional[float] = None  # using gust + half-gust factor
+    length_ft: Optional[float] = None
+    surface: Optional[str] = None
+
+
+class LimitCheck(BaseModel):
+    """One hard-limit row for the at-a-glance checklist."""
+
+    key: str
+    label: str          # e.g. "Crosswind"
+    limit_text: str     # e.g. "≤ 9 kt"
+    actual_text: str    # e.g. "12 kt on RWY 23 (CYKF)"
+    passed: bool
+    group: str = "conditions"   # "conditions" | "weather"
+    applicable: bool = True
+    advisory: bool = False  # passed, but needs human GFA/chart review
+    source: Optional[str] = None  # where the value came from
+
+
+class ThreatCheck(BaseModel):
+    """One two-trigger threat-stack row."""
+
+    key: str
+    label: str
+    present: bool
+
+
+class Notam(BaseModel):
+    ident: str                      # airport the NOTAM belongs to
+    number: Optional[str] = None    # e.g. "H1234/25" when parseable
+    text: str
+    url: Optional[str] = None       # link to CFPS for the aerodrome
 
 
 class WindAloft(BaseModel):
@@ -90,8 +121,10 @@ class AirportAssessment(BaseModel):
     threat_count: int = 0
     weather: WeatherSummary = WeatherSummary()
     best_runway: Optional[RunwayWind] = None
+    limit_checks: list[LimitCheck] = []
+    threat_checks: list[ThreatCheck] = []
     notam_count: int = 0
-    notams: list[str] = []
+    notams: list[Notam] = []
     altitude: Optional[AltitudeRecommendation] = None
 
 
@@ -127,7 +160,13 @@ class RouteAssessment(BaseModel):
     flight_time_hr: float
     verdict_now: Verdict
     reasons_now: list[str] = []
+    limit_checks: list[LimitCheck] = []       # route-level at-a-glance checklist
+    threat_checks: list[ThreatCheck] = []
     altitude: Optional[AltitudeRecommendation] = None
+    cruise_altitude_ft: Optional[float] = None
+    enroute_ceiling_ft: Optional[float] = None        # lowest ceiling sampled along route
+    enroute_visibility_sm: Optional[float] = None
+    cloud_at_cruise: bool = False                     # cloud base below planned cruise altitude
     sigmets: list[str] = []
     timeline: list[HourCondition] = []
     best_windows: list[BestWindow] = []

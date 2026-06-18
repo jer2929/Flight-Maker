@@ -176,9 +176,15 @@ def best_windows(timeline: list[HourCondition], daylight_only: bool, limit: int 
 def _summarise(run: list[HourCondition]) -> str:
     winds = [h.wind_kt for h in run if h.wind_kt is not None]
     xw = [h.crosswind_kt for h in run if h.crosswind_kt is not None]
+    ceils = [h.ceiling_agl_ft for h in run if h.ceiling_agl_ft is not None]
+    vis = [h.visibility_sm for h in run if h.visibility_sm is not None]
     parts = [f"{len(run)} h window"]
     if winds:
         parts.append(f"wind ≤{round(max(winds))} kt")
     if xw:
         parts.append(f"xwind ≤{round(max(xw))} kt")
+    if ceils:
+        parts.append(f"ceiling ≥{round(min(ceils)):,} ft")
+    if vis:
+        parts.append(f"vis ≥{min(vis):g} SM")
     return ", ".join(parts)

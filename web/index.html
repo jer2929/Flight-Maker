@@ -76,6 +76,7 @@
     </div>
 
     <div id="route-verdict"></div>
+    <div id="route-checklist"></div>
     <div id="route-summary"></div>
     <div id="route-endpoints" class="results two-col"></div>
     <div id="route-windows"></div>
@@ -85,10 +86,29 @@
   <!-- Discovery tab -->
   <section id="tab-discovery" class="tab-pane hidden">
     <div class="panel">
-      <label class="control">Radius
-        <input type="range" id="radius" min="20" max="300" step="10" value="100" />
-        <output id="radius-out">100 nm</output>
-      </label>
+      <div class="controls">
+        <label class="control">Radius
+          <input type="range" id="radius" min="20" max="300" step="10" value="100" />
+          <output id="radius-out">100 nm</output>
+        </label>
+        <label class="control">Surface
+          <select id="f-surface">
+            <option value="any">Any</option>
+            <option value="hard">Hard (paved)</option>
+            <option value="soft">Soft (grass/gravel)</option>
+          </select>
+        </label>
+        <label class="control">Runway length
+          <select id="f-length">
+            <option value="any">Any</option>
+            <option value="long">≥ 2000 ft</option>
+            <option value="short">&lt; 2000 ft</option>
+          </select>
+        </label>
+        <label class="control checkbox">
+          <input type="checkbox" id="f-into-wind" /> Runway aligned into wind
+        </label>
+      </div>
       <button id="run-discovery" class="primary">Find flights now</button>
     </div>
     <div id="discovery-results" class="results"></div>

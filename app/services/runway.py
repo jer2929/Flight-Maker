@@ -11,6 +11,23 @@ from typing import Optional
 
 from app.models import Runway, RunwayWind
 
+# Surface codes (OurAirports) considered "hard" (paved). Everything else
+# (turf/grass/gravel/dirt/sand/ice...) is treated as "soft".
+_HARD_SURFACE_TOKENS = (
+    "ASP", "ASPH", "CON", "CONC", "PEM", "PER", "BIT", "TAR", "PAVED",
+    "ASPHALT", "CONCRETE",
+)
+
+
+def surface_is_hard(surface: Optional[str]) -> Optional[bool]:
+    """True=hard/paved, False=soft, None=unknown."""
+    if not surface:
+        return None
+    up = surface.upper()
+    if any(tok in up for tok in _HARD_SURFACE_TOKENS):
+        return True
+    return False
+
 
 def angular_difference(a: float, b: float) -> float:
     """Smallest signed difference a-b, normalised to [-180, 180]."""
@@ -37,29 +54,31 @@ def best_runway(
 ) -> Optional[RunwayWind]:
     """Pick the runway end that minimises crosswind (tie-break: most headwind).
 
-    With calm/unknown wind, returns the first usable runway end with zero
-    components. ``gust_kt`` (if present) drives a gust crosswind using the card's
+    With calm/unknown wind, returns the longest runway end with zero components.
+    ``gust_kt`` (if present) drives a gust crosswind using the card's
     half-gust-factor mitigation: effective speed = steady + 0.5*(gust-steady).
     """
-    ends: list[tuple[str, float]] = []
+    # (ident, heading, parent runway) for each usable end.
+    ends: list[tuple[str, float, Runway]] = []
     for rw in runways:
         if rw.le_heading_true is not None:
-            ends.append((rw.le_ident, rw.le_heading_true))
+            ends.append((rw.le_ident, rw.le_heading_true, rw))
         if rw.he_heading_true is not None:
-            ends.append((rw.he_ident, rw.he_heading_true))
+            ends.append((rw.he_ident, rw.he_heading_true, rw))
     if not ends:
         return None
 
     if wind_dir_true is None or wind_kt is None or wind_kt <= 0:
-        ident, hdg = ends[0]
-        return RunwayWind(runway_ident=ident, heading_true=hdg, headwind_kt=0.0, crosswind_kt=0.0)
+        ident, hdg, rw = max(ends, key=lambda e: e[2].length_ft or 0)
+        return RunwayWind(runway_ident=ident, heading_true=hdg, headwind_kt=0.0,
+                          crosswind_kt=0.0, length_ft=rw.length_ft, surface=rw.surface)
 
     gust_speed = None
     if gust_kt and gust_kt > wind_kt:
         gust_speed = wind_kt + 0.5 * (gust_kt - wind_kt)
 
     best: Optional[RunwayWind] = None
-    for ident, hdg in ends:
+    for ident, hdg, rw in ends:
         hw, xw = wind_components(wind_dir_true, wind_kt, hdg)
         xw_gust = None
         if gust_speed is not None:
@@ -70,6 +89,8 @@ def best_runway(
             headwind_kt=round(hw, 1),
             crosswind_kt=round(xw, 1),
             crosswind_kt_gust=round(xw_gust, 1) if xw_gust is not None else None,
+            length_ft=rw.length_ft,
+            surface=rw.surface,
         )
         if best is None or (cand.crosswind_kt, -cand.headwind_kt) < (best.crosswind_kt, -best.headwind_kt):
             best = cand

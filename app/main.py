@@ -58,11 +58,14 @@ async def suggest(
     radius: float = Query(default=None, ge=1, le=500),
     mode: str = Query(default="day", pattern="^(day|night)$"),
     threats: str = Query(default=""),
+    surface: str = Query(default="any", pattern="^(any|hard|soft)$"),
+    length: str = Query(default="any", pattern="^(any|short|long)$"),
+    into_wind: bool = Query(default=False),
 ):
     s = get_settings()
     radius = radius or s.default_radius_nm
     manual = [t for t in threats.split(",") if t]
-    results = await orchestrator.suggest(radius, mode, manual)
+    results = await orchestrator.suggest(radius, mode, manual, surface, length, into_wind)
     return JSONResponse([r.model_dump() for r in results])
 
 

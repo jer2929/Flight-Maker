@@ -1,76 +1,123 @@
-"""Tactical decision-card engine: apply hard limits + two-trigger threat
-stacking to a candidate airport and produce a GO / MITIGATE / NO-GO verdict.
+"""Decision-card engine.
 
-The verdict is the *more conservative* of (a) hard-limit screening and (b) the
-threat-stacking rule. Manual threats (night ops, fatigue-related items, etc.)
-can be passed in from the UI checklist and are added to the count.
+Produces a *structured* result so the UI can show, at a glance:
+  * each applicable hard limit with its threshold, the actual value, and PASS/✗
+  * each two-trigger threat with present/absent
+and the resulting GO / MITIGATE / NO-GO verdict (the more conservative of the
+hard-limit screen and the threat-stacking rule).
+
+``decision()`` returns the structured form; ``evaluate()`` is a thin wrapper that
+returns the legacy ``(verdict, reasons, count)`` tuple used by the timeline.
 """
 from __future__ import annotations
 
 from app.config import get_limits
-from app.models import RunwayWind, Verdict, WeatherSummary
+from app.models import LimitCheck, RunwayWind, ThreatCheck, Verdict, WeatherSummary
 
-# Order of severity for picking the most conservative verdict.
 _SEVERITY = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
+
+THREAT_LABELS = {
+    "night_operations": "Night operations",
+    "actual_imc": "Actual IMC",
+    "icing_potential": "Icing potential",
+    "convective_nearby": "Convective weather nearby",
+    "strong_or_gusty_winds": "Strong or gusty winds",
+    "moderate_turbulence_or_shear": "Moderate turbulence or shear",
+    "terrain_critical": "Terrain-critical operations",
+    "single_pilot_ifr_no_autopilot": "Single-pilot IFR without autopilot",
+    "unfamiliar_or_complex_airspace": "Unfamiliar / complex airspace",
+}
 
 
 def _worse(a: Verdict, b: Verdict) -> Verdict:
     return a if _SEVERITY[a] >= _SEVERITY[b] else b
 
 
-def check_hard_limits(
-    weather: WeatherSummary,
-    best_runway: RunwayWind | None,
-    mode: str,
-) -> list[str]:
-    """Return a list of hard-limit breach reasons (empty == within limits)."""
+def conditions_checks(
+    weather: WeatherSummary, best_runway: RunwayWind | None, mode: str
+) -> list[LimitCheck]:
+    """Applicable wind / ceiling / visibility hard-limit rows (cross-country)."""
     L = get_limits()["hard_limits"]
-    reasons: list[str] = []
-
-    # --- Wind ---
     w = L["wind"]
-    if weather.wind_kt is not None and weather.wind_kt > w["sustained_max_kt"]:
-        reasons.append(f"Sustained wind {weather.wind_kt:.0f} kt > {w['sustained_max_kt']} kt")
-    if weather.gust_kt is not None and weather.wind_kt is not None:
-        spread = weather.gust_kt - weather.wind_kt
-        if spread > w["gust_spread_max_kt"]:
-            reasons.append(f"Gust spread {spread:.0f} kt > {w['gust_spread_max_kt']} kt")
+    src = weather.source.value if weather.source else None
+    checks: list[LimitCheck] = []
+
+    # Sustained wind
+    checks.append(_num_check(
+        "wind", "Sustained wind", w["sustained_max_kt"], weather.wind_kt,
+        unit="kt", source=src,
+    ))
+    # Gust spread
+    spread = (weather.gust_kt - weather.wind_kt) if (weather.gust_kt is not None and weather.wind_kt is not None) else None
+    checks.append(_num_check(
+        "gust_spread", "Gust spread", w["gust_spread_max_kt"], spread,
+        unit="kt", source=src,
+    ))
+    # Crosswind (uses gust crosswind if present)
+    xw = None
+    xw_label = ""
     if best_runway is not None:
         xw = best_runway.crosswind_kt_gust or best_runway.crosswind_kt
-        if xw > w["crosswind_max_kt"]:
-            reasons.append(
-                f"Crosswind {xw:.0f} kt on RWY {best_runway.runway_ident} > {w['crosswind_max_kt']} kt"
-            )
-
-    # --- Ceiling (cross-country values) ---
+        xw_label = f" on RWY {best_runway.runway_ident}"
+    checks.append(_num_check(
+        "crosswind", "Crosswind", w["crosswind_max_kt"], xw,
+        unit="kt", source=src, actual_suffix=xw_label,
+    ))
+    # Ceiling (min)
     c = L["ceiling_agl_ft"]
     ceil_limit = c["night_xc_cloud_base"] if mode == "night" else c["day_xc"]
-    if weather.ceiling_agl_ft is not None and weather.ceiling_agl_ft < ceil_limit:
-        reasons.append(f"Ceiling {weather.ceiling_agl_ft:.0f} ft AGL < {ceil_limit} ft")
-
-    # --- Visibility (cross-country values) ---
+    checks.append(_min_check(
+        "ceiling", "Ceiling (XC)", ceil_limit, weather.ceiling_agl_ft,
+        unit="ft AGL", source=src,
+    ))
+    # Visibility (min)
     v = L["visibility_sm"]
     vis_limit = v["night_xc"] if mode == "night" else v["day_xc"]
-    if weather.visibility_sm is not None and weather.visibility_sm < vis_limit:
-        reasons.append(f"Visibility {weather.visibility_sm:.0f} SM < {vis_limit} SM")
+    checks.append(_min_check(
+        "visibility", "Visibility (XC)", vis_limit, weather.visibility_sm,
+        unit="SM", source=src,
+    ))
+    # Hazardous weather flags (TS / freezing rain / icing / LLWS …) — any = NO-GO
+    flags = set(L.get("weather_flags", []))
+    present = [h for h in weather.hazards if h in flags]
+    checks.append(LimitCheck(
+        key="hazards", label="Hazardous weather", limit_text="none",
+        actual_text=(", ".join(h.replace("_", " ") for h in present) if present else "none reported"),
+        passed=not present, group="weather", source=src,
+    ))
+    return checks
 
-    # --- Weather hazard flags ---
-    flagged = set(L["weather_flags"])
-    for hz in weather.hazards:
-        if hz in flagged:
-            reasons.append(f"Hazard present: {hz.replace('_', ' ')}")
 
-    return reasons
+def _num_check(key, label, limit, actual, unit, source=None, actual_suffix="") -> LimitCheck:
+    """Max-type limit (actual must be ≤ limit)."""
+    if actual is None:
+        return LimitCheck(key=key, label=label, limit_text=f"≤ {limit} {unit}",
+                          actual_text="no data", passed=True, source=source)
+    return LimitCheck(
+        key=key, label=label, limit_text=f"≤ {limit} {unit}",
+        actual_text=f"{actual:.0f} {unit}{actual_suffix}",
+        passed=actual <= limit, source=source,
+    )
+
+
+def _min_check(key, label, limit, actual, unit, source=None) -> LimitCheck:
+    """Min-type limit (actual must be ≥ limit)."""
+    if actual is None:
+        return LimitCheck(key=key, label=label, limit_text=f"≥ {limit} {unit}",
+                          actual_text="no data", passed=True, source=source)
+    return LimitCheck(
+        key=key, label=label, limit_text=f"≥ {limit} {unit}",
+        actual_text=f"{actual:.0f} {unit}", passed=actual >= limit, source=source,
+    )
 
 
 def derive_threats(
     weather: WeatherSummary,
     is_complex_airspace: bool,
     manual_threats: list[str] | None = None,
-) -> list[str]:
+) -> set[str]:
     """Derive present 'major threats' for two-trigger stacking."""
     threats: set[str] = set(manual_threats or [])
-
     if weather.wind_kt is not None and weather.wind_kt >= 15:
         threats.add("strong_or_gusty_winds")
     if weather.gust_kt is not None and weather.wind_kt is not None and (weather.gust_kt - weather.wind_kt) >= 8:
@@ -81,20 +128,48 @@ def derive_threats(
         threats.add("icing_potential")
     if "low_level_wind_shear" in weather.hazards:
         threats.add("moderate_turbulence_or_shear")
-    # Actual IMC proxy
     if (weather.ceiling_agl_ft is not None and weather.ceiling_agl_ft < 1000) or (
         weather.visibility_sm is not None and weather.visibility_sm < 3
     ):
         threats.add("actual_imc")
     if is_complex_airspace:
         threats.add("unfamiliar_or_complex_airspace")
-    return sorted(threats)
+    return threats
+
+
+def threat_check_list(present: set[str]) -> list[ThreatCheck]:
+    order = get_limits()["threat_stacking"]["major_threats"]
+    return [
+        ThreatCheck(key=k, label=THREAT_LABELS.get(k, k.replace("_", " ").title()),
+                    present=k in present)
+        for k in order
+    ]
 
 
 def threat_verdict(threat_count: int) -> Verdict:
     rule = get_limits()["threat_stacking"]["rule"]
-    key = str(min(threat_count, 3))
-    return Verdict(rule[key])
+    return Verdict(rule[str(min(threat_count, 3))])
+
+
+def decision(
+    weather: WeatherSummary,
+    best_runway: RunwayWind | None,
+    mode: str,
+    is_complex_airspace: bool,
+    manual_threats: list[str] | None = None,
+    extra_checks: list[LimitCheck] | None = None,
+) -> tuple[Verdict, list[LimitCheck], list[ThreatCheck], int]:
+    """Structured decision. ``extra_checks`` lets the route add weather-hazard
+    rows (icing/turbulence/etc.) computed elsewhere."""
+    checks = conditions_checks(weather, best_runway, mode) + (extra_checks or [])
+    present = derive_threats(weather, is_complex_airspace, manual_threats)
+    tchecks = threat_check_list(present)
+    count = len(present)
+
+    failed = any((not c.passed) and c.applicable for c in checks)
+    verdict = Verdict.NOGO if failed else Verdict.GO
+    verdict = _worse(verdict, threat_verdict(count))
+    return verdict, checks, tchecks, count
 
 
 def evaluate(
@@ -104,16 +179,20 @@ def evaluate(
     is_complex_airspace: bool,
     manual_threats: list[str] | None = None,
 ) -> tuple[Verdict, list[str], int]:
-    """Return (verdict, reasons, threat_count)."""
-    reasons = check_hard_limits(weather, best_runway, mode)
-    threats = derive_threats(weather, is_complex_airspace, manual_threats)
-    count = len(threats)
-
-    verdict = Verdict.NOGO if reasons else Verdict.GO
-    verdict = _worse(verdict, threat_verdict(count))
-
-    if threats:
-        reasons.append(
-            f"Threat stack ({count}): " + ", ".join(t.replace('_', ' ') for t in threats)
-        )
+    """Legacy tuple form used by the timeline: (verdict, reasons, count)."""
+    verdict, checks, _t, count = decision(
+        weather, best_runway, mode, is_complex_airspace, manual_threats)
+    reasons = [f"{c.label} {c.actual_text} (limit {c.limit_text})"
+               for c in checks if not c.passed and c.applicable]
+    present = derive_threats(weather, is_complex_airspace, manual_threats)
+    if present:
+        reasons.append("Threat stack (%d): %s" % (
+            count, ", ".join(THREAT_LABELS.get(t, t) for t in sorted(present))))
     return verdict, reasons, count
+
+
+# Back-compat helper still imported by some callers/tests.
+def check_hard_limits(weather: WeatherSummary, best_runway: RunwayWind | None, mode: str) -> list[str]:
+    return [f"{c.label} {c.actual_text} (limit {c.limit_text})"
+            for c in conditions_checks(weather, best_runway, mode)
+            if not c.passed and c.applicable]

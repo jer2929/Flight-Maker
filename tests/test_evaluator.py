@@ -1,5 +1,22 @@
 from app.models import RunwayWind, Verdict, WeatherSummary
-from app.services.evaluator import check_hard_limits, evaluate, threat_verdict
+from app.services.evaluator import check_hard_limits, conditions_checks, decision, evaluate, threat_verdict
+
+
+def test_decision_returns_structured_checks():
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15, ceiling_agl_ft=8000)
+    verdict, checks, threats, n = decision(wx, None, "day", False)
+    keys = {c.key for c in checks}
+    assert {"wind", "gust_spread", "crosswind", "ceiling", "visibility", "hazards"} <= keys
+    assert len(threats) == 9  # full major-threat list
+    assert verdict == Verdict.GO
+
+
+def test_conditions_crosswind_fail_marked():
+    rw = RunwayWind(runway_ident="14", heading_true=140, headwind_kt=2, crosswind_kt=12)
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=12, visibility_sm=15, ceiling_agl_ft=8000)
+    checks = {c.key: c for c in conditions_checks(wx, rw, "day")}
+    assert checks["crosswind"].passed is False
+    assert "RWY 14" in checks["crosswind"].actual_text
 
 
 def good_runway():
