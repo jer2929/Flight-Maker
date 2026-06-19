@@ -167,19 +167,21 @@ function endpointCard(a, role) {
     ${runwaysBlock(a)}
     <div class="links">${linksHtml(a)}</div>
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
-    ${w.raw_metar ? `<div class="raw">METAR ${w.raw_metar}</div>` : ""}
+    ${w.raw_metar ? `<div class="raw">METAR ${escapeHtml(w.raw_metar)}${ageChip(w.raw_metar)}</div>` : ""}
     ${w.raw_taf ? `<div class="raw">TAF ${w.raw_taf}</div>` : ""}
     ${metarHistory(a)}
   </div>`;
 }
 
 function trendsBlock(a) {
-  if (!a.trends || !a.trends.length) return "";
-  return `<div class="trends"><div class="trends-h">Trends (from recent METARs)</div>${a.trends.map((t) => `<div class="trend">${t}</div>`).join("")}</div>`;
+  const t = a.trends || [];
+  if (!t.length) return "";
+  return `<details class="trends" open><summary>Trends from recent METARs (${t.length})</summary>${t.map((x) => `<div class="trend">${x}</div>`).join("")}</details>`;
 }
 function nearbyBlock(n) {
   return `<div class="nearby"><span class="nlabel">Nearest reporting station</span> <strong>${n.ident}</strong>${n.name ? " · " + n.name : ""} — ${n.distance_nm} NM ${n.direction} of here
-    ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}</div>` : ""}${n.taf ? `<div class="raw">TAF ${escapeHtml(n.taf)}</div>` : ""}</div>`;
+    ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}${ageChip(n.metar)}</div>` : ""}${n.taf ? `<div class="raw">TAF ${escapeHtml(n.taf)}</div>` : ""}
+    ${trendsBlock(n)}${metarHistoryList(n.metar_history)}</div>`;
 }
 function advisoriesBlock(r) {
   const items = [];
@@ -190,9 +192,11 @@ function advisoriesBlock(r) {
   return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(check the altitudes — many apply only to higher levels)</span></summary>${items.map(([k, t]) => `<div class="adv"><span class="adv-k">${k}</span> ${escapeHtml(t)}</div>`).join("")}</details>`;
 }
 function metarHistory(a) {
-  const h = a.metar_history || [];
-  if (h.length < 2) return "";
-  return `<details class="mhist"><summary>METAR history (${h.length})</summary>${h.map((m) => `<div class="raw">${escapeHtml(m)}</div>`).join("")}</details>`;
+  return metarHistoryList(a.metar_history);
+}
+function metarHistoryList(h) {
+  if (!h || h.length < 2) return "";
+  return `<details class="mhist"><summary>METAR history (${h.length})</summary>${h.map((m) => `<div class="raw">${escapeHtml(m)}${ageChip(m)}</div>`).join("")}</details>`;
 }
 
 function runwaysBlock(a) {
@@ -284,7 +288,7 @@ function discoveryCard(a) {
     ${runwaysBlock(a)}
     <div class="meta"><span>📋 ${a.notam_count} NOTAM</span><span class="links">${linksHtml(a)}</span></div>
     ${a.reasons.length ? `<ul class="reasons">${a.reasons.map((x) => `<li>${x}</li>`).join("")}</ul>` : ""}
-    ${w.raw_metar ? `<div class="raw">METAR ${w.raw_metar}</div>` : ""}
+    ${w.raw_metar ? `<div class="raw">METAR ${escapeHtml(w.raw_metar)}${ageChip(w.raw_metar)}</div>` : ""}
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
   </div>`;
 }
@@ -312,8 +316,25 @@ function windDir(magVal, trueVal) {
   return "—";
 }
 const fmtFt = (ft) => (ft == null ? "—" : `${Math.round(ft).toLocaleString()} ft`);
-// Ceilings rounded to the nearest 500 ft for display.
-const fmtCeil = (ft) => (ft == null ? "—" : `${(Math.round(ft / 500) * 500).toLocaleString()} ft`);
+// All ceiling / cloud-base heights rounded to the nearest 100 ft for display.
+const fmtCeil = (ft) => (ft == null ? "—" : `${(Math.round(ft / 100) * 100).toLocaleString()} ft`);
+
+// Age of a METAR from its DDHHMMZ stamp, vs now (UTC). Returns "" if unparseable.
+function metarAgeMin(raw) {
+  const m = /\b(\d{2})(\d{2})(\d{2})Z\b/.exec(raw || "");
+  if (!m) return null;
+  const now = new Date();
+  let d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), +m[1], +m[2], +m[3]));
+  if (d - now > 3600 * 1000) d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, +m[1], +m[2], +m[3]));
+  return Math.max(0, Math.round((now - d) / 60000));
+}
+function ageChip(raw) {
+  const mins = metarAgeMin(raw);
+  if (mins == null) return "";
+  const txt = mins < 60 ? `${mins} min ago` : `${Math.floor(mins / 60)} h ${mins % 60} min ago`;
+  const stale = mins > 90 ? " stale" : "";
+  return ` <span class="age${stale}">${txt}</span>`;
+}
 function dimsText(c) {
   const l = c.length_ft ? Math.round(c.length_ft).toLocaleString() : "?";
   const wid = c.width_ft ? ` × ${Math.round(c.width_ft)} ft` : " ft";

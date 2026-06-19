@@ -49,14 +49,39 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
     if len(viss) >= 2 and viss[-1] < viss[0] - 2:
         notes.append(f"📉 Visibility dropping: {viss[0]:g} → {viss[-1]:g} SM")
 
-    # Wind increasing
+    # Wind speed trend (up or down)
     winds = [h.get("wind_kt") for h in obs if h.get("wind_kt") is not None]
-    if len(winds) >= 2 and winds[-1] >= winds[0] + 8:
-        notes.append(f"💨 Wind increasing: {round(winds[0])} → {round(winds[-1])} kt")
+    if len(winds) >= 2:
+        if winds[-1] >= winds[0] + 8:
+            notes.append(f"💨 Wind increasing: {round(winds[0])} → {round(winds[-1])} kt")
+        elif winds[-1] <= winds[0] - 8:
+            notes.append(f"🍃 Wind easing: {round(winds[0])} → {round(winds[-1])} kt")
 
-    # Pressure (altimeter) falling
+    # Wind direction shift (veering = clockwise, backing = counter-clockwise)
+    dirs = [h.get("wind_dir_true") for h in obs if h.get("wind_dir_true") is not None]
+    if len(dirs) >= 2:
+        shift = ((dirs[-1] - dirs[0] + 180) % 360) - 180
+        if abs(shift) >= 30:
+            verb = "veering" if shift > 0 else "backing"
+            d0, d1 = round(dirs[0] / 10) * 10 % 360, round(dirs[-1] / 10) * 10 % 360
+            notes.append(f"🧭 Wind {verb} {d0:03d}° → {d1:03d}° ({abs(round(shift))}°)")
+
+    # Gusts developing / increasing
+    gusts = [(h.get("wind_kt"), h.get("gust_kt")) for h in obs]
+    had_gust = any(g is not None and w is not None and g > w for w, g in gusts[:-1])
+    lw, lg = gusts[-1]
+    if lg is not None and lw is not None and lg > lw:
+        if not had_gust:
+            notes.append(f"💨 Gusts developing — now G{round(lg)} kt")
+        else:
+            notes.append(f"💨 Gusty — G{round(lg)} kt")
+
+    # Pressure (altimeter) trend
     alts = [h.get("altimeter_inhg") for h in obs if h.get("altimeter_inhg") is not None]
-    if len(alts) >= 2 and alts[-1] <= alts[0] - 0.06:
-        notes.append(f"🔻 Pressure falling: {alts[0]:.2f} → {alts[-1]:.2f} inHg — weather may be deteriorating")
+    if len(alts) >= 2:
+        if alts[-1] <= alts[0] - 0.06:
+            notes.append(f"🔻 Pressure falling: {alts[0]:.2f} → {alts[-1]:.2f} inHg — may be deteriorating")
+        elif alts[-1] >= alts[0] + 0.06:
+            notes.append(f"🔺 Pressure rising: {alts[0]:.2f} → {alts[-1]:.2f} inHg — improving")
 
     return notes, ceiling_lowering

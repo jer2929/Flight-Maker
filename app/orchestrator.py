@@ -276,6 +276,34 @@ def _reporting_candidates(airport: Airport, max_nm: float = 90.0, limit: int = 5
     return out
 
 
+def _coords_near_route(coords, area_pts, max_nm: float = 250.0) -> bool:
+    for (la, lo) in coords:
+        for (rla, rlo) in area_pts:
+            if haversine_nm(rla, rlo, la, lo) <= max_nm:
+                return True
+    return False
+
+
+def _fl(ft) -> str:
+    if ft is None:
+        return "?"
+    if ft <= 100:
+        return "SFC"
+    return f"FL{round(ft / 100):03d}"
+
+
+def _fmt_sigmet(s: dict) -> str:
+    """Render a SIGMET with hazard + altitude band so its relevance is obvious."""
+    haz = (s.get("hazard") or "").upper()
+    fir = s.get("fir") or ""
+    band = ""
+    if s.get("base_ft") is not None or s.get("top_ft") is not None:
+        band = f" [{_fl(s.get('base_ft'))}–{_fl(s.get('top_ft'))}]"
+    head = " ".join(p for p in (haz, fir) if p).strip()
+    raw = s.get("raw") or ""
+    return f"{head}{band}: {raw}".strip(": ").strip()
+
+
 async def _gather_area(fn, points: list[tuple[float, float]]) -> list[str]:
     """Union of an area product (SIGMET/AIRMET/PIREP) queried at several points
     along the route, so wide advisories near (not exactly on) the line aren't missed."""
@@ -400,7 +428,12 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     area_pts = [(dep.lat, dep.lon),
                 ((dep.lat + dest.lat) / 2, (dep.lon + dest.lon) / 2),
                 (dest.lat, dest.lon)]
-    sigmets = await _gather_area(cfps.sigmets, area_pts)
+    # SIGMETs: aviationweather.gov international SIGMETs (covers Canadian FIRs),
+    # filtered to those whose area is near the route, unioned with CFPS.
+    raw_isig = await _safe(awc.isigmets(), [])
+    isig_strs = [_fmt_sigmet(s) for s in raw_isig
+                 if (not s["coords"]) or _coords_near_route(s["coords"], area_pts)]
+    sigmets = list(dict.fromkeys(isig_strs + await _gather_area(cfps.sigmets, area_pts)))
     airmets = await _gather_area(cfps.airmets, area_pts)
     pireps = await _gather_area(cfps.pireps, area_pts)
 
@@ -420,7 +453,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []))
 
     # Nearest reporting station for an endpoint that has no METAR of its own.
-    def _attach_nearby(assessment, airport, cands):
+    async def _attach_nearby(assessment, airport, cands):
         if metars.get(airport.ident):
             return
         for c in cands:
@@ -428,12 +461,15 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
             if m:
                 brg = initial_bearing_true(airport.lat, airport.lon, c.lat, c.lon)
                 d = haversine_nm(airport.lat, airport.lon, c.lat, c.lon)
+                hist = (await _safe(awc.metar_history([c.ident], 6), {})).get(c.ident, []) or [m]
+                tnotes, _low = trends.analyze([wx.parse_metar(r) for r in reversed(hist)])
                 assessment.nearby_station = NearbyStation(
                     ident=c.ident, name=c.name, distance_nm=round(d),
-                    direction=compass(brg), metar=m, taf=tafs.get(c.ident))
+                    direction=compass(brg), metar=m, taf=tafs.get(c.ident),
+                    metar_history=hist[:8], trends=tnotes)
                 return
-    _attach_nearby(dep_a, dep, dep_cands)
-    _attach_nearby(dest_a, dest, dest_cands)
+    await _attach_nearby(dep_a, dep, dep_cands)
+    await _attach_nearby(dest_a, dest, dest_cands)
 
     # --- Sample conditions along the route (enroute ceilings/vis/LLJ/freezing) ---
     enroute = []

@@ -16,10 +16,23 @@ from app.sources import cache
 _NOTAM_NUM = re.compile(r"\b([A-Z]\d{3,4}/\d{2})\b")
 
 
+_SITE_CHUNK = 10  # CFPS rejects/ignores very long multi-site queries
+
+
 async def _fetch(alpha: str, sites: list[str]) -> list[dict]:
-    """Return the raw ``data`` list for an alpha product over the given sites."""
+    """Return the raw ``data`` list for an alpha product over the given sites.
+
+    Large site lists are split into chunks so the CFPS request doesn't fail
+    silently (the cause of Discovery showing 0 NOTAMs / no METARs for everyone).
+    """
     settings = get_settings()
     sites = [s.upper() for s in sites]
+    if len(sites) > _SITE_CHUNK:
+        data: list[dict] = []
+        for i in range(0, len(sites), _SITE_CHUNK):
+            data.extend(await _fetch(alpha, sites[i:i + _SITE_CHUNK]))
+        return data
+
     key = f"cfps:{alpha}:{','.join(sorted(sites))}"
     cached = cache.get(key)
     if cached is not None:
