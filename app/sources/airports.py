@@ -46,6 +46,9 @@ def load_airports() -> dict[str, Airport]:
             lon = _to_float(row.get("longitude_deg"))
             if not ident or lat is None or lon is None:
                 continue
+            # US airports dropped for now — Canada-only (covers stale datasets too).
+            if ident.startswith("K") or ident.startswith("US-"):
+                continue
             # Skip closed/heliport/seaplane bases for fixed-wing VFR suggestions
             if (row.get("type") or "").strip() in {"closed", "heliport", "seaplane_base"}:
                 continue
@@ -87,7 +90,7 @@ def load_runways() -> dict[str, list[Runway]]:
 
 
 # Airports with controlled/complex terminal airspace (Class C/D, busy).
-COMPLEX_AIRSPACE: set[str] = {"CYHM", "CYTZ", "CYYZ", "CYKF", "KBUF"}
+COMPLEX_AIRSPACE: set[str] = {"CYHM", "CYTZ", "CYYZ", "CYKF"}
 
 
 def is_complex_airspace(ident: str) -> bool:

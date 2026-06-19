@@ -26,7 +26,11 @@ AIRPORTS_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
 RUNWAYS_URL = "https://davidmegginson.github.io/ourairports-data/runways.csv"
 
 KEEP_TYPES = {"small_airport", "medium_airport", "large_airport"}
-US_BORDER_NM = 100.0
+
+# Bump when the dataset schema or scope changes so cached copies rebuild.
+# v2: added runway width_ft and dropped US airports (Canada-only).
+DATASET_VERSION = "2"
+VERSION_FILE = DATA_DIR / ".dataset_version"
 
 AIRPORT_FIELDS = ["ident", "name", "latitude_deg", "longitude_deg",
                   "elevation_ft", "municipality", "type"]
@@ -53,29 +57,9 @@ def build_airport_data() -> tuple[int, int]:
     airports = _fetch_csv(AIRPORTS_URL)
     runways = _fetch_csv(RUNWAYS_URL)
 
-    ca, ca_ref = [], []
-    for a in airports:
-        if a["type"] not in KEEP_TYPES or a["iso_country"] != "CA":
-            continue
-        ca.append(a)
-        if a["type"] in ("medium_airport", "large_airport") and _coord(a):
-            ca_ref.append(_coord(a))
-
-    # US airports within US_BORDER_NM of any Canadian medium/large field.
-    us = []
-    for a in airports:
-        if a["type"] not in KEEP_TYPES or a["iso_country"] != "US":
-            continue
-        c = _coord(a)
-        if not c:
-            continue
-        lat = c[0]
-        if lat < 40 or lat > 55:  # cheap pre-filter to the northern tier
-            continue
-        if any(haversine_nm(c[0], c[1], r[0], r[1]) <= US_BORDER_NM for r in ca_ref):
-            us.append(a)
-
-    kept = ca + us
+    # Canada-only (the free practical proxy for "has a CFS entry").
+    kept = [a for a in airports
+            if a["type"] in KEEP_TYPES and a["iso_country"] == "CA"]
     kept_idents = {a["ident"] for a in kept}
 
     out_airports = [{k: a.get(k, "") for k in AIRPORT_FIELDS} for a in kept]
@@ -85,16 +69,27 @@ def build_airport_data() -> tuple[int, int]:
     ]
     _write(DATA_DIR / "airports_ca.csv", out_airports, AIRPORT_FIELDS)
     _write(DATA_DIR / "runways_ca.csv", out_runways, RUNWAY_FIELDS)
+    VERSION_FILE.write_text(DATASET_VERSION)
     return len(out_airports), len(out_runways)
 
 
-def ensure_airport_data() -> bool:
-    """Populate the dataset if missing and the network is reachable.
+def _dataset_current() -> bool:
+    if not (DATA_DIR / "airports_ca.csv").exists():
+        return False
+    try:
+        return VERSION_FILE.read_text().strip() == DATASET_VERSION
+    except Exception:
+        return False  # no/old version marker -> rebuild
 
-    Returns True if the full dataset is present (already or freshly built),
-    False if we should fall back to the bundled seed.
+
+def ensure_airport_data() -> bool:
+    """Populate/refresh the dataset if missing or stale and the network is
+    reachable. Rebuilds when the schema/scope version changes (e.g. added runway
+    width, dropped US) so cached Replit copies update automatically.
+
+    Returns True if the full dataset is present, False to fall back to the seed.
     """
-    if (DATA_DIR / "airports_ca.csv").exists():
+    if _dataset_current():
         return True
     try:
         build_airport_data()
