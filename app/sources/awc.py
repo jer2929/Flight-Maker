@@ -12,6 +12,38 @@ from app.config import get_settings
 from app.sources import cache
 
 _METAR_URL = "https://aviationweather.gov/api/data/metar"
+_ISIGMET_URL = "https://aviationweather.gov/api/data/isigmet"
+
+
+async def isigmets() -> list[dict]:
+    """Active international SIGMETs (covers Canadian FIRs), as structured dicts.
+
+    Each: {raw, fir, hazard, base_ft, top_ft, coords:[(lat,lon),...]}.
+    """
+    cached = cache.get("awc:isigmet")
+    if cached is not None:
+        return cached
+    try:
+        async with httpx.AsyncClient(timeout=get_settings().request_timeout) as client:
+            resp = await client.get(_ISIGMET_URL, params={"format": "json"})
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception:
+        return []
+    out: list[dict] = []
+    for it in data if isinstance(data, list) else []:
+        coords = [(c.get("lat"), c.get("lon")) for c in (it.get("coords") or [])
+                  if c.get("lat") is not None and c.get("lon") is not None]
+        out.append({
+            "raw": it.get("rawSigmet") or it.get("rawAirSigmet") or it.get("raw") or "",
+            "fir": it.get("firId") or it.get("firName"),
+            "hazard": it.get("hazard"),
+            "base_ft": it.get("base"),
+            "top_ft": it.get("top"),
+            "coords": coords,
+        })
+    cache.put("awc:isigmet", out, 300)
+    return out
 
 
 async def metar_history(idents: list[str], hours: int = 6) -> dict[str, list[str]]:

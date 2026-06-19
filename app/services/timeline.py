@@ -245,7 +245,7 @@ def _summarise(run: list[HourCondition]) -> str:
         if cat:
             cloud_bits.append(f"cloud {cat}")
     if ceils:
-        lc = round(min(ceils) / 500) * 500
+        lc = round(min(ceils) / 100) * 100
         cloud_bits.append(f"lowest ceiling ≥{lc:,} ft")
     if cloud_bits:
         parts.append(", ".join(cloud_bits))

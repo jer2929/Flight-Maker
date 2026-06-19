@@ -112,6 +112,8 @@ class NearbyStation(BaseModel):
     direction: str                  # e.g. "N", "SW" (from the endpoint to here)
     metar: Optional[str] = None
     taf: Optional[str] = None
+    metar_history: list[str] = []
+    trends: list[str] = []
 
 
 class WindAloft(BaseModel):

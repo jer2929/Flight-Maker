@@ -183,6 +183,9 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .trends { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: rgba(59,130,246,.08); border-radius: 6px; }
 .trends-h { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
 .trend { font-size: .86rem; margin: 2px 0; }
+details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; }
+.age { font-size: .72rem; color: var(--muted); white-space: nowrap; }
+.age.stale { color: #ff9b8f; font-weight: 600; }
 details.mhist { margin: 6px 0; font-size: .82rem; }
 details.mhist summary { cursor: pointer; color: var(--accent); }
 .links { font-size: .82rem; }
