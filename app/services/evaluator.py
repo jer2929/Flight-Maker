@@ -12,7 +12,7 @@ returns the legacy ``(verdict, reasons, count)`` tuple used by the timeline.
 from __future__ import annotations
 
 from app.config import get_limits
-from app.models import LimitCheck, RunwayWind, ThreatCheck, Verdict, WeatherSummary
+from app.models import LimitCheck, RunwayWind, Source, ThreatCheck, Verdict, WeatherSummary
 
 _SEVERITY = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
 
@@ -42,9 +42,13 @@ def _worse(a: Verdict, b: Verdict) -> Verdict:
 
 def conditions_checks(
     weather: WeatherSummary, best_runway: RunwayWind | None, mode: str,
-    location: str | None = None,
+    location: str | None = None, ceiling_mode: str = "xc",
 ) -> list[LimitCheck]:
-    """Applicable wind / ceiling / visibility hard-limit rows (cross-country)."""
+    """Applicable wind / ceiling / visibility hard-limit rows (cross-country).
+
+    ``ceiling_mode``: "xc" (cruise — fail below the XC limit) or "endpoint"
+    (departure/destination — low ceiling is circuit territory: <1000 fails,
+    1000–3000 is an advisory, otherwise pass)."""
     L = get_limits()["hard_limits"]
     w = L["wind"]
     src = weather.source.value if weather.source else None
@@ -71,13 +75,10 @@ def conditions_checks(
         "crosswind", "Crosswind", w["crosswind_max_kt"], xw,
         unit="kt", source=src, actual_suffix=xw_label,
     ))
-    # Ceiling (min)
+    # Ceiling (min) — rounded to 100 ft; a METAR with no BKN/OVC = unlimited.
     c = L["ceiling_agl_ft"]
     ceil_limit = c["night_xc_cloud_base"] if mode == "night" else c["day_xc"]
-    checks.append(_min_check(
-        "ceiling", "Ceiling (XC)", ceil_limit, weather.ceiling_agl_ft,
-        unit="ft AGL", source=src,
-    ))
+    checks.append(_ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, src, ceiling_mode))
     # Visibility (min)
     v = L["visibility_sm"]
     vis_limit = v["night_xc"] if mode == "night" else v["day_xc"]
@@ -109,6 +110,28 @@ def _num_check(key, label, limit, actual, unit, source=None, actual_suffix="") -
         actual_text=f"{actual:.0f} {unit}{actual_suffix}",
         passed=actual <= limit, source=source,
     )
+
+
+def _ceiling_check(limit, actual, wx_source, src, mode="xc") -> LimitCheck:
+    """Ceiling row, rounded to 100 ft. An observed report with no BKN/OVC layer is
+    an unlimited ceiling (pass). In ``endpoint`` mode a low ceiling is circuit
+    territory: <1000 fails, 1000–3000 is an advisory, otherwise pass."""
+    label = "Ceiling (departure/dest)" if mode == "endpoint" else "Ceiling (XC)"
+    limit_text = "≥ 1,000 ft (circuit)" if mode == "endpoint" else f"≥ {limit:,} ft AGL"
+    base = dict(key="ceiling", label=label, limit_text=limit_text, source=src)
+    if actual is None:
+        if wx_source == Source.OBSERVED:
+            return LimitCheck(actual_text="no ceiling (clear/SCT)", passed=True, **base)
+        return LimitCheck(actual_text="no data", passed=True, **base)
+    val = round(actual / 100) * 100
+    if mode == "endpoint":
+        if actual < 1000:
+            return LimitCheck(actual_text=f"{val:,} ft AGL (IMC)", passed=False, **base)
+        if actual < 3000:
+            return LimitCheck(actual_text=f"{val:,} ft AGL — circuit OK, verify",
+                              passed=True, advisory=True, **base)
+        return LimitCheck(actual_text=f"{val:,} ft AGL", passed=True, **base)
+    return LimitCheck(actual_text=f"{val:,} ft AGL", passed=actual >= limit, **base)
 
 
 def _min_check(key, label, limit, actual, unit, source=None) -> LimitCheck:
@@ -169,10 +192,11 @@ def decision(
     is_complex_airspace: bool,
     manual_threats: list[str] | None = None,
     extra_checks: list[LimitCheck] | None = None,
+    ceiling_mode: str = "xc",
 ) -> tuple[Verdict, list[LimitCheck], list[ThreatCheck], int]:
     """Structured decision. ``extra_checks`` lets the route add weather-hazard
     rows (icing/turbulence/etc.) computed elsewhere."""
-    checks = conditions_checks(weather, best_runway, mode) + (extra_checks or [])
+    checks = conditions_checks(weather, best_runway, mode, ceiling_mode=ceiling_mode) + (extra_checks or [])
     present = derive_threats(weather, is_complex_airspace, manual_threats)
     tchecks = threat_check_list(present)
     count = len(present)

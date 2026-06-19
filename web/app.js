@@ -155,7 +155,7 @@ function endpointCard(a, role) {
     <div class="meta obs">
       <span>${srcChip(w.source)}${w.as_of ? " " + w.as_of : ""}</span>
       <span>💨 ${wind}</span>
-      ${w.ceiling_agl_ft != null ? `<span>☁ ${fmtCeil(w.ceiling_agl_ft)}</span>` : ""}
+      ${ceilChip(w)}
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
       ${notamToggle(a)}
     </div>
@@ -250,12 +250,25 @@ function renderTimeline(timeline, windows) {
         `[${h.source}]`, ...h.reasons,
       ].filter(Boolean).join("\n");
       const klass = `${cls(h.verdict)}${h.daylight ? "" : " night"}${inWindow(h.time) ? " best" : ""}`;
-      html += `<div class="tl-cell ${klass}" title="${title.replace(/"/g, "'")}"><span class="tl-hour">${hour}</span></div>`;
+      const safe = title.replace(/"/g, "'");
+      html += `<div class="tl-cell ${klass}" title="${safe}" data-detail="${title.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")}"><span class="tl-hour">${hour}</span></div>`;
     }
     html += `</div>`;
   }
-  html += `</div>`;
-  $("#route-timeline").innerHTML = html;
+  html += `</div><div id="tl-detail" class="tl-detail" hidden></div>`;
+  const root = $("#route-timeline");
+  root.innerHTML = html;
+  // Tap a cell (mobile) to show its details — mirrors the desktop hover tooltip.
+  const panel = root.querySelector("#tl-detail");
+  root.querySelectorAll(".tl-cell").forEach((cell) => {
+    cell.addEventListener("click", () => {
+      const prev = root.querySelector(".tl-cell.active");
+      if (prev && prev !== cell) prev.classList.remove("active");
+      const on = cell.classList.toggle("active");
+      if (on) { panel.textContent = cell.dataset.detail; panel.hidden = false; }
+      else { panel.hidden = true; }
+    });
+  });
 }
 
 // ---------- Discovery ----------
@@ -265,7 +278,7 @@ async function runDiscovery() {
   try {
     const p = {
       radius: $("#radius").value, mode: currentMode(), threats: threatsParam(),
-      surface: $("#f-surface").value, length: $("#f-length").value, into_wind: $("#f-into-wind").checked,
+      surface: $("#f-surface").value, min_length_ft: $("#f-length").value, into_wind: $("#f-into-wind").checked,
       min_width_ft: $("#f-width").value, sort: $("#f-sort").value,
       max_crosswind: $("#f-xwind").checked, go_only: $("#f-go").checked,
     };
@@ -287,7 +300,7 @@ function discoveryCard(a) {
       <span>⏱ ${fmtHrMin(a.flight_time_hr)}</span>
       <span>${srcChip(w.source)}</span>
       <span>💨 ${windStr(w)}</span>
-      ${w.ceiling_agl_ft != null ? `<span>☁ ${fmtCeil(w.ceiling_agl_ft)}</span>` : ""}
+      ${ceilChip(w)}
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
       ${a.altitude ? `<span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "🟢 tailwind" : "🔴 headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
@@ -325,6 +338,13 @@ function windDir(magVal, trueVal) {
 const fmtFt = (ft) => (ft == null ? "—" : `${Math.round(ft).toLocaleString()} ft`);
 // All ceiling / cloud-base heights rounded to the nearest 100 ft for display.
 const fmtCeil = (ft) => (ft == null ? "—" : `${(Math.round(ft / 100) * 100).toLocaleString()} ft`);
+// Ceiling chip: a METAR with no BKN/OVC layer (Observed + null) means an
+// unlimited ceiling, so say "no ceiling" rather than dropping the field.
+function ceilChip(w) {
+  if (w.ceiling_agl_ft != null) return `<span>☁ ${fmtCeil(w.ceiling_agl_ft)}</span>`;
+  if (w.source === "Observed") return `<span>☁ no ceiling</span>`;
+  return "";
+}
 
 // Age of a METAR from its DDHHMMZ stamp, vs now (UTC). Returns "" if unparseable.
 function metarAgeMin(raw) {

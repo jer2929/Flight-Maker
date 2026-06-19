@@ -38,4 +38,11 @@ def test_sort_crosswind_ascending():
 
 def test_min_width_filter_uses_real_data():
     # CYHM seed has a 200 ft runway; a tiny grass strip ident won't.
-    assert _runways_pass_filters("CYHM", "any", "any", min_width_ft=150)
+    assert _runways_pass_filters("CYHM", "any", min_width_ft=150)
+
+
+def test_min_length_filter():
+    # CYHM has a long runway (>5000 ft); requiring 3000 ft keeps it.
+    assert _runways_pass_filters("CYHM", "any", min_length_ft=3000)
+    # An absurd minimum length filters it out.
+    assert not _runways_pass_filters("CYHM", "any", min_length_ft=50000)
