@@ -103,6 +103,17 @@ class Notam(BaseModel):
     url: Optional[str] = None       # link to CFPS for the aerodrome
 
 
+class NearbyStation(BaseModel):
+    """Nearest aerodrome that actually reports a METAR/TAF, for a field that
+    doesn't report its own."""
+    ident: str
+    name: Optional[str] = None
+    distance_nm: float
+    direction: str                  # e.g. "N", "SW" (from the endpoint to here)
+    metar: Optional[str] = None
+    taf: Optional[str] = None
+
+
 class WindAloft(BaseModel):
     altitude_ft: float
     direction_true: float
@@ -155,9 +166,12 @@ class AirportAssessment(BaseModel):
     notams: list[Notam] = []
     cfs_url: Optional[str] = None
     info_url: Optional[str] = None
+    info_label: Optional[str] = None
+    access_note: Optional[str] = None   # "Private / PPR" heuristic flag
     altitude: Optional[AltitudeRecommendation] = None
     metar_history: list[str] = []   # recent raw METARs, newest first
     trends: list[str] = []          # inferred aviation trends from that history
+    nearby_station: Optional[NearbyStation] = None   # when this field has no METAR
 
 
 class HourCondition(BaseModel):
@@ -206,5 +220,7 @@ class RouteAssessment(BaseModel):
     enroute_visibility_sm: Optional[float] = None
     cloud_at_cruise: bool = False                     # cloud base below planned cruise altitude
     sigmets: list[str] = []
+    airmets: list[str] = []
+    pireps: list[str] = []
     timeline: list[HourCondition] = []
     best_windows: list[BestWindow] = []

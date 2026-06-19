@@ -169,6 +169,17 @@ details.runways { margin: 6px 0; font-size: .82rem; }
 details.runways summary { cursor: pointer; color: var(--accent); }
 .rwy-comp { color: var(--muted); padding: 3px 0 3px 14px; }
 .rwy-na { font-size: .84rem; color: var(--muted); font-style: italic; margin: 6px 0; }
+.ppr { font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+  color: #f5c451; border: 1px solid var(--mitigate); border-radius: 999px; padding: 1px 7px; vertical-align: middle; }
+.nearby { margin: 6px 0; font-size: .84rem; color: var(--ink); background: rgba(255,255,255,.03);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.nearby .nlabel { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; }
+.advisories { font-size: .84rem; }
+.advisories summary { cursor: pointer; font-weight: 600; }
+.adv { margin: 6px 0; padding: 6px 8px; background: rgba(201,138,0,.08); border-left: 3px solid var(--mitigate);
+  border-radius: 6px; font-family: ui-monospace, monospace; font-size: .78rem; word-break: break-word; }
+.adv-k { font-weight: 700; color: #f5c451; margin-right: 6px; }
+.adv-none { color: var(--muted); font-size: .84rem; }
 .trends { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: rgba(59,130,246,.08); border-radius: 6px; }
 .trends-h { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
 .trend { font-size: .86rem; margin: 2px 0; }

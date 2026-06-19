@@ -14,6 +14,7 @@ from app.models import (
     AltitudeRecommendation,
     Airport,
     LimitCheck,
+    NearbyStation,
     Notam,
     RouteAssessment,
     RunwayWind,
@@ -36,11 +37,11 @@ from app.services.evaluator import (
     threat_result_label,
     threat_verdict,
 )
-from app.services.geo import flight_time_hr, initial_bearing_true, haversine_nm
+from app.services.geo import compass, flight_time_hr, initial_bearing_true, haversine_nm
 from app.services.runway import all_runway_components, best_runway, fill_headings, surface_is_hard
 from app.services.winds_aloft import recommend_altitude
 from app.sources import airports as ap
-from app.sources import cfps, openmeteo
+from app.sources import awc, cfps, openmeteo
 
 _SEVERITY = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
 _CFPS_SITE_URL = "https://plan.navcanada.ca/"
@@ -239,7 +240,8 @@ def _assess_endpoint(
         runway_components=comps, variation_deg=round(magvar.declination(lat, lon), 1),
         limit_checks=checks, threat_checks=tchecks,
         notam_count=len(site_notams), notams=site_notams,
-        cfs_url=links["cfs_url"], info_url=links["info_url"], altitude=alt,
+        cfs_url=links["cfs_url"], info_url=links["info_url"], info_label=links.get("info_label"),
+        access_note=ap.access_note(airport.ident), altitude=alt,
         metar_history=(history or [])[:8], trends=trend_notes,
     )
 
@@ -258,6 +260,33 @@ def _explicit_reasons(checks: list[LimitCheck]) -> list[str]:
 def _route_midpoints(dep: Airport, dest: Airport, n: int = 3) -> list[tuple[float, float]]:
     return [(dep.lat + (dest.lat - dep.lat) * k / (n + 1),
              dep.lon + (dest.lon - dep.lon) * k / (n + 1)) for k in range(1, n + 1)]
+
+
+# ICAO idents that typically publish a METAR/TAF (certified CY/CZ, US K).
+_REPORTING_RE = re.compile(r"^(C[YZ]|K)[A-Z0-9]{2}$")
+
+
+def _reporting_candidates(airport: Airport, max_nm: float = 90.0, limit: int = 5) -> list[Airport]:
+    out: list[Airport] = []
+    for a, _d in ap.nearest_airports(airport.lat, airport.lon, {airport.ident}, max_nm, 20):
+        if _REPORTING_RE.match(a.ident):
+            out.append(a)
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def _gather_area(fn, points: list[tuple[float, float]]) -> list[str]:
+    """Union of an area product (SIGMET/AIRMET/PIREP) queried at several points
+    along the route, so wide advisories near (not exactly on) the line aren't missed."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in points:
+        for t in await _safe(fn(p), []):
+            if t and t not in seen:
+                seen.add(t)
+                out.append(t)
+    return out
 
 
 def _worst_crosswind(dep_a: AirportAssessment, dest_a: AirportAssessment) -> RunwayWind | None:
@@ -289,7 +318,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str) -> l
     # All points (ends + enroute samples) — ceiling/vis apply along the route.
     pts = [endpoint_pts[0]]
     for i, e in enumerate(enroute, 1):
-        pts.append((f"enroute {i}", e.get("wind_kt"), e.get("gust_kt"),
+        pts.append((e.get("label") or f"enroute {i}", e.get("wind_kt"), e.get("gust_kt"),
                     e.get("ceiling_ft"), e.get("vis_sm"), "HRDPS"))
     pts.append(endpoint_pts[1])
 
@@ -357,14 +386,23 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         return None
 
     sites = [dep.ident, dest.ident]
-    metars = await _safe(cfps.metars(sites), {})
-    metar_hist = await _safe(cfps.metar_history(sites), {})
-    tafs = await _safe(cfps.tafs(sites), {})
+    # Nearby reporting-station candidates (used when an endpoint has no METAR).
+    dep_cands = _reporting_candidates(dep)
+    dest_cands = _reporting_candidates(dest)
+    all_sites = list(dict.fromkeys(sites + [c.ident for c in dep_cands + dest_cands]))
+    metars = await _safe(cfps.metars(all_sites), {})
+    tafs = await _safe(cfps.tafs(all_sites), {})
+    # METAR history for trends: aviationweather.gov (multi-hour) with CFPS fallback.
+    awc_hist = await _safe(awc.metar_history(sites, 6), {})
+    cfps_hist = await _safe(cfps.metar_history(sites), {})
+    metar_hist = {s: (awc_hist.get(s) or cfps_hist.get(s, [])) for s in sites}
     notams = await _safe(cfps.notams(sites), {})
-    mid = ((dep.lat + dest.lat) / 2, (dep.lon + dest.lon) / 2)
-    sigmets = await _safe(cfps.sigmets(mid), [])
-    airmets = await _safe(cfps.airmets(mid), [])
-    pireps = await _safe(cfps.pireps(mid), [])
+    area_pts = [(dep.lat, dep.lon),
+                ((dep.lat + dest.lat) / 2, (dep.lon + dest.lon) / 2),
+                (dest.lat, dest.lon)]
+    sigmets = await _gather_area(cfps.sigmets, area_pts)
+    airmets = await _gather_area(cfps.airmets, area_pts)
+    pireps = await _gather_area(cfps.pireps, area_pts)
 
     days = days_for(settings.timeline_hours)
     dep_fc = await _safe(openmeteo.forecast(dep.lat, dep.lon, days), {})
@@ -381,11 +419,33 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []))
     dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []))
 
+    # Nearest reporting station for an endpoint that has no METAR of its own.
+    def _attach_nearby(assessment, airport, cands):
+        if metars.get(airport.ident):
+            return
+        for c in cands:
+            m = metars.get(c.ident)
+            if m:
+                brg = initial_bearing_true(airport.lat, airport.lon, c.lat, c.lon)
+                d = haversine_nm(airport.lat, airport.lon, c.lat, c.lon)
+                assessment.nearby_station = NearbyStation(
+                    ident=c.ident, name=c.name, distance_nm=round(d),
+                    direction=compass(brg), metar=m, taf=tafs.get(c.ident))
+                return
+    _attach_nearby(dep_a, dep, dep_cands)
+    _attach_nearby(dest_a, dest, dest_cands)
+
     # --- Sample conditions along the route (enroute ceilings/vis/LLJ/freezing) ---
     enroute = []
-    for (mlat, mlon) in _route_midpoints(dep, dest):
+    mids = _route_midpoints(dep, dest)
+    for k, (mlat, mlon) in enumerate(mids, 1):
         fc = await _safe(openmeteo.forecast(mlat, mlon, days), {})
-        enroute.append(_point_now(fc))
+        pt = _point_now(fc)
+        dist_along = round(distance * k / (len(mids) + 1))
+        near = ap.nearest_airports(mlat, mlon, {dep.ident, dest.ident}, 35.0, 1)
+        near_txt = f" near {near[0][0].ident}" if near else ""
+        pt["label"] = f"~{dist_along} nm from {dep.ident}{near_txt}"
+        enroute.append(pt)
 
     ceiling_points = [dep_a.weather.ceiling_agl_ft] + [e.get("ceiling_ft") for e in enroute] + [dest_a.weather.ceiling_agl_ft]
     vis_points = [dep_a.weather.visibility_sm] + [e.get("vis_sm") for e in enroute] + [dest_a.weather.visibility_sm]
@@ -490,7 +550,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         altitude=alt, cruise_altitude_ft=cruise_alt,
         enroute_ceiling_ft=enroute_ceiling, enroute_visibility_sm=enroute_vis,
         cloud_at_cruise=cloud_at_cruise,
-        sigmets=sigmets[:5], timeline=timeline, best_windows=windows,
+        sigmets=sigmets[:8], airmets=airmets[:8], pireps=pireps[:8],
+        timeline=timeline, best_windows=windows,
     )
 
 

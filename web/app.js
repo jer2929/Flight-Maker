@@ -98,11 +98,12 @@ function renderRoute(r) {
       <span>📏 ${r.distance_nm} nm · course ${dirM(r.bearing_mag, r.bearing_true)}</span>
       <span>⏱ ${fmtHrMin(r.flight_time_hr)}</span>
       ${alt ? `<span>⬆ Best alt ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
-      ${r.enroute_ceiling_ft != null ? `<span>☁ Enroute ceiling ${fmtFt(r.enroute_ceiling_ft)}</span>` : ""}
+      ${r.enroute_ceiling_ft != null ? `<span>☁ Enroute ceiling ${fmtCeil(r.enroute_ceiling_ft)}</span>` : ""}
       ${r.cloud_at_cruise ? `<span class="warn">⚠️ Cloud below planned cruise altitude</span>` : ""}
-      ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${dirM(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
+      ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${windDir(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
     </div>`;
 
+  $("#route-summary").innerHTML += advisoriesBlock(r);
   $("#route-endpoints").innerHTML = endpointCard(r.departure, "Departure") + endpointCard(r.destination, "Destination");
 
   if (r.best_windows.length) {
@@ -153,7 +154,7 @@ function endpointCard(a, role) {
     <div class="meta obs">
       <span>${srcChip(w.source)}${w.as_of ? " " + w.as_of : ""}</span>
       <span>💨 ${wind}</span>
-      ${w.ceiling_agl_ft != null ? `<span>☁ ${fmtFt(w.ceiling_agl_ft)}</span>` : ""}
+      ${w.ceiling_agl_ft != null ? `<span>☁ ${fmtCeil(w.ceiling_agl_ft)}</span>` : ""}
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
       ${notamToggle(a)}
     </div>
@@ -161,6 +162,7 @@ function endpointCard(a, role) {
       ${to ? `<div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)}) · headwind ${Math.round(to.headwind_kt)} kt · xwind ${to.crosswind_kt} kt${dims(to)}</div>` : ""}
       ${ld ? `<div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)}) · xwind ${ld.crosswind_kt} kt${ld.crosswind_kt_gust ? ` (gust ${ld.crosswind_kt_gust})` : ""}${dims(ld)}</div>` : ""}
     </div>
+    ${a.nearby_station ? nearbyBlock(a.nearby_station) : ""}
     ${trendsBlock(a)}
     ${runwaysBlock(a)}
     <div class="links">${linksHtml(a)}</div>
@@ -174,6 +176,18 @@ function endpointCard(a, role) {
 function trendsBlock(a) {
   if (!a.trends || !a.trends.length) return "";
   return `<div class="trends"><div class="trends-h">Trends (from recent METARs)</div>${a.trends.map((t) => `<div class="trend">${t}</div>`).join("")}</div>`;
+}
+function nearbyBlock(n) {
+  return `<div class="nearby"><span class="nlabel">Nearest reporting station</span> <strong>${n.ident}</strong>${n.name ? " · " + n.name : ""} — ${n.distance_nm} NM ${n.direction} of here
+    ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}</div>` : ""}${n.taf ? `<div class="raw">TAF ${escapeHtml(n.taf)}</div>` : ""}</div>`;
+}
+function advisoriesBlock(r) {
+  const items = [];
+  (r.sigmets || []).forEach((t) => items.push(["SIGMET", t]));
+  (r.airmets || []).forEach((t) => items.push(["AIRMET", t]));
+  (r.pireps || []).forEach((t) => items.push(["PIREP", t]));
+  if (!items.length) return `<div class="panel adv-none">No active SIGMET/AIRMET/PIREP on the route.</div>`;
+  return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(check the altitudes — many apply only to higher levels)</span></summary>${items.map(([k, t]) => `<div class="adv"><span class="adv-k">${k}</span> ${escapeHtml(t)}</div>`).join("")}</details>`;
 }
 function metarHistory(a) {
   const h = a.metar_history || [];
@@ -195,7 +209,7 @@ function runwaysBlock(a) {
 function linksHtml(a) {
   const out = [];
   if (a.cfs_url) out.push(`<a href="${a.cfs_url}" target="_blank" rel="noopener">CFS PDF ↗</a>`);
-  if (a.info_url) out.push(`<a href="${a.info_url}" target="_blank" rel="noopener">Airport info (SkyVector) ↗</a>`);
+  if (a.info_url) out.push(`<a href="${a.info_url}" target="_blank" rel="noopener">Airport info (${a.info_label || "link"}) ↗</a>`);
   return out.join(" · ");
 }
 
@@ -223,9 +237,9 @@ function renderTimeline(timeline, windows) {
       const hour = h.time.slice(11, 13);
       const title = [
         `${h.time.replace("T", " ")}  ${h.verdict}`,
-        h.wind_kt != null ? `wind ${dirM(h.wind_dir_mag, h.wind_dir_true)}/${Math.round(h.wind_kt)}${h.gust_kt ? "G" + Math.round(h.gust_kt) : ""} kt${h.wind_source ? " from " + h.wind_source : ""}` : "",
+        h.wind_kt != null ? `wind ${windDir(h.wind_dir_mag, h.wind_dir_true)}/${Math.round(h.wind_kt)}${(h.gust_kt && h.gust_kt > h.wind_kt) ? "G" + Math.round(h.gust_kt) : ""} kt${h.wind_source ? " from " + h.wind_source : ""}` : "",
         h.crosswind_kt != null ? `xwind ${h.crosswind_kt} kt${h.crosswind_runway ? " on RWY " + h.crosswind_runway : ""}` : "",
-        h.ceiling_agl_ft != null ? `ceiling ${Math.round(h.ceiling_agl_ft)} ft` : "",
+        h.ceiling_agl_ft != null ? `ceiling ${(Math.round(h.ceiling_agl_ft / 500) * 500).toLocaleString()} ft` : "",
         h.visibility_sm != null ? `vis ${h.visibility_sm} SM` : "",
         h.hazards.length ? "hazards: " + h.hazards.join(",") : "",
         `[${h.source}]`, ...h.reasons,
@@ -257,13 +271,13 @@ async function runDiscovery() {
 function discoveryCard(a) {
   const w = a.weather || {}, rw = a.best_runway;
   return `<div class="card ${cls(a.verdict)}">
-    <div class="card-head"><h3>${a.airport.ident} · ${a.airport.name}</h3><span class="badge ${cls(a.verdict)}">${a.verdict}</span></div>
+    <div class="card-head"><h3>${a.airport.ident} · ${a.airport.name}${a.access_note ? ` <span class="ppr">${a.access_note}</span>` : ""}</h3><span class="badge ${cls(a.verdict)}">${a.verdict}</span></div>
     <div class="meta">
       <span>${a.distance_nm} nm · ${dirM(null, a.bearing_true)}</span>
       <span>⏱ ${fmtHrMin(a.flight_time_hr)}</span>
       <span>${srcChip(w.source)}</span>
       <span>💨 ${windStr(w)}</span>
-      ${w.ceiling_agl_ft != null ? `<span>☁ ${fmtFt(w.ceiling_agl_ft)}</span>` : ""}
+      ${w.ceiling_agl_ft != null ? `<span>☁ ${fmtCeil(w.ceiling_agl_ft)}</span>` : ""}
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
     </div>
     ${rw ? `<div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${rw.crosswind_kt} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
@@ -282,11 +296,24 @@ function dirM(magVal, trueVal) {
   if (trueVal != null) return `${String(Math.round(trueVal)).padStart(3, "0")}°T`;
   return "—";
 }
+function gustStr(w) {
+  // Only show a gust when it actually exceeds the steady wind (no "14G14").
+  return (w.gust_kt != null && w.wind_kt != null && w.gust_kt > w.wind_kt) ? "G" + Math.round(w.gust_kt) : "";
+}
 function windStr(w) {
   if (w.wind_kt == null) return "—";
-  return `${dirM(w.wind_dir_mag, w.wind_dir_true)}/${Math.round(w.wind_kt)}${w.gust_kt ? "G" + Math.round(w.gust_kt) : ""} kt`;
+  return `${windDir(w.wind_dir_mag, w.wind_dir_true)}/${Math.round(w.wind_kt)}${gustStr(w)} kt`;
+}
+// Wind vectors are rounded to the nearest 10° (e.g. 286 → 290).
+function round10(d) { if (d == null) return null; let r = Math.round(d / 10) * 10; if (r >= 360) r -= 360; return r; }
+function windDir(magVal, trueVal) {
+  if (magVal != null) return `${String(round10(magVal)).padStart(3, "0")}°M`;
+  if (trueVal != null) return `${String(round10(trueVal)).padStart(3, "0")}°T`;
+  return "—";
 }
 const fmtFt = (ft) => (ft == null ? "—" : `${Math.round(ft).toLocaleString()} ft`);
+// Ceilings rounded to the nearest 500 ft for display.
+const fmtCeil = (ft) => (ft == null ? "—" : `${(Math.round(ft / 500) * 500).toLocaleString()} ft`);
 function dimsText(c) {
   const l = c.length_ft ? Math.round(c.length_ft).toLocaleString() : "?";
   const wid = c.width_ft ? ` × ${Math.round(c.width_ft)} ft` : " ft";

@@ -235,13 +235,18 @@ def _summarise(run: list[HourCondition]) -> str:
         parts.append(f"wind ≤{round(max(winds))} kt")
     if xw:
         parts.append(f"xwind ≤{round(max(xw))} kt")
-    if ceils:
-        parts.append(f"ceiling ≥{round(min(ceils)):,} ft")
     if vis:
         parts.append(f"vis ≥{min(vis):g} SM")
+    # Cloud amount + lowest ceiling (rounded to the nearest 500 ft), together.
     clouds = [h.cloud_cover_pct for h in run if h.cloud_cover_pct is not None]
+    cloud_bits = []
     if clouds:
         cat = cloud_category(max(clouds))
         if cat:
-            parts.append(f"cloud {cat}")
+            cloud_bits.append(f"cloud {cat}")
+    if ceils:
+        lc = round(min(ceils) / 500) * 500
+        cloud_bits.append(f"lowest ceiling ≥{lc:,} ft")
+    if cloud_bits:
+        parts.append(", ".join(cloud_bits))
     return ", ".join(parts)
