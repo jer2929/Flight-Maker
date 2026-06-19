@@ -122,11 +122,14 @@ def _ceiling_dropping(fc: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Endpoint "now" weather (METAR > TAF > model), with provenance.
 # ---------------------------------------------------------------------------
-def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None) -> WeatherSummary:
+def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None,
+                      ensemble: dict | None = None) -> WeatherSummary:
     # The "now" hard-limit values come ONLY from the METAR observation, falling
-    # back to the HRDPS model when there's no METAR. A TAF is a *forecast*, never
-    # a current limit, so it's kept for display/timeline but does not drive the
-    # go/no-go verdict here.
+    # back to the model when there's no METAR. A TAF is a *forecast*, never a
+    # current limit, so it's kept for display/timeline but does not drive the
+    # go/no-go verdict here. When there's no METAR, the surface wind is blended
+    # across several models (``ensemble``) for a more robust picture; ceiling/vis
+    # still come from the single HRDPS run.
     ws = WeatherSummary(raw_metar=metar, raw_taf=taf, source=Source.NONE)
     model_now = tl.model_conditions(fc, _current_index(fc)) if fc else None
 
@@ -140,14 +143,23 @@ def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None) -> We
         ws.as_of = tm.group(1) + "Z" if tm else None
         if model_now and model_now.get("wind_kt") is not None and m["wind_kt"] is not None:
             ws.model_vs_obs_wind_kt = round(model_now["wind_kt"] - m["wind_kt"], 1)
-    elif model_now:
+        # METAR is trusted: no reported BKN/OVC layer = unlimited ceiling, so we do
+        # NOT substitute the model (which produced phantom ceilings / false NO-GO
+        # at fields reporting only SCT/FEW).
+        return ws
+
+    # No METAR — ceiling/vis/hazards from the single HRDPS run …
+    if model_now:
         ws.source = Source.MODEL
         _apply(ws, model_now)
-
-    # When there's a METAR we TRUST it: no reported BKN/OVC layer means an
-    # unlimited ceiling, so we must NOT substitute the model (that produced
-    # phantom ceilings / false NO-GO at fields reporting only SCT/FEW). The model
-    # fills ceiling/vis only when there is no METAR at all (handled by _apply).
+    # … and the surface wind from the multi-model blend when available.
+    if ensemble:
+        ws.source = Source.MODEL
+        ws.wind_dir_true = ensemble.get("wind_dir_true")
+        ws.wind_kt = ensemble.get("wind_kt")
+        ws.gust_kt = ensemble.get("gust_kt")
+        ws.wind_ensemble_n = ensemble.get("wind_ensemble_n")
+        ws.wind_models = ensemble.get("wind_models", [])
     return ws
 
 
@@ -188,6 +200,14 @@ def _mag(true_deg, lat, lon):
     return None if true_deg is None else round(magvar.to_magnetic(true_deg, lat, lon))
 
 
+def _round10(deg):
+    """Round a heading to the nearest 10° (360 for north), or None."""
+    if deg is None:
+        return None
+    r = round(deg / 10) * 10 % 360
+    return 360 if r == 0 else r
+
+
 def _rw_with_mag(rw: RunwayWind | None, lat: float, lon: float) -> RunwayWind | None:
     if rw is None:
         return None
@@ -197,13 +217,15 @@ def _rw_with_mag(rw: RunwayWind | None, lat: float, lon: float) -> RunwayWind | 
 def _assess_endpoint(
     airport: Airport, metar, taf, fc, notams, mode, manual_threats,
     distance_nm: float, bearing: float, alt: AltitudeRecommendation | None,
-    history: list[str] | None = None,
+    history: list[str] | None = None, ensemble: dict | None = None,
 ) -> AirportAssessment:
     settings = get_settings()
     lat, lon = airport.lat, airport.lon
     runways = fill_headings(ap.get_runways(airport.ident), lat, lon)
-    weather = _endpoint_weather(metar, taf, fc)
+    weather = _endpoint_weather(metar, taf, fc, ensemble)
     weather.wind_dir_mag = _mag(weather.wind_dir_true, lat, lon)
+    if weather.wind_ensemble_n:  # blended model wind → 10° granularity (like METAR)
+        weather.wind_dir_mag = _round10(weather.wind_dir_mag)
 
     trend_notes: list[str] = []
     if history:
@@ -391,9 +413,13 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str) -> l
                                  actual_text=f"{round(val / 100) * 100:,} ft AGL",
                                  passed=val >= ceil_limit, location=lbl, source=src))
     else:
+        # The model sampled the route but found no broken+ layer → clear (unlimited),
+        # which is a pass. "no data" only when there were no enroute points at all.
+        sampled = any(e for e in enroute)
         checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, enroute)",
                                  limit_text=f"≥ {ceil_limit:,} ft AGL",
-                                 actual_text="no data", passed=True))
+                                 actual_text="no ceiling (clear)" if sampled else "no data",
+                                 passed=True, source="HRDPS" if sampled else None))
 
     # Departure/destination ceiling — advisory only (circuit territory).
     for lbl, _w, _g, ce, _v, src in (pts[0], pts[-1]):
@@ -468,8 +494,14 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         for lv in alt.levels:
             lv.direction_mag = _mag(lv.direction_true, dep.lat, dep.lon)
 
-    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []))
-    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []))
+    # Blend a multi-model wind only where there's no METAR (the endpoints that
+    # need it most — small fields without a station).
+    dep_ens, dest_ens = await asyncio.gather(
+        _ens_if_needed(metars.get(dep.ident), dep, days),
+        _ens_if_needed(metars.get(dest.ident), dest, days),
+    )
+    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens)
+    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens)
 
     # Nearest reporting station for an endpoint that has no METAR of its own.
     async def _attach_nearby(assessment, airport, cands):
@@ -665,15 +697,18 @@ async def suggest(
     # their METAR/NOTAM and the rest fall back to the model.
     cfps_sites = [s for s in [settings.origin] + [a.ident for a, _ in candidates]
                   if _CFPS_IDENT_RE.match(s)]
-    metars, tafs, notams, origin_fc, fcs = await asyncio.gather(
+    cand_points = [(a.lat, a.lon) for a, _ in candidates]
+    metars, tafs, notams, origin_fc, fcs, ens = await asyncio.gather(
         _safe(cfps.metars(cfps_sites), {}),
         _safe(cfps.tafs(cfps_sites), {}),
         _safe(cfps.notams(cfps_sites), {}),
         _safe(openmeteo.forecast(origin.lat, origin.lon, 2), {}),
-        _safe(openmeteo.forecast_many([(a.lat, a.lon) for a, _ in candidates], 2), []),
+        _safe(openmeteo.forecast_many(cand_points, 2), []),
+        _safe(openmeteo.ensemble_wind_many(cand_points, 2), []),
     )
     levels_now = _winds_aloft_now(origin_fc) if origin_fc else []
     fc_by_ident = {a.ident: (fcs[i] if i < len(fcs) else None) for i, (a, _) in enumerate(candidates)}
+    ens_by_ident = {a.ident: (ens[i] if i < len(ens) else None) for i, (a, _) in enumerate(candidates)}
 
     xw_limit = get_limits()["hard_limits"]["wind"]["crosswind_max_kt"]
     results: list[AirportAssessment] = []
@@ -685,6 +720,7 @@ async def suggest(
         a = _assess_endpoint(
             airport, metars.get(airport.ident), tafs.get(airport.ident),
             fc_by_ident.get(airport.ident), notams, mode, manual_threats, dist, bearing, alt,
+            ensemble=ens_by_ident.get(airport.ident),
         )
         rw = a.best_runway
         if into_wind and (not rw or rw.headwind_kt < 0 or rw.crosswind_kt > xw_limit):
@@ -714,3 +750,10 @@ async def _safe(coro, default):
         return await coro
     except Exception:
         return default
+
+
+async def _ens_if_needed(metar, airport, days):
+    """Multi-model wind blend for an endpoint, only when it has no METAR."""
+    if metar:
+        return None
+    return await _safe(openmeteo.ensemble_wind_now(airport.lat, airport.lon, days), None)

@@ -145,6 +145,8 @@ class WeatherSummary(BaseModel):
     source: Source = Source.NONE       # where wind/conditions came from
     as_of: Optional[str] = None        # observation/model time (ISO)
     model_vs_obs_wind_kt: Optional[float] = None  # confidence hint when both exist
+    wind_ensemble_n: Optional[int] = None  # # of models blended (no-METAR wind)
+    wind_models: list[str] = []            # model ids that contributed
 
 
 class AirportAssessment(BaseModel):

@@ -7,6 +7,9 @@ for pressure-level winds. Free, no API key.
 """
 from __future__ import annotations
 
+import math
+from datetime import datetime
+
 import httpx
 
 from app.config import get_settings
@@ -23,12 +26,14 @@ PRESSURE_LEVELS_FT: dict[str, float] = {
 
 # Pressure level -> MSL height (ft, standard atmosphere) for the ceiling
 # derivation. GEM doesn't carry ``cloud_base``, so we infer a ceiling from the
-# lowest level that is saturated (high relative humidity).
+# lowest level carrying a broken+ cloud layer (cloud cover), falling back to
+# saturated layers (high relative humidity) for models without per-level cover.
 PRESSURE_CLOUD_LEVELS_FT: dict[str, float] = {
     "1000hPa": 364, "950hPa": 1800, "925hPa": 2500, "900hPa": 3243,
     "850hPa": 4781, "800hPa": 6394, "700hPa": 9882,
 }
-CLOUD_RH_PCT = 95.0  # relative humidity at/above this = broken+ cloud likely
+BKN_COVER_PCT = 55.0   # per-level cloud cover at/above this ≈ broken (5/8) ceiling
+CLOUD_RH_PCT = 95.0    # relative humidity at/above this = broken+ cloud likely
 
 # Surface variables. Requested defensively — Open-Meteo silently omits any a
 # given model doesn't carry, so downstream code treats missing series as None.
@@ -45,6 +50,7 @@ def _hourly_vars() -> list[str]:
         vars_.append(f"windspeed_{lvl}")
         vars_.append(f"winddirection_{lvl}")
     for lvl in PRESSURE_CLOUD_LEVELS_FT:
+        vars_.append(f"cloud_cover_{lvl}")
         vars_.append(f"relative_humidity_{lvl}")
     return vars_
 
@@ -125,18 +131,177 @@ def field_elevation_ft(fc: dict) -> float | None:
 
 
 def derive_ceiling_ft(hourly: dict, i: int, elevation_ft: float | None) -> float | None:
-    """Estimate ceiling (ft AGL) from the lowest saturated pressure level.
+    """Estimate ceiling (ft AGL) from the lowest broken+ cloud layer.
 
-    Used when the model has no ``cloud_base``. Returns None if no humidity data
-    or no saturated layer is found.
+    Used when the model has no ``cloud_base`` (e.g. GEM). A ceiling is the lowest
+    BROKEN/OVERCAST layer, so we scan pressure levels low→high and return the AGL
+    height of the lowest level whose **cloud cover ≥ BKN_COVER_PCT**. When a model
+    carries no per-level cloud cover we fall back to the saturated-layer rule
+    (relative humidity ≥ CLOUD_RH_PCT). Returns None if neither finds a layer.
     """
     if elevation_ft is None:
         return None
     for lvl, msl_ft in sorted(PRESSURE_CLOUD_LEVELS_FT.items(), key=lambda kv: kv[1]):
-        arr = hourly.get(f"relative_humidity_{lvl}", [])
-        rh = arr[i] if i < len(arr) else None
+        cov_arr = hourly.get(f"cloud_cover_{lvl}", [])
+        cover = cov_arr[i] if i < len(cov_arr) else None
+        if cover is not None:
+            if cover >= BKN_COVER_PCT:
+                agl = msl_ft - elevation_ft
+                if agl > 100:  # ignore layers below the field
+                    return round(agl)
+            continue  # cover present but thin here — keep scanning, skip RH
+        # No cloud-cover series for this model — fall back to saturation (RH).
+        rh_arr = hourly.get(f"relative_humidity_{lvl}", [])
+        rh = rh_arr[i] if i < len(rh_arr) else None
         if rh is not None and rh >= CLOUD_RH_PCT:
             agl = msl_ft - elevation_ft
-            if agl > 100:  # ignore levels below the field
+            if agl > 100:
                 return round(agl)
     return None
+
+
+# ---------------------------------------------------------------------------
+# Multi-model wind ensemble (used when there's no METAR).
+# ---------------------------------------------------------------------------
+# Distinct sources blended for a more robust model wind: HRDPS (gem), GFS, HRRR
+# (CONUS/southern-Ontario), ICON, and ECMWF. Open-Meteo serves them in one
+# request via ``models=a,b,c`` and suffixes each variable ``_<model>``; a model
+# returns nulls outside its domain (e.g. HRRR over northern Canada) and those are
+# simply skipped in the average. ``_CORE_MODELS`` is the safe fallback subset.
+ENSEMBLE_MODELS = ["gem_seamless", "gfs_seamless", "gfs_hrrr",
+                   "icon_seamless", "ecmwf_ifs025"]
+_CORE_MODELS = ["gem_seamless", "gfs_seamless", "icon_seamless"]
+_WIND_VARS = ["windspeed_10m", "winddirection_10m", "windgusts_10m"]
+
+
+def _current_index(hourly: dict, utc_offset_seconds: int) -> int:
+    """Index of the current local hour in an hourly ``time`` array."""
+    times = hourly.get("time", [])
+    if not times:
+        return 0
+    now_local = datetime.utcnow().timestamp() + utc_offset_seconds
+    target = datetime.utcfromtimestamp(now_local).strftime("%Y-%m-%dT%H:00")
+    for i, t in enumerate(times):
+        if t >= target:
+            return i
+    return len(times) - 1
+
+
+def vector_mean_wind(samples: list[tuple[float | None, float | None]]) -> tuple[float, float] | None:
+    """Vector-average a set of (speed, direction-FROM°) winds.
+
+    Winds are averaged as u/v components so directions blend correctly (e.g.
+    350° and 10° average to 0°, not 180°). Returns (speed_kt, dir_from_deg) with
+    direction in 0–360, or None if there are no usable samples.
+    """
+    u = v = 0.0
+    n = 0
+    for spd, d in samples:
+        if spd is None or d is None:
+            continue
+        r = math.radians(d)
+        u += -spd * math.sin(r)   # east component of the "from" vector
+        v += -spd * math.cos(r)   # north component
+        n += 1
+    if n == 0:
+        return None
+    u /= n
+    v /= n
+    speed = math.hypot(u, v)
+    direction = math.degrees(math.atan2(-u, -v)) % 360.0
+    return speed, direction
+
+
+def ensemble_point_now(resp: dict, models: list[str]) -> dict | None:
+    """Blend the current-hour 10 m wind across models from one location response.
+
+    Expects an Open-Meteo response whose ``hourly`` carries per-model suffixed
+    series (``windspeed_10m_<model>`` …). Returns
+    ``{wind_kt, wind_dir_true, gust_kt, wind_ensemble_n, wind_models}`` or None.
+    """
+    if not resp:
+        return None
+    hourly = resp.get("hourly", {})
+    i = _current_index(hourly, resp.get("utc_offset_seconds", 0))
+
+    def at(name: str, model: str):
+        arr = hourly.get(f"{name}_{model}", [])
+        return arr[i] if i < len(arr) else None
+
+    samples: list[tuple[float | None, float | None]] = []
+    gusts: list[float] = []
+    used: list[str] = []
+    for m in models:
+        spd = at("windspeed_10m", m)
+        drc = at("winddirection_10m", m)
+        if spd is not None and drc is not None:
+            samples.append((spd, drc))
+            used.append(m.replace("_seamless", "").replace("gfs_hrrr", "hrrr"))
+            g = at("windgusts_10m", m)
+            if g is not None:
+                gusts.append(g)
+    mean = vector_mean_wind(samples)
+    if mean is None:
+        return None
+    speed, direction = mean
+    return {
+        "wind_kt": round(speed, 1),
+        "wind_dir_true": round(direction, 1),
+        "gust_kt": round(max(gusts), 1) if gusts else None,
+        "wind_ensemble_n": len(samples),
+        "wind_models": used,
+    }
+
+
+async def _ensemble_fetch(points: list[tuple[float, float]], days: int,
+                          models: list[str]) -> list[dict]:
+    """Raw multi-model forecast for one or more points (one HTTP request)."""
+    settings = get_settings()
+    lats = ",".join(f"{p[0]:.4f}" for p in points)
+    lons = ",".join(f"{p[1]:.4f}" for p in points)
+    params = {
+        "latitude": lats, "longitude": lons, "forecast_days": days,
+        "models": ",".join(models), "hourly": ",".join(_WIND_VARS),
+        "windspeed_unit": "kn", "timezone": "auto",
+    }
+    async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
+        resp = await client.get(settings.openmeteo_base, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+    return data if isinstance(data, list) else [data]
+
+
+async def ensemble_wind_now(lat: float, lon: float, days: int = 2) -> dict | None:
+    """Current-hour multi-model wind blend for one point (None on failure)."""
+    key = f"ens:{lat:.3f},{lon:.3f}:{days}"
+    cached = cache.get(key)
+    if cached is None:
+        for models in (ENSEMBLE_MODELS, _CORE_MODELS):
+            try:
+                resp = (await _ensemble_fetch([(lat, lon)], days, models))[0]
+                cached = ensemble_point_now(resp, models)
+                break
+            except Exception:
+                continue  # bad model id / egress → try the safe subset, then give up
+        if cached is None:
+            return None
+        cache.put(key, cached, get_settings().openmeteo_cache_ttl)
+    return cached
+
+
+async def ensemble_wind_many(points: list[tuple[float, float]],
+                             days: int = 2) -> list[dict | None]:
+    """Current-hour multi-model wind blend for many points (one request).
+
+    Falls back to the core model subset on error, then to ``[None, …]`` so the
+    caller degrades to the single-model wind. Order matches ``points``.
+    """
+    if not points:
+        return []
+    for models in (ENSEMBLE_MODELS, _CORE_MODELS):
+        try:
+            data = await _ensemble_fetch(points, days, models)
+            return [ensemble_point_now(d, models) for d in data]
+        except Exception:
+            continue
+    return [None] * len(points)
