@@ -23,12 +23,14 @@ PRESSURE_LEVELS_FT: dict[str, float] = {
 
 # Pressure level -> MSL height (ft, standard atmosphere) for the ceiling
 # derivation. GEM doesn't carry ``cloud_base``, so we infer a ceiling from the
-# lowest level that is saturated (high relative humidity).
+# lowest level carrying a broken+ cloud layer (cloud cover), falling back to
+# saturated layers (high relative humidity) for models without per-level cover.
 PRESSURE_CLOUD_LEVELS_FT: dict[str, float] = {
     "1000hPa": 364, "950hPa": 1800, "925hPa": 2500, "900hPa": 3243,
     "850hPa": 4781, "800hPa": 6394, "700hPa": 9882,
 }
-CLOUD_RH_PCT = 95.0  # relative humidity at/above this = broken+ cloud likely
+BKN_COVER_PCT = 55.0   # per-level cloud cover at/above this ≈ broken (5/8) ceiling
+CLOUD_RH_PCT = 95.0    # relative humidity at/above this = broken+ cloud likely
 
 # Surface variables. Requested defensively — Open-Meteo silently omits any a
 # given model doesn't carry, so downstream code treats missing series as None.
@@ -45,6 +47,7 @@ def _hourly_vars() -> list[str]:
         vars_.append(f"windspeed_{lvl}")
         vars_.append(f"winddirection_{lvl}")
     for lvl in PRESSURE_CLOUD_LEVELS_FT:
+        vars_.append(f"cloud_cover_{lvl}")
         vars_.append(f"relative_humidity_{lvl}")
     return vars_
 
@@ -125,18 +128,30 @@ def field_elevation_ft(fc: dict) -> float | None:
 
 
 def derive_ceiling_ft(hourly: dict, i: int, elevation_ft: float | None) -> float | None:
-    """Estimate ceiling (ft AGL) from the lowest saturated pressure level.
+    """Estimate ceiling (ft AGL) from the lowest broken+ cloud layer.
 
-    Used when the model has no ``cloud_base``. Returns None if no humidity data
-    or no saturated layer is found.
+    Used when the model has no ``cloud_base`` (e.g. GEM). A ceiling is the lowest
+    BROKEN/OVERCAST layer, so we scan pressure levels low→high and return the AGL
+    height of the lowest level whose **cloud cover ≥ BKN_COVER_PCT**. When a model
+    carries no per-level cloud cover we fall back to the saturated-layer rule
+    (relative humidity ≥ CLOUD_RH_PCT). Returns None if neither finds a layer.
     """
     if elevation_ft is None:
         return None
     for lvl, msl_ft in sorted(PRESSURE_CLOUD_LEVELS_FT.items(), key=lambda kv: kv[1]):
-        arr = hourly.get(f"relative_humidity_{lvl}", [])
-        rh = arr[i] if i < len(arr) else None
+        cov_arr = hourly.get(f"cloud_cover_{lvl}", [])
+        cover = cov_arr[i] if i < len(cov_arr) else None
+        if cover is not None:
+            if cover >= BKN_COVER_PCT:
+                agl = msl_ft - elevation_ft
+                if agl > 100:  # ignore layers below the field
+                    return round(agl)
+            continue  # cover present but thin here — keep scanning, skip RH
+        # No cloud-cover series for this model — fall back to saturation (RH).
+        rh_arr = hourly.get(f"relative_humidity_{lvl}", [])
+        rh = rh_arr[i] if i < len(rh_arr) else None
         if rh is not None and rh >= CLOUD_RH_PCT:
             agl = msl_ft - elevation_ft
-            if agl > 100:  # ignore levels below the field
+            if agl > 100:
                 return round(agl)
     return None

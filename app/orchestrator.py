@@ -391,9 +391,13 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str) -> l
                                  actual_text=f"{round(val / 100) * 100:,} ft AGL",
                                  passed=val >= ceil_limit, location=lbl, source=src))
     else:
+        # The model sampled the route but found no broken+ layer → clear (unlimited),
+        # which is a pass. "no data" only when there were no enroute points at all.
+        sampled = any(e for e in enroute)
         checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, enroute)",
                                  limit_text=f"≥ {ceil_limit:,} ft AGL",
-                                 actual_text="no data", passed=True))
+                                 actual_text="no ceiling (clear)" if sampled else "no data",
+                                 passed=True, source="HRDPS" if sampled else None))
 
     # Departure/destination ceiling — advisory only (circuit territory).
     for lbl, _w, _g, ce, _v, src in (pts[0], pts[-1]):
