@@ -16,13 +16,14 @@ from app.services.geo import haversine_nm
 
 
 def _pick(primary: Path, fallback: Path) -> Path:
-    # On first call, try to populate the full dataset (no-op if offline).
-    if not primary.exists():
-        try:
-            from scripts.refresh_airport_data import ensure_airport_data
-            ensure_airport_data()
-        except Exception:
-            pass
+    # Always let ensure_airport_data() decide — it self-checks the dataset version
+    # and only rebuilds when missing or stale. (Previously this ran only when the
+    # file was absent, so schema bumps like width_ft never took effect on Replit.)
+    try:
+        from scripts.refresh_airport_data import ensure_airport_data
+        ensure_airport_data()
+    except Exception:
+        pass
     return primary if primary.exists() else fallback
 
 

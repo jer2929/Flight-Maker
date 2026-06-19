@@ -144,13 +144,10 @@ def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None) -> We
         ws.source = Source.MODEL
         _apply(ws, model_now)
 
-    # Always fill ceiling/visibility from the model if still unknown, so the
-    # checklist shows a value (with the model as its source) instead of "no data".
-    if model_now:
-        if ws.ceiling_agl_ft is None and model_now.get("ceiling_agl_ft") is not None:
-            ws.ceiling_agl_ft = model_now["ceiling_agl_ft"]
-        if ws.visibility_sm is None and model_now.get("visibility_sm") is not None:
-            ws.visibility_sm = model_now["visibility_sm"]
+    # When there's a METAR we TRUST it: no reported BKN/OVC layer means an
+    # unlimited ceiling, so we must NOT substitute the model (that produced
+    # phantom ceilings / false NO-GO at fields reporting only SCT/FEW). The model
+    # fills ceiling/vis only when there is no METAR at all (handled by _apply).
     return ws
 
 
@@ -215,7 +212,8 @@ def _assess_endpoint(
 
     rw = _rw_with_mag(best_runway(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt), lat, lon)
     verdict, checks, tchecks, n = decision(
-        weather, rw, mode, ap.is_complex_airspace(airport.ident), manual_threats)
+        weather, rw, mode, ap.is_complex_airspace(airport.ident), manual_threats,
+        ceiling_mode="endpoint")
     for c in checks:
         c.location = airport.ident
     if weather.source == Source.NONE:
@@ -380,18 +378,38 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str) -> l
                                  actual_text=f"{val:.0f} kt on RWY {xw.runway_ident}",
                                  passed=val <= w["crosswind_max_kt"], location=xw.runway_ident))
 
-    # Ceiling — worst (min) across points.
+    # Ceiling — the XC hard limit is a CRUISE concern: evaluate ENROUTE only
+    # (rounded to 100 ft). Departure/destination ceilings are circuit ops and
+    # are surfaced as advisories below, never an automatic NO-GO.
     c = L["ceiling_agl_ft"]
     ceil_limit = c["night_xc_cloud_base"] if mode == "night" else c["day_xc"]
-    ceil_pts = [(lbl, ce, src) for lbl, _w, _g, ce, _v, src in pts if ce is not None]
-    if ceil_pts:
-        lbl, val, src = min(ceil_pts, key=lambda t: t[1])
-        checks.append(LimitCheck(key="ceiling", label="Ceiling (XC)", limit_text=f"≥ {ceil_limit} ft AGL",
-                                 actual_text=f"{val:.0f} ft AGL", passed=val >= ceil_limit,
-                                 location=lbl, source=src))
+    enroute_ceils = [(lbl, ce, src) for lbl, _w, _g, ce, _v, src in pts[1:-1] if ce is not None]
+    if enroute_ceils:
+        lbl, val, src = min(enroute_ceils, key=lambda t: t[1])
+        checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, enroute)",
+                                 limit_text=f"≥ {ceil_limit:,} ft AGL",
+                                 actual_text=f"{round(val / 100) * 100:,} ft AGL",
+                                 passed=val >= ceil_limit, location=lbl, source=src))
     else:
-        checks.append(LimitCheck(key="ceiling", label="Ceiling (XC)", limit_text=f"≥ {ceil_limit} ft AGL",
+        checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, enroute)",
+                                 limit_text=f"≥ {ceil_limit:,} ft AGL",
                                  actual_text="no data", passed=True))
+
+    # Departure/destination ceiling — advisory only (circuit territory).
+    for lbl, _w, _g, ce, _v, src in (pts[0], pts[-1]):
+        if ce is None:
+            continue
+        cv = round(ce / 100) * 100
+        if ce < 1000:
+            checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
+                                     limit_text="≥ 1,000 ft (circuit)",
+                                     actual_text=f"{cv:,} ft AGL (IMC)", passed=False,
+                                     location=lbl, source=src))
+        elif ce < 3000:
+            checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
+                                     limit_text="circuit",
+                                     actual_text=f"{cv:,} ft AGL — circuit OK, verify",
+                                     passed=True, advisory=True, location=lbl, source=src))
 
     # Visibility — worst (min) across points.
     v = L["visibility_sm"]
@@ -595,18 +613,16 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
 # ---------------------------------------------------------------------------
 # Discovery scan with filters.
 # ---------------------------------------------------------------------------
-def _runways_pass_filters(ident: str, surface: str, length: str, min_width_ft: float = 0.0) -> bool:
+def _runways_pass_filters(ident: str, surface: str, min_length_ft: float = 0.0,
+                          min_width_ft: float = 0.0) -> bool:
     rws = ap.get_runways(ident)
     if not rws:
-        return surface == "any" and length == "any" and not min_width_ft
+        return surface == "any" and not min_length_ft and not min_width_ft
     if surface == "hard" and not any(surface_is_hard(r.surface) is True for r in rws):
         return False
     if surface == "soft" and not any(surface_is_hard(r.surface) is False for r in rws):
         return False
-    lengths = [r.length_ft for r in rws if r.length_ft is not None]
-    if length == "long" and not any(l >= 2000 for l in lengths):
-        return False
-    if length == "short" and not (lengths and all(l < 2000 for l in lengths)):
+    if min_length_ft and not any((r.length_ft or 0) >= min_length_ft for r in rws):
         return False
     if min_width_ft and not any((r.width_ft or 0) >= min_width_ft for r in rws):
         return False
@@ -632,7 +648,7 @@ def _sort_key(sort: str):
 
 async def suggest(
     radius_nm: float, mode: str, manual_threats: list[str],
-    surface: str = "any", length: str = "any", into_wind: bool = False,
+    surface: str = "any", min_length_ft: float = 0.0, into_wind: bool = False,
     go_only: bool = False, max_time_min: float | None = None,
     max_crosswind: bool = False, min_width_ft: float = 0.0, sort: str = "verdict",
 ) -> list[AirportAssessment]:
@@ -642,7 +658,7 @@ async def suggest(
         return []
     candidates = ap.airports_within(settings.origin, radius_nm)
     candidates = [(a, d) for a, d in candidates
-                  if _runways_pass_filters(a.ident, surface, length, min_width_ft)]
+                  if _runways_pass_filters(a.ident, surface, min_length_ft, min_width_ft)]
 
     # Only ask CFPS about real idents (synthetic "CA-####" placeholders 4xx the
     # whole request). Combined with fault-isolated chunks, reporting fields get

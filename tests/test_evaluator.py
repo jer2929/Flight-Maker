@@ -1,4 +1,4 @@
-from app.models import RunwayWind, Verdict, WeatherSummary
+from app.models import RunwayWind, Source, Verdict, WeatherSummary
 from app.services.evaluator import check_hard_limits, conditions_checks, decision, evaluate, threat_verdict
 
 
@@ -67,6 +67,32 @@ def test_gust_spread_over_limit():
     wx = WeatherSummary(wind_dir_true=50, wind_kt=10, gust_kt=25, visibility_sm=15, ceiling_agl_ft=8000)
     reasons = check_hard_limits(wx, good_runway(), "day")
     assert any("Gust spread" in r for r in reasons)
+
+
+def test_ceiling_rounds_to_100():
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15, ceiling_agl_ft=2246)
+    checks = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
+    assert "2,200 ft" in checks["ceiling"].actual_text
+
+
+def test_observed_no_layer_is_unlimited_ceiling():
+    # METAR with only SCT (ceiling None, Observed) is an unlimited ceiling, not "no data".
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15,
+                        ceiling_agl_ft=None, source=Source.OBSERVED)
+    checks = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
+    assert checks["ceiling"].passed is True
+    assert "no ceiling" in checks["ceiling"].actual_text
+
+
+def test_endpoint_mode_low_ceiling_is_advisory_not_nogo():
+    # A 2,500 ft ceiling at departure/destination is circuit territory, not NO-GO.
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15, ceiling_agl_ft=2500)
+    checks = {c.key: c for c in conditions_checks(wx, good_runway(), "day", ceiling_mode="endpoint")}
+    assert checks["ceiling"].passed is True
+    assert checks["ceiling"].advisory is True
+    # In XC mode the same ceiling fails (below the 4,000 ft cruise limit).
+    xc = {c.key: c for c in conditions_checks(wx, good_runway(), "day", ceiling_mode="xc")}
+    assert xc["ceiling"].passed is False
 
 
 def test_threat_rule_mapping():
