@@ -26,6 +26,10 @@ def skyvector(ident: str) -> str:
     return f"https://skyvector.com/airport/{ident.upper()}"
 
 
+# A "real" ICAO/FAA-style ident SkyVector can resolve (not a synthetic "CA-1234").
+_RESOLVABLE = re.compile(r"^[A-Z0-9]{3,4}$")
+
+
 def _load_cycle_index(cycle: str) -> dict[str, str]:
     """ICAO -> CFS PDF URL for a FltPlan cycle directory (cached)."""
     key = f"fltplan_cfs:{cycle}"
@@ -54,5 +58,15 @@ def fltplan_cfs(ident: str) -> str | None:
 
 
 def airport_links(ident: str) -> dict[str, str | None]:
-    """Return {info_url, cfs_url}. ``cfs_url`` is None when unresolved."""
-    return {"info_url": skyvector(ident), "cfs_url": fltplan_cfs(ident)}
+    """Return {info_url, info_label, cfs_url}.
+
+    SkyVector only resolves real ICAO/FAA idents, so synthetic OurAirports
+    placeholders (e.g. ``CA-0508``) fall back to the OurAirports page, which
+    works for every ident. ``cfs_url`` is None when unresolved.
+    """
+    u = ident.upper()
+    if _RESOLVABLE.match(u):
+        info_url, info_label = skyvector(u), "SkyVector"
+    else:
+        info_url, info_label = f"https://ourairports.com/airports/{u}/", "OurAirports"
+    return {"info_url": info_url, "info_label": info_label, "cfs_url": fltplan_cfs(u)}

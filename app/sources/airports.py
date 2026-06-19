@@ -94,6 +94,25 @@ def is_complex_airspace(ident: str) -> bool:
     return ident.upper() in COMPLEX_AIRSPACE
 
 
+def access_note(ident: str) -> str | None:
+    """Best-effort 'private / PPR' flag from the identifier.
+
+    Heuristic (we have no licensed CFS access field): Canadian *certified*
+    public airports are ``CY``/``CZ``; other Canadian idents (``CN..``, ``CP..``,
+    ``CE..`` 4-char TC codes) and synthetic ``CA-####`` placeholders are usually
+    registered/private aerodromes that often need Prior Permission. US public
+    fields are ``K``-prefixed. Flagged fields show a 'verify PPR' chip.
+    """
+    u = ident.upper()
+    if "-" in u:
+        return "Private / uncharted — verify PPR"
+    if u.startswith(("CY", "CZ", "K", "P")):
+        return None
+    if u.startswith("C") and len(u) == 4:
+        return "Registered/private — verify PPR"
+    return None
+
+
 def get_airport(ident: str) -> Airport | None:
     return load_airports().get(ident.upper())
 
@@ -127,6 +146,20 @@ def search_airports(query: str, limit: int = 20) -> list[Airport]:
         scored.append((rank, ap))
     scored.sort(key=lambda t: (t[0], t[1].ident))
     return [ap for _, ap in scored[:limit]]
+
+
+def nearest_airports(lat: float, lon: float, exclude: set[str] = frozenset(),
+                     max_nm: float = 120.0, limit: int = 10) -> list[tuple[Airport, float]]:
+    """Airports nearest a coordinate, sorted by distance."""
+    res: list[tuple[Airport, float]] = []
+    for ident, ap in load_airports().items():
+        if ident in exclude:
+            continue
+        d = haversine_nm(lat, lon, ap.lat, ap.lon)
+        if d <= max_nm:
+            res.append((ap, d))
+    res.sort(key=lambda t: t[1])
+    return res[:limit]
 
 
 def airports_within(origin_ident: str, radius_nm: float) -> list[tuple[Airport, float]]:

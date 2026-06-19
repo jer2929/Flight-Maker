@@ -24,6 +24,15 @@ def initial_bearing_true(lat1: float, lon1: float, lat2: float, lon2: float) -> 
     return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
 
 
+_COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+
+
+def compass(bearing_true: float) -> str:
+    """16-point compass label for a true bearing (e.g. 28 -> 'NNE')."""
+    return _COMPASS[int((bearing_true % 360) / 22.5 + 0.5) % 16]
+
+
 def flight_time_hr(distance_nm: float, cruise_kt: float, groundspeed_kt: float | None = None) -> float:
     """Hours to fly ``distance_nm``. Uses groundspeed when provided, else cruise TAS."""
     speed = groundspeed_kt if groundspeed_kt and groundspeed_kt > 0 else cruise_kt
