@@ -5,6 +5,7 @@ sites. Endpoint: ``https://plan.navcanada.ca/weather/api/alpha/``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 
@@ -22,15 +23,20 @@ _SITE_CHUNK = 10  # CFPS rejects/ignores very long multi-site queries
 async def _fetch(alpha: str, sites: list[str]) -> list[dict]:
     """Return the raw ``data`` list for an alpha product over the given sites.
 
-    Large site lists are split into chunks so the CFPS request doesn't fail
-    silently (the cause of Discovery showing 0 NOTAMs / no METARs for everyone).
+    Large site lists are split into chunks that run **concurrently** and are
+    **fault-isolated** — one chunk failing (e.g. a single unknown ident in the
+    request) no longer wipes out every site, and the round-trips overlap so
+    Discovery stays fast.
     """
-    settings = get_settings()
     sites = [s.upper() for s in sites]
     if len(sites) > _SITE_CHUNK:
+        chunks = [sites[i:i + _SITE_CHUNK] for i in range(0, len(sites), _SITE_CHUNK)]
+        results = await asyncio.gather(*(_fetch(alpha, c) for c in chunks),
+                                       return_exceptions=True)
         data: list[dict] = []
-        for i in range(0, len(sites), _SITE_CHUNK):
-            data.extend(await _fetch(alpha, sites[i:i + _SITE_CHUNK]))
+        for r in results:
+            if isinstance(r, list):
+                data.extend(r)
         return data
 
     key = f"cfps:{alpha}:{','.join(sorted(sites))}"
@@ -38,6 +44,7 @@ async def _fetch(alpha: str, sites: list[str]) -> list[dict]:
     if cached is not None:
         return cached
 
+    settings = get_settings()
     params = [("alpha", alpha)] + [("site", s) for s in sites]
     async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
         resp = await client.get(settings.cfps_base, params=params)

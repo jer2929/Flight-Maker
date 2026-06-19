@@ -5,6 +5,7 @@ results still return distances, runways and a cautious verdict.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timezone
 
@@ -594,10 +595,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
 # ---------------------------------------------------------------------------
 # Discovery scan with filters.
 # ---------------------------------------------------------------------------
-def _runways_pass_filters(ident: str, surface: str, length: str) -> bool:
+def _runways_pass_filters(ident: str, surface: str, length: str, min_width_ft: float = 0.0) -> bool:
     rws = ap.get_runways(ident)
     if not rws:
-        return surface == "any" and length == "any"
+        return surface == "any" and length == "any" and not min_width_ft
     if surface == "hard" and not any(surface_is_hard(r.surface) is True for r in rws):
         return False
     if surface == "soft" and not any(surface_is_hard(r.surface) is False for r in rws):
@@ -607,28 +608,55 @@ def _runways_pass_filters(ident: str, surface: str, length: str) -> bool:
         return False
     if length == "short" and not (lengths and all(l < 2000 for l in lengths)):
         return False
+    if min_width_ft and not any((r.width_ft or 0) >= min_width_ft for r in rws):
+        return False
     return True
+
+
+# Idents we'll actually ask CFPS about — real 4-char ICAO/TC codes, not synthetic
+# OurAirports placeholders like "CA-0508" that 4xx the whole multi-site request.
+_CFPS_IDENT_RE = re.compile(r"^[A-Z][A-Z0-9]{3}$")
+
+
+def _sort_key(sort: str):
+    if sort == "distance":
+        return lambda a: (a.distance_nm,)
+    if sort == "time":
+        return lambda a: (a.flight_time_hr,)
+    if sort == "crosswind":
+        return lambda a: (a.best_runway.crosswind_kt if a.best_runway else 999,)
+    if sort == "tailwind":  # favourable winds: best groundspeed out first
+        return lambda a: (-(a.altitude.groundspeed_kt if a.altitude else 0),)
+    return lambda a: (_SEVERITY[a.verdict], a.distance_nm)  # default: verdict
 
 
 async def suggest(
     radius_nm: float, mode: str, manual_threats: list[str],
     surface: str = "any", length: str = "any", into_wind: bool = False,
+    go_only: bool = False, max_time_min: float | None = None,
+    max_crosswind: bool = False, min_width_ft: float = 0.0, sort: str = "verdict",
 ) -> list[AirportAssessment]:
     settings = get_settings()
     origin = ap.get_airport(settings.origin)
     if origin is None:
         return []
     candidates = ap.airports_within(settings.origin, radius_nm)
-    candidates = [(a, d) for a, d in candidates if _runways_pass_filters(a.ident, surface, length)]
-    sites = [settings.origin] + [a.ident for a, _ in candidates]
-    metars = await _safe(cfps.metars(sites), {})
-    tafs = await _safe(cfps.tafs(sites), {})
-    notams = await _safe(cfps.notams(sites), {})
-    origin_fc = await _safe(openmeteo.forecast(origin.lat, origin.lon, 2), {})
-    levels_now = _winds_aloft_now(origin_fc) if origin_fc else []
+    candidates = [(a, d) for a, d in candidates
+                  if _runways_pass_filters(a.ident, surface, length, min_width_ft)]
 
-    # One bulk model call so every candidate gets wind/ceiling/vis even with no METAR.
-    fcs = await _safe(openmeteo.forecast_many([(a.lat, a.lon) for a, _ in candidates], 2), [])
+    # Only ask CFPS about real idents (synthetic "CA-####" placeholders 4xx the
+    # whole request). Combined with fault-isolated chunks, reporting fields get
+    # their METAR/NOTAM and the rest fall back to the model.
+    cfps_sites = [s for s in [settings.origin] + [a.ident for a, _ in candidates]
+                  if _CFPS_IDENT_RE.match(s)]
+    metars, tafs, notams, origin_fc, fcs = await asyncio.gather(
+        _safe(cfps.metars(cfps_sites), {}),
+        _safe(cfps.tafs(cfps_sites), {}),
+        _safe(cfps.notams(cfps_sites), {}),
+        _safe(openmeteo.forecast(origin.lat, origin.lon, 2), {}),
+        _safe(openmeteo.forecast_many([(a.lat, a.lon) for a, _ in candidates], 2), []),
+    )
+    levels_now = _winds_aloft_now(origin_fc) if origin_fc else []
     fc_by_ident = {a.ident: (fcs[i] if i < len(fcs) else None) for i, (a, _) in enumerate(candidates)}
 
     xw_limit = get_limits()["hard_limits"]["wind"]["crosswind_max_kt"]
@@ -642,12 +670,17 @@ async def suggest(
             airport, metars.get(airport.ident), tafs.get(airport.ident),
             fc_by_ident.get(airport.ident), notams, mode, manual_threats, dist, bearing, alt,
         )
-        if into_wind:
-            rw = a.best_runway
-            if not rw or rw.headwind_kt < 0 or rw.crosswind_kt > xw_limit:
-                continue
+        rw = a.best_runway
+        if into_wind and (not rw or rw.headwind_kt < 0 or rw.crosswind_kt > xw_limit):
+            continue
+        if max_crosswind and (not rw or rw.crosswind_kt > xw_limit):
+            continue
+        if go_only and a.verdict != Verdict.GO:
+            continue
+        if max_time_min is not None and a.flight_time_hr * 60 > max_time_min:
+            continue
         results.append(a)
-    results.sort(key=lambda a: (_SEVERITY[a.verdict], a.distance_nm))
+    results.sort(key=_sort_key(sort))
     return results
 
 

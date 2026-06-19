@@ -61,11 +61,19 @@ async def suggest(
     surface: str = Query(default="any", pattern="^(any|hard|soft)$"),
     length: str = Query(default="any", pattern="^(any|short|long)$"),
     into_wind: bool = Query(default=False),
+    go_only: bool = Query(default=False),
+    max_time_min: float = Query(default=None, ge=1, le=600),
+    max_crosswind: bool = Query(default=False),
+    min_width_ft: float = Query(default=0, ge=0, le=500),
+    sort: str = Query(default="verdict", pattern="^(verdict|distance|time|crosswind|tailwind)$"),
 ):
     s = get_settings()
     radius = radius or s.default_radius_nm
     manual = [t for t in threats.split(",") if t]
-    results = await orchestrator.suggest(radius, mode, manual, surface, length, into_wind)
+    results = await orchestrator.suggest(
+        radius, mode, manual, surface, length, into_wind,
+        go_only=go_only, max_time_min=max_time_min, max_crosswind=max_crosswind,
+        min_width_ft=min_width_ft, sort=sort)
     return JSONResponse([r.model_dump() for r in results])
 
 

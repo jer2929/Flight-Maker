@@ -24,6 +24,7 @@ const labelOf = (s) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCas
 
 function wire() {
   $("#radius").addEventListener("input", (e) => ($("#radius-out").textContent = `${e.target.value} nm`));
+  $("#f-time").addEventListener("input", (e) => ($("#f-time-out").textContent = +e.target.value ? `${e.target.value} min` : "Any"));
   $$(".gate").forEach((c) => c.addEventListener("change", updateGate));
   $$(".seg-btn").forEach((b) => b.addEventListener("click", () => {
     $$(".seg-btn").forEach((x) => x.classList.toggle("active", x === b));
@@ -243,7 +244,7 @@ function renderTimeline(timeline, windows) {
         `${h.time.replace("T", " ")}  ${h.verdict}`,
         h.wind_kt != null ? `wind ${windDir(h.wind_dir_mag, h.wind_dir_true)}/${Math.round(h.wind_kt)}${(h.gust_kt && h.gust_kt > h.wind_kt) ? "G" + Math.round(h.gust_kt) : ""} kt${h.wind_source ? " from " + h.wind_source : ""}` : "",
         h.crosswind_kt != null ? `xwind ${h.crosswind_kt} kt${h.crosswind_runway ? " on RWY " + h.crosswind_runway : ""}` : "",
-        h.ceiling_agl_ft != null ? `ceiling ${(Math.round(h.ceiling_agl_ft / 500) * 500).toLocaleString()} ft` : "",
+        h.ceiling_agl_ft != null ? `ceiling ${(Math.round(h.ceiling_agl_ft / 100) * 100).toLocaleString()} ft` : "",
         h.visibility_sm != null ? `vis ${h.visibility_sm} SM` : "",
         h.hazards.length ? "hazards: " + h.hazards.join(",") : "",
         `[${h.source}]`, ...h.reasons,
@@ -262,10 +263,15 @@ async function runDiscovery() {
   const btn = $("#run-discovery"); btn.disabled = true; btn.textContent = "Checking…";
   $("#discovery-results").innerHTML = "";
   try {
-    const params = new URLSearchParams({
+    const p = {
       radius: $("#radius").value, mode: currentMode(), threats: threatsParam(),
       surface: $("#f-surface").value, length: $("#f-length").value, into_wind: $("#f-into-wind").checked,
-    });
+      min_width_ft: $("#f-width").value, sort: $("#f-sort").value,
+      max_crosswind: $("#f-xwind").checked, go_only: $("#f-go").checked,
+    };
+    const t = +$("#f-time").value;
+    if (t > 0) p.max_time_min = t;
+    const params = new URLSearchParams(p);
     const data = await fetch(`/api/suggest?${params}`).then((r) => r.json());
     $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
   } catch (e) { $("#discovery-results").innerHTML = `<p class="empty">Error: ${e}</p>`; }
@@ -283,6 +289,7 @@ function discoveryCard(a) {
       <span>💨 ${windStr(w)}</span>
       ${w.ceiling_agl_ft != null ? `<span>☁ ${fmtCeil(w.ceiling_agl_ft)}</span>` : ""}
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
+      ${a.altitude ? `<span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "🟢 tailwind" : "🔴 headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
     ${rw ? `<div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${rw.crosswind_kt} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
     ${runwaysBlock(a)}

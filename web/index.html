@@ -105,8 +105,35 @@
             <option value="short">&lt; 2000 ft</option>
           </select>
         </label>
+        <label class="control">Min width
+          <select id="f-width">
+            <option value="0">Any</option>
+            <option value="50">≥ 50 ft</option>
+            <option value="75">≥ 75 ft</option>
+            <option value="100">≥ 100 ft</option>
+          </select>
+        </label>
+        <label class="control">Max flight time
+          <input type="range" id="f-time" min="0" max="120" step="5" value="0" />
+          <output id="f-time-out">Any</output>
+        </label>
+        <label class="control">Sort by
+          <select id="f-sort">
+            <option value="verdict">Verdict</option>
+            <option value="distance">Distance</option>
+            <option value="time">Flight time</option>
+            <option value="crosswind">Crosswind</option>
+            <option value="tailwind">Favourable winds</option>
+          </select>
+        </label>
         <label class="control checkbox">
-          <input type="checkbox" id="f-into-wind" /> Runway aligned into wind
+          <input type="checkbox" id="f-into-wind" /> Runway into wind
+        </label>
+        <label class="control checkbox">
+          <input type="checkbox" id="f-xwind" /> Within my crosswind limit
+        </label>
+        <label class="control checkbox">
+          <input type="checkbox" id="f-go" /> GO only
         </label>
       </div>
       <button id="run-discovery" class="primary">Find flights now</button>
