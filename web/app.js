@@ -326,7 +326,14 @@ function gustStr(w) {
 }
 function windStr(w) {
   if (w.wind_kt == null) return "—";
-  return `${windDir(w.wind_dir_mag, w.wind_dir_true)}/${Math.round(w.wind_kt)}${gustStr(w)} kt`;
+  return `${windDir(w.wind_dir_mag, w.wind_dir_true)}/${Math.round(w.wind_kt)}${gustStr(w)} kt${blendChip(w)}`;
+}
+// When there's no METAR the wind is blended across several models — flag it so
+// the source is transparent (hover shows which models contributed).
+function blendChip(w) {
+  if (!w.wind_ensemble_n) return "";
+  const models = (w.wind_models || []).join(", ");
+  return ` <span class="blend" title="${escapeHtml(models)}">${w.wind_ensemble_n}-model blend</span>`;
 }
 // Wind vectors are rounded to the nearest 10° (e.g. 286 → 290).
 function round10(d) { if (d == null) return null; let r = Math.round(d / 10) * 10; if (r >= 360) r -= 360; return r; }

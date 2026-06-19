@@ -118,6 +118,8 @@ select, input[type=text], .route-inputs input {
 
 /* source chips */
 .src { font-size: .68rem; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); }
+.blend { font-size: .66rem; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--accent);
+  color: #8fbcff; margin-left: 4px; cursor: help; }
 .src.OBSERVED { color: #6ee7a0; border-color: var(--go); }
 .src.TAF { color: #8fbcff; border-color: var(--accent); }
 .src.HRDPS { color: #f5c451; border-color: var(--mitigate); }
