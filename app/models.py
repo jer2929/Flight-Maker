@@ -194,6 +194,8 @@ class HourCondition(BaseModel):
     visibility_sm: Optional[float] = None
     cloud_cover_pct: Optional[float] = None
     hazards: list[str] = []
+    precip: Optional[str] = None          # e.g. "rain", "snow", "rain showers"
+    precip_mm: Optional[float] = None      # model precipitation amount for the hour
     source: Source = Source.MODEL
     reasons: list[str] = []
     daylight: bool = True

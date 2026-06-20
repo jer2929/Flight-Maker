@@ -17,10 +17,35 @@ from app.services.evaluator import evaluate
 from app.services.runway import best_runway
 from app.sources import openmeteo
 
-# WMO weather codes -> decision-card hazard flags.
-_WMO_HAZARDS = {
-    **{c: "freezing_rain" for c in (56, 57, 66, 67)},
-    **{c: "thunderstorm" for c in (95, 96, 97, 98, 99)},
+# WMO weather codes -> {label, hazard, heavy}. Only thunderstorm/freezing map to a
+# decision-card hazard (NO-GO); the rest are surfaced for the pilot without changing
+# the verdict (visibility/ceiling already drive that). ``heavy`` flags the codes
+# that warrant emphasis.
+_WX_CODES: dict[int, dict] = {
+    51: {"label": "drizzle", "hazard": None, "heavy": False},
+    53: {"label": "drizzle", "hazard": None, "heavy": False},
+    55: {"label": "drizzle", "hazard": None, "heavy": True},
+    56: {"label": "freezing drizzle", "hazard": "freezing_rain", "heavy": False},
+    57: {"label": "freezing drizzle", "hazard": "freezing_rain", "heavy": True},
+    61: {"label": "rain", "hazard": None, "heavy": False},
+    63: {"label": "rain", "hazard": None, "heavy": False},
+    65: {"label": "rain", "hazard": None, "heavy": True},
+    66: {"label": "freezing rain", "hazard": "freezing_rain", "heavy": False},
+    67: {"label": "freezing rain", "hazard": "freezing_rain", "heavy": True},
+    71: {"label": "snow", "hazard": None, "heavy": False},
+    73: {"label": "snow", "hazard": None, "heavy": False},
+    75: {"label": "snow", "hazard": None, "heavy": True},
+    77: {"label": "snow grains", "hazard": None, "heavy": False},
+    80: {"label": "rain showers", "hazard": None, "heavy": False},
+    81: {"label": "rain showers", "hazard": None, "heavy": False},
+    82: {"label": "rain showers", "hazard": None, "heavy": True},
+    85: {"label": "snow showers", "hazard": None, "heavy": False},
+    86: {"label": "snow showers", "hazard": None, "heavy": True},
+    95: {"label": "thunderstorm", "hazard": "thunderstorm", "heavy": True},
+    96: {"label": "thunderstorm", "hazard": "thunderstorm", "heavy": True},
+    97: {"label": "thunderstorm", "hazard": "thunderstorm", "heavy": True},
+    98: {"label": "thunderstorm", "hazard": "thunderstorm", "heavy": True},
+    99: {"label": "thunderstorm", "hazard": "thunderstorm", "heavy": True},
 }
 
 
@@ -35,9 +60,9 @@ def _at(fc: dict, name: str, i: int):
 
 def _model_conditions(fc: dict, i: int) -> dict:
     code = _at(fc, "weathercode", i)
-    hazards = []
-    if code is not None and int(code) in _WMO_HAZARDS:
-        hazards.append(_WMO_HAZARDS[int(code)])
+    info = _WX_CODES.get(int(code)) if code is not None else None
+    hazards = [info["hazard"]] if (info and info["hazard"]) else []
+    precip_mm = _at(fc, "precipitation", i)
     ceiling = openmeteo.cloud_base_to_ceiling_ft(_at(fc, "cloud_base", i))
     if ceiling is None:  # GEM has no cloud_base — infer from saturated layers
         ceiling = openmeteo.derive_ceiling_ft(fc.get("hourly", {}), i, openmeteo.field_elevation_ft(fc))
@@ -49,6 +74,9 @@ def _model_conditions(fc: dict, i: int) -> dict:
         "visibility_sm": openmeteo.visibility_to_sm(_at(fc, "visibility", i)),
         "cloud_cover_pct": _at(fc, "cloudcover", i),
         "hazards": hazards,
+        "precip": info["label"] if info else None,
+        "precip_heavy": bool(info and info["heavy"]),
+        "precip_mm": round(precip_mm, 1) if precip_mm else None,
     }
 
 
@@ -70,6 +98,11 @@ def cloud_category(pct: float | None) -> str | None:
 model_conditions = _model_conditions  # public alias for reuse by the orchestrator
 
 
+def _precip_rank(c: dict) -> tuple:
+    """Sort key for 'more significant precip': hazardous > heavy > present."""
+    return (bool(c.get("hazards")), bool(c.get("precip_heavy")), bool(c.get("precip")))
+
+
 def _worse(a: dict, b: dict | None) -> dict:
     """Merge two condition dicts taking the more conservative of each field."""
     if not b:
@@ -79,13 +112,17 @@ def _worse(a: dict, b: dict | None) -> dict:
         out["wind_kt"] = b["wind_kt"]
         if b.get("wind_dir_true") is not None:
             out["wind_dir_true"] = b["wind_dir_true"]
-    for k in ("gust_kt", "cloud_cover_pct"):
+    for k in ("gust_kt", "cloud_cover_pct", "precip_mm"):
         if b.get(k) is not None and (out.get(k) is None or b[k] > out[k]):
             out[k] = b[k]
     for k in ("visibility_sm", "ceiling_agl_ft"):
         if b.get(k) is not None and (out.get(k) is None or b[k] < out[k]):
             out[k] = b[k]
     out["hazards"] = sorted(set(out.get("hazards", [])) | set(b.get("hazards", [])))
+    # Carry the more significant precip label/heaviness (mm already max'd above).
+    if _precip_rank(b) > _precip_rank(out):
+        out["precip"] = b.get("precip")
+        out["precip_heavy"] = b.get("precip_heavy")
     return out
 
 
@@ -189,6 +226,7 @@ def build_timeline(
             ceiling_agl_ft=ws.ceiling_agl_ft, visibility_sm=ws.visibility_sm,
             cloud_cover_pct=combined.get("cloud_cover_pct"),
             hazards=ws.hazards,
+            precip=combined.get("precip"), precip_mm=combined.get("precip_mm"),
             source=Source.TAF if (dep_taf or dest_taf) else Source.MODEL,
             reasons=reasons, daylight=daylight,
         ))
@@ -249,4 +287,21 @@ def _summarise(run: list[HourCondition]) -> str:
         cloud_bits.append(f"lowest ceiling ≥{lc:,} ft")
     if cloud_bits:
         parts.append(", ".join(cloud_bits))
-    return ", ".join(parts)
+    parts.append(_precip_summary(run))
+    return ", ".join(p for p in parts if p)
+
+
+def _precip_summary(run: list[HourCondition]) -> str:
+    """Precip clause for a best-window summary. Storm/freezing hours are flagged
+    explicitly (they only reach here in a MITIGATE-fallback window); otherwise the
+    dominant ordinary precip is noted, or nothing when the run is dry."""
+    hazardous = sorted({h for r in run for h in r.hazards
+                        if h in ("thunderstorm", "freezing_rain")})
+    if hazardous:
+        return "⚠ " + " & ".join(h.replace("_", " ") for h in hazardous)
+    labels = [r.precip for r in run if r.precip]
+    if not labels:
+        return ""
+    dominant = max(set(labels), key=labels.count)
+    glyph = "❄" if "snow" in dominant else "🌧"
+    return f"{glyph} {dominant} at times"

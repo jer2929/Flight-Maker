@@ -234,7 +234,7 @@ function renderTimeline(timeline, windows) {
   const byDay = {};
   timeline.forEach((h) => { (byDay[h.time.slice(0, 10)] ||= []).push(h); });
   let html = `<div class="timeline-wrap"><h3>Hour-by-hour (full decision card; worse of departure &amp; destination)</h3>
-    <div class="legend"><span class="go">GO</span><span class="mit">MITIGATE</span><span class="nogo">NO-GO</span><span>· dimmed = night · outlined = best window</span></div>`;
+    <div class="legend"><span class="go">GO</span><span class="mit">MITIGATE</span><span class="nogo">NO-GO</span><span>· dimmed = night · outlined = best window · ⛈ storm 🧊 freezing ❄ snow 🌧 rain</span></div>`;
   for (const day of Object.keys(byDay).sort()) {
     const label = new Date(day + "T12:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
     html += `<div class="tl-day">${label}</div><div class="tl-row">`;
@@ -246,12 +246,14 @@ function renderTimeline(timeline, windows) {
         h.crosswind_kt != null ? `xwind ${h.crosswind_kt} kt${h.crosswind_runway ? " on RWY " + h.crosswind_runway : ""}` : "",
         h.ceiling_agl_ft != null ? `ceiling ${(Math.round(h.ceiling_agl_ft / 100) * 100).toLocaleString()} ft` : "",
         h.visibility_sm != null ? `vis ${h.visibility_sm} SM` : "",
+        precipText(h),
         h.hazards.length ? "hazards: " + h.hazards.join(",") : "",
         `[${h.source}]`, ...h.reasons,
       ].filter(Boolean).join("\n");
       const klass = `${cls(h.verdict)}${h.daylight ? "" : " night"}${inWindow(h.time) ? " best" : ""}`;
       const safe = title.replace(/"/g, "'");
-      html += `<div class="tl-cell ${klass}" title="${safe}" data-detail="${title.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")}"><span class="tl-hour">${hour}</span></div>`;
+      const wx = wxGlyph(h);
+      html += `<div class="tl-cell ${klass}" title="${safe}" data-detail="${title.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")}"><span class="tl-hour">${hour}</span>${wx ? `<span class="tl-wx">${wx}</span>` : ""}</div>`;
     }
     html += `</div>`;
   }
@@ -351,6 +353,19 @@ function ceilChip(w) {
   if (w.ceiling_agl_ft != null) return `<span>☁ ${fmtCeil(w.ceiling_agl_ft)}</span>`;
   if (w.source === "Observed") return `<span>☁ no ceiling</span>`;
   return "";
+}
+// Precip/storm glyph for a timeline hour (storm & freezing take priority).
+function wxGlyph(h) {
+  if ((h.hazards || []).includes("thunderstorm")) return "⛈";
+  if ((h.hazards || []).includes("freezing_rain")) return "🧊";
+  if (!h.precip) return "";
+  if (h.precip.includes("snow")) return "❄";
+  if (h.precip.includes("freezing")) return "🧊";
+  return "🌧";
+}
+function precipText(h) {
+  if (!h.precip) return "";
+  return `precip: ${h.precip}${h.precip_mm != null ? ` (${h.precip_mm} mm)` : ""}`;
 }
 
 // Age of a METAR from its DDHHMMZ stamp, vs now (UTC). Returns "" if unparseable.

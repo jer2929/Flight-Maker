@@ -41,7 +41,7 @@ def parse_metar(raw: str) -> dict:
     """Return a dict of parsed METAR fields; tolerant of parse failures."""
     out: dict = {
         "wind_dir_true": None, "wind_kt": None, "gust_kt": None,
-        "visibility_sm": None, "ceiling_agl_ft": None, "hazards": [],
+        "visibility_sm": None, "ceiling_agl_ft": None, "hazards": [], "precip": None,
         "temp_c": None, "dewpoint_c": None, "altimeter_inhg": None, "time_z": None,
     }
     if not raw:
@@ -69,6 +69,7 @@ def parse_metar(raw: str) -> dict:
     except Exception:
         _regex_wind(text, out)
     out["hazards"] = detect_hazards(text)
+    out["precip"] = detect_precip(text)
     return out
 
 
@@ -89,6 +90,29 @@ def detect_hazards(text: str) -> list[str]:
         if re.search(pattern, upper):
             found.add(flag)
     return sorted(found)
+
+
+# Precipitation tokens → a short human label, checked most-specific first so e.g.
+# FZRA / SHSN win before plain RA / SN. Thunderstorm takes priority over all.
+_PRECIP_PATTERNS: list[tuple[str, str]] = [
+    (r"\bTS\w*|\bGR\b|\bFC\b", "thunderstorm"),
+    (r"\bFZRA\b|\bFZDZ\b", "freezing rain"),
+    (r"\bSHSN\b", "snow showers"),
+    (r"\bSHRA\b|\bSHPL\b", "rain showers"),
+    (r"\bSN\b|\bSG\b|\bSP\b", "snow"),
+    (r"\bDZ\b", "drizzle"),
+    (r"\bRA\b|\bPL\b|\bUP\b", "rain"),
+]
+
+
+def detect_precip(text: str) -> Optional[str]:
+    """Normalized precip label from a raw METAR/TAF, or None. Intensity (``-``/``+``)
+    is ignored here; the label is for at-a-glance display and trend onset."""
+    upper = (text or "").upper()
+    for pattern, label in _PRECIP_PATTERNS:
+        if re.search(pattern, upper):
+            return label
+    return None
 
 
 def parse_taf(raw: str) -> dict:
