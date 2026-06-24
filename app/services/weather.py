@@ -13,6 +13,12 @@ from typing import Optional
 
 from metar import Metar
 
+# "P6SM" means *greater than* 6 SM — a TAF can't quantify visibility beyond
+# this, so it caps the report there. Treat the plus-prefix as unrestricted
+# visibility rather than an exact 6 SM, which would otherwise trip higher
+# personal limits (e.g. a ≥9 SM XC minimum) into a false NO-GO.
+UNRESTRICTED_VIS_SM = 10.0
+
 # Map raw-text weather tokens to the decision-card hazard flags.
 HAZARD_PATTERNS: dict[str, str] = {
     r"\bFZRA\b": "freezing_rain",
@@ -152,6 +158,10 @@ def _vis_value(m: re.Match) -> Optional[float]:
         whole = float(m.group(1))
         if m.group(2) and m.group(3):
             whole += float(m.group(2)) / float(m.group(3))
+        # "P6SM" = "> 6 SM": the value is a floor, not an exact reading, so
+        # report it as unrestricted instead of clamping down to the floor.
+        if m.group(0).startswith("P"):
+            return max(whole, UNRESTRICTED_VIS_SM)
         return whole
     if m.group(4) and m.group(5):
         return float(m.group(4)) / float(m.group(5))

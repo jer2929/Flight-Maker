@@ -48,3 +48,11 @@ def test_parse_taf_worstcase():
     assert p["max_gust_kt"] == 32
     assert p["min_ceiling_agl_ft"] == 2500
     assert p["min_visibility_sm"] == 3
+
+
+def test_p6sm_is_unrestricted():
+    # "P6SM" means *greater than* 6 SM, so it must not be read as exactly 6 and
+    # trip a higher visibility minimum (e.g. a ≥9 SM XC limit).
+    raw = "CYFD 171740Z 1718/1818 27010KT P6SM SCT040"
+    p = parse_taf(raw)
+    assert p["min_visibility_sm"] == 10
