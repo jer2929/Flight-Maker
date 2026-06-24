@@ -1,18 +1,30 @@
-# ✈️ Flight-Maker
+# ✈️ Minima
 
-A go/no-go + best-window planner for a VFR pilot based at **CYFD (Brantford
-Municipal, ON)**, flying a Cessna 172-class aircraft. It answers one question
-through the lens of a **Personal Flight Decision Card**:
+A go/no-go + best-window planner that gates every proposed flight against
+**your own personal minimums**. Defaults are tuned for a VFR pilot based at
+**CYFD (Brantford Municipal, ON)** in a Cessna 172-class aircraft, but the
+minimums are fully editable and travel with you as your flying evolves. It
+answers one question through the lens of a **Personal Flight Decision Card**:
 
 > **Am I good to fly — and when, over the next 24–48 h, is the best window to go?**
 
-### Two ways to use it
+### Three ways to use it
 1. **Route** *(primary)* — enter **departure + destination** (autocomplete over
    every Canadian aerodrome + US border fields). You get the decision-card
    **GO / MITIGATE / NO-GO** verdict **now** for both ends, flight time + best
    cruise altitude (winds aloft), active NOTAMs/SIGMETs, and an **hour-by-hour
    24–48 h timeline** that highlights the best GO window(s).
 2. **Discovery** — "where can I go within X nm right now," ranked by the card.
+3. **My Minimums** — set your personal wind, ceiling, visibility, crosswind and
+   weather no-go limits. They are stored in your browser and gate the Route and
+   Discovery results. The built-in card is the default / reset target.
+
+> **Personal minimums (v1 scope).** Editing your minimums drives the hard-limit
+> PASS/FAIL rows and the weather auto-NO-GO list. It does **not** yet change the
+> two-trigger *threat-stacking* thresholds (e.g. when winds count as "strong")
+> or the route-hazard scan — those still use the built-in defaults. So tightening
+> visibility flips the visibility row but not the threat-stack count. Wiring
+> those to the profile is a planned enhancement.
 
 > ⚠️ **Decision-support only.** Forecasts are not observations. Always confirm
 > with an official NAV CANADA briefing before flight.
@@ -37,7 +49,7 @@ model-vs-observed wind delta is shown as a confidence hint.
 ### Why not Windy?
 A Windy.com **Premium** subscription does **not** include API access — Windy's
 Point Forecast API is a separate **Professional license (~$1,000/yr)** and its
-free key returns deliberately degraded data. So Flight-Maker uses **Open-Meteo
+free key returns deliberately degraded data. So Minima uses **Open-Meteo
 HRDPS** instead: free, no key, and the highest-resolution hourly model available
 for southern Ontario.
 

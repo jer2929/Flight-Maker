@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Flight-Maker</title>
-  <link rel="stylesheet" href="/style.css" />
+  <title>Minima</title>
+  <link rel="stylesheet" href="/style.css?v=20260625" />
 </head>
 <body>
   <header>
-    <h1>✈️ Flight-Maker</h1>
+    <h1>✈️ Minima</h1>
     <p id="dep-line">Loading…</p>
   </header>
 
@@ -43,6 +43,7 @@
     <div class="tabs">
       <button class="tab active" data-tab="route">Route</button>
       <button class="tab" data-tab="discovery">Discovery</button>
+      <button class="tab" data-tab="settings">My Minimums</button>
     </div>
 
     <div class="controls">
@@ -145,6 +146,82 @@
     <div id="discovery-results" class="results"></div>
   </section>
 
+  <section id="tab-settings" class="tab-pane hidden">
+    <div class="panel">
+      <h2 class="set-title">My personal minimums</h2>
+      <p class="set-intro">Set the limits every proposed flight is gated against. These live in this
+         browser and adjust as your flying evolves. <strong>Defaults</strong> are the built-in starting card.</p>
+      <div id="minimums-readout"></div>
+    </div>
+
+    <div class="panel">
+      <form id="minimums-form" onsubmit="return false">
+        <fieldset class="set-group">
+          <legend>Wind (kt)</legend>
+          <div class="controls">
+            <label class="control">Sustained wind — max
+              <input type="number" id="set-wind-sustained" min="1" max="60" step="1" />
+            </label>
+            <label class="control">Gust spread — max
+              <input type="number" id="set-wind-gust" min="1" max="40" step="1" />
+            </label>
+            <label class="control">Crosswind — max
+              <input type="number" id="set-wind-xwind" min="1" max="40" step="1" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>Ceiling (ft AGL) — minimum</legend>
+          <div class="controls">
+            <label class="control">Day circuit
+              <input type="number" id="set-ceil-day-circuit" min="100" max="15000" step="100" />
+            </label>
+            <label class="control">Day cross-country
+              <input type="number" id="set-ceil-day-xc" min="100" max="15000" step="100" />
+            </label>
+            <label class="control">Night circuit
+              <input type="number" id="set-ceil-night-circuit" min="100" max="15000" step="100" />
+            </label>
+            <label class="control">Night XC cloud base
+              <input type="number" id="set-ceil-night-xc" min="100" max="15000" step="100" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>Visibility (SM) — minimum</legend>
+          <div class="controls">
+            <label class="control">Day circuit
+              <input type="number" id="set-vis-day-circuit" min="0" max="20" step="1" />
+            </label>
+            <label class="control">Day cross-country
+              <input type="number" id="set-vis-day-xc" min="0" max="20" step="1" />
+            </label>
+            <label class="control">Night circuit
+              <input type="number" id="set-vis-night-circuit" min="0" max="20" step="1" />
+            </label>
+            <label class="control">Night cross-country
+              <input type="number" id="set-vis-night-xc" min="0" max="20" step="1" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>Weather — automatic NO-GO when present</legend>
+          <p class="set-hint">Unchecking a hazard removes it from the auto NO-GO list. Leave checked unless you know why.</p>
+          <div id="wxflags" class="controls"></div>
+        </fieldset>
+
+        <div class="set-actions">
+          <button id="save-minimums" class="primary">Save minimums</button>
+          <button id="reset-minimums" class="secondary">Reset to defaults</button>
+          <span id="minimums-status" class="set-status"></span>
+        </div>
+      </form>
+    </div>
+  </section>
+
   <footer>
     <p><strong>Sources:</strong> METAR/TAF/NOTAM/SIGMET = NAV CANADA CFPS (authoritative).
        Hourly forecast = Open-Meteo <strong>HRDPS</strong> (Canada 2.5 km model). Runways = OurAirports
@@ -153,6 +230,6 @@
        Forecasts are not observations — <strong>always confirm with an official NAV CANADA briefing before flight.</strong></p>
   </footer>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=20260625"></script>
 </body>
 </html>
