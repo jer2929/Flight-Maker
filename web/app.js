@@ -160,8 +160,8 @@ function endpointCard(a, role) {
       ${notamToggle(a)}
     </div>
     <div class="rwy-lines">
-      ${to ? `<div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)}) · headwind ${Math.round(to.headwind_kt)} kt · xwind ${to.crosswind_kt} kt${dims(to)}</div>` : ""}
-      ${ld ? `<div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)}) · xwind ${ld.crosswind_kt} kt${ld.crosswind_kt_gust ? ` (gust ${ld.crosswind_kt_gust})` : ""}${dims(ld)}</div>` : ""}
+      ${to ? `<div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt · xwind ${to.crosswind_kt} kt</div>` : ""}
+      ${ld ? `<div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · xwind ${ld.crosswind_kt} kt${ld.crosswind_kt_gust ? ` (gust ${ld.crosswind_kt_gust})` : ""}</div>` : ""}
     </div>
     ${a.nearby_station ? nearbyBlock(a.nearby_station) : ""}
     ${trendsBlock(a)}
@@ -381,8 +381,8 @@ function ageChip(raw) {
   const mins = metarAgeMin(raw);
   if (mins == null) return "";
   const txt = mins < 60 ? `${mins} min ago` : `${Math.floor(mins / 60)} h ${mins % 60} min ago`;
-  const stale = mins > 90 ? " stale" : "";
-  return ` <span class="age${stale}">${txt}</span>`;
+  const cls = mins > 90 ? " stale" : mins < 60 ? " fresh" : "";
+  return ` <span class="age${cls}">${txt}</span>`;
 }
 function dimsText(c) {
   const l = c.length_ft ? Math.round(c.length_ft).toLocaleString() : "?";
