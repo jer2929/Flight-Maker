@@ -4,6 +4,26 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 let CONFIG = null;
 
+// ---------- Personal minimums (per-browser, sent with each request) ----------
+const LS_KEY = "minima.minimums.v1";
+let MINIMUMS = null;   // null = using built-in defaults; object = custom profile
+
+// Editable numeric leaves: [group, yamlKey, inputId, label, unit]. The group +
+// yamlKey must match data/limits.yaml exactly so the backend merge accepts them.
+const MIN_FIELDS = [
+  ["wind", "sustained_max_kt", "set-wind-sustained", "Sustained wind", "kt"],
+  ["wind", "gust_spread_max_kt", "set-wind-gust", "Gust spread", "kt"],
+  ["wind", "crosswind_max_kt", "set-wind-xwind", "Crosswind", "kt"],
+  ["ceiling_agl_ft", "day_circuit", "set-ceil-day-circuit", "Ceiling — day circuit", "ft"],
+  ["ceiling_agl_ft", "day_xc", "set-ceil-day-xc", "Ceiling — day XC", "ft"],
+  ["ceiling_agl_ft", "night_circuit", "set-ceil-night-circuit", "Ceiling — night circuit", "ft"],
+  ["ceiling_agl_ft", "night_xc_cloud_base", "set-ceil-night-xc", "Ceiling — night XC base", "ft"],
+  ["visibility_sm", "day_circuit", "set-vis-day-circuit", "Visibility — day circuit", "SM"],
+  ["visibility_sm", "day_xc", "set-vis-day-xc", "Visibility — day XC", "SM"],
+  ["visibility_sm", "night_circuit", "set-vis-night-circuit", "Visibility — night circuit", "SM"],
+  ["visibility_sm", "night_xc", "set-vis-night-xc", "Visibility — night XC", "SM"],
+];
+
 async function init() {
   CONFIG = await fetch("/api/config").then((r) => r.json());
   $("#dep-line").textContent =
@@ -17,7 +37,24 @@ async function init() {
     .filter((t) => manual.includes(t))
     .map((t) => `<label><input type="checkbox" class="threat" value="${t}"> ${labelOf(t)}</label>`)
     .join("");
+
+  try { MINIMUMS = JSON.parse(localStorage.getItem(LS_KEY) || "null"); } catch { MINIMUMS = null; }
+  buildWxFlags();
+  fillMinimumsForm();
+  renderMinimums();
   wire();
+}
+
+// Effective limits = defaults with the custom profile merged over them.
+function effectiveLimits() {
+  const d = CONFIG.default_limits;
+  const m = MINIMUMS || {};
+  return {
+    wind: { ...d.wind, ...(m.wind || {}) },
+    ceiling_agl_ft: { ...d.ceiling_agl_ft, ...(m.ceiling_agl_ft || {}) },
+    visibility_sm: { ...d.visibility_sm, ...(m.visibility_sm || {}) },
+    weather_flags: m.weather_flags || d.weather_flags,
+  };
 }
 
 const labelOf = (s) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -34,6 +71,8 @@ function wire() {
   $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
   $("#run-route").addEventListener("click", runRoute);
   $("#run-discovery").addEventListener("click", runDiscovery);
+  $("#save-minimums").addEventListener("click", saveMinimums);
+  $("#reset-minimums").addEventListener("click", resetMinimums);
   autocomplete("dep", "dep-list");
   autocomplete("dest", "dest-list");
 }
@@ -44,8 +83,11 @@ function switchTab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   $("#tab-route").classList.toggle("hidden", name !== "route");
   $("#tab-discovery").classList.toggle("hidden", name !== "discovery");
+  $("#tab-settings").classList.toggle("hidden", name !== "settings");
 }
 const threatsParam = () => $$(".threat").filter((c) => c.checked).map((c) => c.value).join(",");
+// Personal-minimums payload, only sent when the pilot has a custom profile.
+const prefsParam = () => (MINIMUMS ? { prefs: JSON.stringify(MINIMUMS) } : {});
 
 // ---------- Autocomplete ----------
 function autocomplete(inputId, listId) {
@@ -75,7 +117,7 @@ async function runRoute() {
   const btn = $("#run-route"); btn.disabled = true; btn.textContent = "Pulling data…";
   clearRoute();
   try {
-    const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam() });
+    const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam(), ...prefsParam() });
     const res = await fetch(`/api/route?${params}`);
     if (!res.ok) { $("#route-verdict").innerHTML = `<div class="empty">Unknown departure or destination.</div>`; return; }
     renderRoute(await res.json());
@@ -286,6 +328,7 @@ async function runDiscovery() {
     };
     const t = +$("#f-time").value;
     if (t > 0) p.max_time_min = t;
+    Object.assign(p, prefsParam());
     const params = new URLSearchParams(p);
     const data = await fetch(`/api/suggest?${params}`).then((r) => r.json());
     $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
@@ -313,6 +356,95 @@ function discoveryCard(a) {
     ${w.raw_metar ? `<div class="raw">METAR ${escapeHtml(w.raw_metar)}${ageChip(w.raw_metar)}</div>` : ""}
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
   </div>`;
+}
+
+// ---------- My Minimums (settings) ----------
+const WX_LABELS = {
+  convective_sigmet: "Convective SIGMET", thunderstorm: "Thunderstorm (TS)",
+  embedded_thunderstorm: "Embedded TS", freezing_rain: "Freezing rain (FZRA)",
+  forecast_icing: "Forecast icing", moderate_turbulence_low: "Mod. turbulence < 3000 ft",
+  low_level_wind_shear: "Low-level wind shear", widespread_ifr: "Widespread IFR",
+};
+const wxLabel = (f) => WX_LABELS[f] || labelOf(f);
+
+function buildWxFlags() {
+  $("#wxflags").innerHTML = (CONFIG.weather_flag_options || [])
+    .map((f) => `<label class="control checkbox"><input type="checkbox" class="wxflag" value="${f}"> ${wxLabel(f)}</label>`)
+    .join("");
+}
+
+// Populate the form inputs from the effective limits (defaults + custom).
+function fillMinimumsForm() {
+  const eff = effectiveLimits();
+  for (const [group, key, id] of MIN_FIELDS) $("#" + id).value = eff[group][key];
+  const active = new Set(eff.weather_flags);
+  $$(".wxflag").forEach((c) => (c.checked = active.has(c.value)));
+}
+
+// Read the form into a custom-profile object (only leaves differing from
+// default are kept, so the payload stays minimal and "reset" is implicit).
+function readMinimumsForm() {
+  const d = CONFIG.default_limits;
+  const profile = {};
+  for (const [group, key, id] of MIN_FIELDS) {
+    const v = parseFloat($("#" + id).value);
+    if (!Number.isFinite(v) || v === d[group][key]) continue;
+    (profile[group] ||= {})[key] = v;
+  }
+  const checked = $$(".wxflag").filter((c) => c.checked).map((c) => c.value);
+  if (checked.length !== d.weather_flags.length) profile.weather_flags = checked;
+  return Object.keys(profile).length ? profile : null;
+}
+
+function saveMinimums() {
+  MINIMUMS = readMinimumsForm();
+  if (MINIMUMS) localStorage.setItem(LS_KEY, JSON.stringify(MINIMUMS));
+  else localStorage.removeItem(LS_KEY);
+  fillMinimumsForm();
+  renderMinimums();
+  flashStatus(MINIMUMS ? "Saved — flights now gated by your minimums." : "Saved — back to default minimums.");
+}
+
+function resetMinimums() {
+  MINIMUMS = null;
+  localStorage.removeItem(LS_KEY);
+  fillMinimumsForm();
+  renderMinimums();
+  flashStatus("Reset to default minimums.");
+}
+
+function flashStatus(msg) {
+  const el = $("#minimums-status");
+  el.textContent = msg;
+  clearTimeout(flashStatus._t);
+  flashStatus._t = setTimeout(() => (el.textContent = ""), 4000);
+}
+
+// Read-only "at a glance" table; flags leaves that differ from the default.
+function renderMinimums() {
+  const eff = effectiveLimits(), d = CONFIG.default_limits;
+  const custom = !!MINIMUMS;
+  const row = (label, cur, def, unit) => {
+    const diff = cur !== def;
+    return `<div class="chk ${diff ? "custom" : "pass"}">
+      <span class="mark">${diff ? "★" : "–"}</span>
+      <span class="lbl">${label}</span>
+      <span class="act">${cur}${unit ? " " + unit : ""}</span>
+      <span class="lim">${diff ? `default ${def}${unit ? " " + unit : ""}` : "default"}</span>
+    </div>`;
+  };
+  const rows = MIN_FIELDS.map(([g, k, , label, unit]) => row(label, eff[g][k], d[g][k], unit)).join("");
+  const off = d.weather_flags.filter((f) => !eff.weather_flags.includes(f));
+  const flagsRow = `<div class="chk ${off.length ? "custom" : "pass"}">
+      <span class="mark">${off.length ? "★" : "–"}</span>
+      <span class="lbl">Weather auto NO-GO</span>
+      <span class="act">${eff.weather_flags.length} of ${d.weather_flags.length} active</span>
+      <span class="lim">${off.length ? "removed: " + off.map(wxLabel).join(", ") : "all default"}</span>
+    </div>`;
+  $("#minimums-readout").innerHTML =
+    `<div class="min-banner ${custom ? "custom" : ""}">${custom
+      ? "Using your custom minimums (★ = changed from default)."
+      : "Using the built-in default minimums."}</div>${rows}${flagsRow}`;
 }
 
 // ---------- helpers ----------

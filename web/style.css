@@ -107,7 +107,28 @@ select, input[type=text], .route-inputs input {
 .chk.fail .lbl { font-weight: 600; }
 .chk.advisory { border-left-color: var(--mitigate); } .chk.advisory .mark { color: #f5c451; }
 .chk.na { opacity: .5; }
+.chk.custom { border-left-color: var(--accent); background: rgba(59,130,246,.08); }
+.chk.custom .mark { color: var(--accent); }
+.chk.custom .lbl { font-weight: 600; }
 .chk a { color: var(--accent); }
+
+/* My Minimums (settings) */
+.set-title { margin: 0 0 6px; font-size: 1.05rem; }
+.set-intro { margin: 0 0 14px; color: var(--muted); font-size: .88rem; }
+.min-banner { margin: 0 0 10px; padding: 8px 12px; border-radius: 6px; font-size: .88rem;
+  background: rgba(255,255,255,.03); border-left: 3px solid var(--muted); }
+.min-banner.custom { border-left-color: var(--accent); background: rgba(59,130,246,.1); }
+.set-group { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 16px; padding: 12px 14px; }
+.set-group legend { padding: 0 6px; font-size: .82rem; text-transform: uppercase; letter-spacing: .03em; color: var(--accent); }
+.set-group .control input[type="number"] { width: 100%; }
+.set-hint { margin: 0 0 8px; color: var(--muted); font-size: .8rem; }
+.set-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.secondary {
+  background: transparent; color: var(--ink); border: 1px solid var(--line);
+  padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: .95rem;
+}
+.secondary:hover { border-color: var(--accent); }
+.set-status { color: #6ee7a0; font-size: .85rem; }
 
 /* NOTAM expansion */
 .notam-btn { cursor: pointer; color: var(--accent); }

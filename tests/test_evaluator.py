@@ -1,3 +1,4 @@
+from app.config import limits_override
 from app.models import RunwayWind, Source, Verdict, WeatherSummary
 from app.services.evaluator import check_hard_limits, conditions_checks, decision, evaluate, threat_verdict
 
@@ -118,3 +119,37 @@ def test_two_threats_nogo():
     v, reasons, n = evaluate(wx, good_runway(), mode="day", is_complex_airspace=True)
     assert n >= 2
     assert v == Verdict.NOGO
+
+
+def test_personal_minimums_override_tightens_visibility():
+    # 8 SM passes the default 9? No — default day_xc is 9, so 8 already fails.
+    # Use 10 SM (passes default) and tighten the personal minimum to 12 SM.
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=10, ceiling_agl_ft=8000)
+    base = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
+    assert base["visibility"].passed is True             # 10 SM ≥ default 9
+    with limits_override({"visibility_sm": {"day_xc": 12}}):
+        tight = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
+        assert tight["visibility"].passed is False        # 10 SM < personal 12
+    # Override is scoped to the block.
+    after = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
+    assert after["visibility"].passed is True
+
+
+def test_personal_minimums_override_flips_verdict():
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=10, visibility_sm=10, ceiling_agl_ft=8000)
+    v_default, _, _ = evaluate(wx, good_runway(), mode="day", is_complex_airspace=False)
+    assert v_default == Verdict.GO
+    with limits_override({"visibility_sm": {"day_xc": 12}}):
+        v_tight, _, _ = evaluate(wx, good_runway(), mode="day", is_complex_airspace=False)
+        assert v_tight == Verdict.NOGO
+
+
+def test_personal_minimums_remove_hazard_flag():
+    # A pilot who drops 'thunderstorm' from the auto-NO-GO list no longer fails on it.
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15,
+                        ceiling_agl_ft=8000, hazards=["thunderstorm"])
+    v_default, _, _ = evaluate(wx, good_runway(), mode="day", is_complex_airspace=False)
+    assert v_default == Verdict.NOGO
+    with limits_override({"weather_flags": ["freezing_rain"]}):  # TS removed
+        checks = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
+        assert checks["hazards"].passed is True
