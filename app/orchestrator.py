@@ -37,6 +37,7 @@ from app.services.evaluator import (
     threat_check_list,
     threat_result_label,
     threat_verdict,
+    threat_weight,
 )
 from app.services.geo import compass, flight_time_hr, initial_bearing_true, haversine_nm
 from app.services.runway import all_runway_components, best_runway, fill_headings, surface_is_hard
@@ -46,12 +47,6 @@ from app.sources import awc, cfps, openmeteo
 
 _SEVERITY = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
 _CFPS_SITE_URL = "https://plan.navcanada.ca/"
-
-
-def _rules_block(outer: dict, flight_rules: str) -> dict:
-    if "vfr" in outer:
-        return outer.get(flight_rules, outer["vfr"])
-    return outer
 
 
 def _worse_verdict(a: Verdict, b: Verdict) -> Verdict:
@@ -407,8 +402,13 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                                  actual_text=f"{val:.0f} kt on RWY {xw.runway_ident}",
                                  passed=val <= w["crosswind_max_kt"], location=xw.runway_ident))
 
-    # Ceiling — use flight-rules-specific sub-block.
-    c_block = _rules_block(L["ceiling_agl_ft"], flight_rules)
+    # Ceiling — IFR uses ifr_minimums section; VFR uses hard_limits.
+    full_limits = get_limits()
+    if flight_rules == "ifr":
+        ifr = full_limits.get("ifr_minimums", {})
+        c_block = ifr.get("ceiling_agl_ft", L["ceiling_agl_ft"])
+    else:
+        c_block = L["ceiling_agl_ft"]
     ceil_limit = c_block.get("night_xc", c_block.get("night_xc_cloud_base", 12000)) if mode == "night" else c_block.get("day_xc", 4000)
     enroute_ceils = [(lbl, ce, src) for lbl, _w, _g, ce, _v, src in pts[1:-1] if ce is not None]
     if enroute_ceils:
@@ -442,8 +442,12 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                                      actual_text=f"{cv:,} ft AGL — circuit OK, verify",
                                      passed=True, advisory=True, location=lbl, source=src))
 
-    # Visibility — flight-rules-specific sub-block.
-    v_block = _rules_block(L["visibility_sm"], flight_rules)
+    # Visibility — IFR uses ifr_minimums section; VFR uses hard_limits.
+    if flight_rules == "ifr":
+        ifr = full_limits.get("ifr_minimums", {})
+        v_block = ifr.get("visibility_sm", L["visibility_sm"])
+    else:
+        v_block = L["visibility_sm"]
     vis_limit = v_block.get("night_xc", 9) if mode == "night" else v_block.get("day_xc", 9)
     vis_pts = [(lbl, vi, src) for lbl, _w, _g, _c2, vi, src in pts if vi is not None]
     if vis_pts:
@@ -573,7 +577,11 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     cond_checks = _route_conditions_checks(dep_a, dest_a, enroute, mode, flight_rules=flight_rules)
 
     # --- Weather-hazard section (the card's nine Weather items) ---
-    vis_limit = _rules_block(L["visibility_sm"], flight_rules).get("night_xc" if mode == "night" else "day_xc", 9)
+    if flight_rules == "ifr":
+        _ifr = get_limits().get("ifr_minimums", {})
+        vis_limit = _ifr.get("visibility_sm", L["visibility_sm"]).get("night_xc" if mode == "night" else "day_xc", 9)
+    else:
+        vis_limit = L["visibility_sm"].get("night_xc" if mode == "night" else "day_xc", 9)
     metar_taf_text = " ".join(filter(None, [
         dep_a.weather.raw_metar, dep_a.weather.raw_taf,
         dest_a.weather.raw_metar, dest_a.weather.raw_taf,
@@ -599,9 +607,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     all_checks = cond_checks + weather_checks
     present = derive_threats(route_ws, ap.is_complex_airspace(dep.ident) or ap.is_complex_airspace(dest.ident), manual_threats)
     route_threats = threat_check_list(present)
+    threat_count = threat_weight(present)
     failed = any((not c.passed) and c.applicable for c in all_checks)
     verdict_now = Verdict.NOGO if failed else Verdict.GO
-    verdict_now = _worse_verdict(verdict_now, threat_verdict(len(present)))
+    verdict_now = _worse_verdict(verdict_now, threat_verdict(threat_count))
     verdict_now = _worse_verdict(verdict_now, dep_a.verdict)
     verdict_now = _worse_verdict(verdict_now, dest_a.verdict)
 
@@ -637,7 +646,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         distance_nm=round(distance, 1), bearing_true=round(bearing), bearing_mag=bearing_mag,
         flight_time_hr=dest_a.flight_time_hr,
         verdict_now=verdict_now, reasons_now=reasons_now,
-        threat_result_label=threat_result_label(len(present)),
+        threat_result_label=threat_result_label(threat_count),
         limit_checks=all_checks, threat_checks=route_threats,
         altitude=alt, cruise_altitude_ft=cruise_alt,
         enroute_ceiling_ft=enroute_ceiling, enroute_visibility_sm=enroute_vis,
@@ -688,20 +697,24 @@ async def suggest(
     surface: str = "any", min_length_ft: float = 0.0, into_wind: bool = False,
     go_only: bool = False, max_time_min: float | None = None,
     max_crosswind: bool = False, min_width_ft: float = 0.0, sort: str = "verdict",
-    flight_rules: str = "vfr",
+    flight_rules: str = "vfr", origin_ident: str | None = None,
 ) -> list[AirportAssessment]:
     settings = get_settings()
-    origin = ap.get_airport(settings.origin)
+    origin_ident = (origin_ident or settings.origin).upper()
+    origin = ap.get_airport(origin_ident)
+    if origin is None:
+        origin_ident = settings.origin
+        origin = ap.get_airport(origin_ident)
     if origin is None:
         return []
-    candidates = ap.airports_within(settings.origin, radius_nm)
+    candidates = ap.airports_within(origin_ident, radius_nm)
     candidates = [(a, d) for a, d in candidates
                   if _runways_pass_filters(a.ident, surface, min_length_ft, min_width_ft)]
 
     # Only ask CFPS about real idents (synthetic "CA-####" placeholders 4xx the
     # whole request). Combined with fault-isolated chunks, reporting fields get
     # their METAR/NOTAM and the rest fall back to the model.
-    cfps_sites = [s for s in [settings.origin] + [a.ident for a, _ in candidates]
+    cfps_sites = [s for s in [origin_ident] + [a.ident for a, _ in candidates]
                   if _CFPS_IDENT_RE.match(s)]
     cand_points = [(a.lat, a.lon) for a, _ in candidates]
     metars, tafs, notams, origin_fc, fcs, ens = await asyncio.gather(

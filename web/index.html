@@ -3,25 +3,33 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Flight-Maker</title>
-  <link rel="stylesheet" href="/style.css" />
+  <title>Minima</title>
+  <link rel="stylesheet" href="/style.css?v=20260625" />
 </head>
 <body>
   <header>
-    <h1>✈️ Flight-Maker</h1>
-    <p id="dep-line">Loading…</p>
+    <h1 class="brand">
+      <svg class="logo" viewBox="0 0 250 54" role="img" aria-label="Minima">
+        <title>Minima</title>
+        <defs>
+          <marker id="logo-arrow" markerWidth="6" markerHeight="6" refX="4" refY="3"
+                  orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L6,3 L0,6 Z" class="logo-arrowhead" />
+          </marker>
+        </defs>
+        <text x="2" y="38" class="logo-word">Minima</text>
+        <!-- MAWP-style: solid bar under the word, then a dashed climb-out to an arrow -->
+        <line x1="4" y1="46" x2="150" y2="46" class="logo-bar" />
+        <line x1="150" y1="46" x2="240" y2="12" class="logo-climb"
+              marker-end="url(#logo-arrow)" />
+      </svg>
+    </h1>
   </header>
-
-  <!-- My Minimums: pilot configures which self-assessment items are active -->
-  <details class="panel mm-panel" id="my-minimums-panel">
-    <summary>My Minimums <span class="hint">— personal no-fly self-assessment items (click to configure)</span></summary>
-    <p class="mm-desc hint">Check the conditions you want included in your pre-flight self-assessment. Saved to your browser. Items appear under route and discovery results.</p>
-    <div class="checks-grid" id="my-minimums-body"></div>
-  </details>
 
   <section class="panel">
     <div class="tabs">
-      <button class="tab active" data-tab="route">Route</button>
+      <button class="tab active" data-tab="settings">My Minimums</button>
+      <button class="tab" data-tab="route">Route</button>
       <button class="tab" data-tab="discovery">Discovery</button>
     </div>
 
@@ -46,7 +54,7 @@
   </section>
 
   <!-- Route tab -->
-  <section id="tab-route" class="tab-pane">
+  <section id="tab-route" class="tab-pane hidden">
     <div class="panel route-inputs">
       <div class="ac">
         <label>Departure</label>
@@ -134,6 +142,87 @@
     <div id="discovery-self-check"></div>
   </section>
 
+  <!-- My Minimums / Settings tab -->
+  <section id="tab-settings" class="tab-pane">
+    <div class="panel">
+      <h2 class="set-title">My minimums &amp; profile</h2>
+      <p class="set-intro">Everything below lives in this browser and gates every proposed flight.
+         It persists between sessions and adjusts as your flying evolves. <strong>Defaults</strong>
+         are the built-in starting card.</p>
+      <div class="ac base-pick">
+        <label for="set-base">Home base</label>
+        <input id="set-base" type="text" autocomplete="off" placeholder="e.g. CYFD" />
+        <div id="base-list" class="ac-list hidden"></div>
+      </div>
+      <div id="minimums-readout"></div>
+    </div>
+
+    <div class="panel">
+      <form id="minimums-form" onsubmit="return false">
+        <fieldset class="set-group">
+          <legend>Wind (kt) — maximum</legend>
+          <div id="grp-wind" class="controls slider-grid"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>VFR ceiling (ft AGL) — minimum</legend>
+          <div id="grp-ceiling" class="controls slider-grid"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>VFR visibility (SM) — minimum</legend>
+          <div id="grp-vis" class="controls slider-grid"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>IFR ceiling (ft AGL) — personal minimums above published</legend>
+          <div id="grp-ifr-ceiling" class="controls slider-grid"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>IFR visibility (SM) — personal minimums</legend>
+          <div id="grp-ifr-vis" class="controls slider-grid"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>Recent experience — minimum hours in last 30 days</legend>
+          <div id="grp-recency" class="controls slider-grid"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>Weather — automatic NO-GO when present</legend>
+          <p class="set-hint">Unchecking a hazard removes it from the auto NO-GO list. Leave checked unless you know why.</p>
+          <div id="wxflags" class="controls"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>Standing factors — apply to every flight</legend>
+          <p class="set-hint">Things that are generally true of you or your aircraft. They count toward the threat stack on every flight.</p>
+          <div id="standing-factors" class="controls"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>How conservative?</legend>
+          <p class="set-hint">Sets how readily stacked threats escalate the verdict.</p>
+          <div id="conservatism" class="controls"></div>
+        </fieldset>
+
+        <div class="set-actions">
+          <button id="save-minimums" class="primary">Save profile</button>
+          <button id="reset-minimums" class="secondary">Reset to defaults</button>
+          <span id="minimums-status" class="set-status"></span>
+        </div>
+      </form>
+    </div>
+
+    <!-- Pre-flight self-assessment items configurator -->
+    <div class="panel mm-panel">
+      <h2 class="set-title">Pre-flight self-assessment items</h2>
+      <p class="set-intro">Choose which fitness and external-pressure items appear in your pre-flight check below route and discovery results.</p>
+      <div class="checks-grid" id="my-minimums-body"></div>
+    </div>
+  </section>
+
   <footer>
     <p><strong>Sources:</strong> METAR/TAF/NOTAM/SIGMET = NAV CANADA CFPS (authoritative).
        Hourly forecast = Open-Meteo <strong>HRDPS</strong> (Canada 2.5 km model). Runways = OurAirports
@@ -142,6 +231,6 @@
        Forecasts are not observations — <strong>always confirm with an official NAV CANADA briefing before flight.</strong></p>
   </footer>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=20260625"></script>
 </body>
 </html>

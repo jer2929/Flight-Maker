@@ -6,6 +6,9 @@ touching code.
 """
 from __future__ import annotations
 
+import contextvars
+import copy
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
@@ -53,8 +56,158 @@ def get_settings() -> Settings:
     return Settings()
 
 
+# ---------------------------------------------------------------------------
+# Decision-card limits ("personal minimums").
+#
+# ``data/limits.yaml`` is the built-in DEFAULT profile. A pilot can send their
+# own minimums with a request; we layer those over the default for the duration
+# of that request only, via a context variable. Every limit read in the engine
+# goes through ``get_limits()``, so this single chokepoint re-gates the whole
+# app without touching the evaluator / orchestrator / timeline.
+# ---------------------------------------------------------------------------
+
+# Per-request override (set by ``limits_override``). ``None`` = use the default.
+_limits_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "limits_override", default=None)
+
+# Editable leaf keys per group, with [min, max] clamps. The browser is never
+# trusted: anything outside this whitelist/range is dropped or clamped.
+# Groups prefixed "ifr_" correspond to ``ifr_minimums`` in the YAML (not hard_limits).
+_NUMERIC_LIMITS: dict[str, dict[str, tuple[float, float]]] = {
+    "wind": {
+        "sustained_max_kt": (1, 60),
+        "gust_spread_max_kt": (1, 40),
+        "crosswind_max_kt": (1, 40),
+    },
+    "ceiling_agl_ft": {
+        "day_circuit": (100, 15000),
+        "day_xc": (100, 15000),
+        "night_circuit": (100, 15000),
+        "night_xc_cloud_base": (100, 15000),
+    },
+    "visibility_sm": {
+        "day_circuit": (0, 20),
+        "day_xc": (0, 20),
+        "night_circuit": (0, 20),
+        "night_xc": (0, 20),
+    },
+    "ifr_ceiling_agl_ft": {
+        "day_xc": (100, 15000),
+        "night_xc": (100, 15000),
+    },
+    "ifr_visibility_sm": {
+        "day_xc": (0, 20),
+        "night_xc": (0, 20),
+    },
+}
+
+
 @lru_cache
-def get_limits() -> dict:
-    """Load the decision-card limits from ``data/limits.yaml``."""
+def _default_limits() -> dict:
+    """Load the built-in default decision-card limits from ``data/limits.yaml``.
+
+    Cached; callers must never mutate the returned dict (they only read it)."""
     with open(DATA_DIR / "limits.yaml", "r", encoding="utf-8") as fh:
         return yaml.safe_load(fh)
+
+
+def get_default_limits() -> dict:
+    """A deep copy of the built-in default limits, safe to mutate/serialize."""
+    return copy.deepcopy(_default_limits())
+
+
+def get_limits() -> dict:
+    """The active limits: a per-request override if one is set, else the
+    cached default. Existing callers (``get_limits()["hard_limits"]...``) are
+    unchanged."""
+    override = _limits_override.get()
+    return override if override is not None else _default_limits()
+
+
+def _validate_prefs(prefs: dict, base: dict) -> dict:
+    """Whitelist + clamp pilot-supplied minimums against the default ``base``.
+
+    Returns a clean dict containing only known groups/leaf keys. Unknown keys,
+    non-numeric values, and out-of-range numbers are dropped or clamped.
+    ``weather_flags`` may only be a subset of the default flags (a pilot can
+    remove a hazard from the auto-NO-GO list but not invent new ones).
+    Groups prefixed ``ifr_`` map to ``ifr_minimums`` in the YAML."""
+    clean: dict = {}
+    if not isinstance(prefs, dict):
+        return clean
+    for group, specs in _NUMERIC_LIMITS.items():
+        src = prefs.get(group)
+        if not isinstance(src, dict):
+            continue
+        out: dict = {}
+        for key, (lo, hi) in specs.items():
+            val = src.get(key)
+            if isinstance(val, bool) or not isinstance(val, (int, float)):
+                continue
+            out[key] = max(lo, min(hi, float(val)))
+        if out:
+            clean[group] = out
+    flags = prefs.get("weather_flags")
+    if isinstance(flags, list):
+        known = base["hard_limits"]["weather_flags"]
+        clean["weather_flags"] = [f for f in known if f in flags]
+    cons = prefs.get("conservatism")
+    presets = base.get("conservatism_presets", {}).get("presets", {})
+    if isinstance(cons, str) and cons in presets:
+        clean["conservatism"] = cons
+    return clean
+
+
+def _apply_conservatism(limits: dict, name: str) -> None:
+    """Write the named preset's count->verdict rule and per-threat weights into
+    ``limits["threat_stacking"]`` (mutates the passed deep copy)."""
+    cp = limits.get("conservatism_presets", {})
+    preset = cp.get("presets", {}).get(name)
+    if not preset:
+        return
+    ts = limits["threat_stacking"]
+    ts["rule"] = dict(preset["rule"])
+    serious_weight = preset.get("serious_weight", 1)
+    if serious_weight and serious_weight != 1:
+        ts["weights"] = {t: serious_weight for t in cp.get("serious_threats", [])}
+    else:
+        ts["weights"] = {}
+
+
+def merge_limits(base: dict, overrides: dict) -> dict:
+    """Deep-merge validated leaf ``overrides`` over a deep-copied ``base``.
+
+    Groups prefixed ``ifr_`` are routed into the ``ifr_minimums`` section."""
+    clean = _validate_prefs(overrides, base)
+    out = copy.deepcopy(base)
+    hl = out["hard_limits"]
+    for group in _NUMERIC_LIMITS:
+        if group not in clean:
+            continue
+        if group.startswith("ifr_"):
+            real = group[4:]  # "ceiling_agl_ft" or "visibility_sm"
+            out.setdefault("ifr_minimums", {}).setdefault(real, {}).update(clean[group])
+        else:
+            hl[group].update(clean[group])
+    if "weather_flags" in clean:
+        hl["weather_flags"] = clean["weather_flags"]
+    if "conservatism" in clean:
+        _apply_conservatism(out, clean["conservatism"])
+    return out
+
+
+@contextmanager
+def limits_override(prefs: dict | None):
+    """Activate pilot-supplied minimums for the duration of the block.
+
+    Falls back to the default when ``prefs`` is empty/None. Always resets, so a
+    reused context never leaks one request's minimums into another."""
+    if not prefs:
+        yield
+        return
+    merged = merge_limits(_default_limits(), prefs)
+    token = _limits_override.set(merged)
+    try:
+        yield
+    finally:
+        _limits_override.reset(token)

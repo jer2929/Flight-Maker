@@ -1,26 +1,57 @@
-"""Flight-Maker — FastAPI app.
+"""Minima — FastAPI app.
 
-Tactical ("fly now") and strategic ("best days in next 10") flight suggestions
-for CYFD, filtered through a personal flight decision card. Serves a small
-single-page UI from ``web/``.
+Tactical ("fly now") and strategic ("best days in next 10") flight suggestions,
+gated by the pilot's own personal minimums. Serves a small single-page UI from
+``web/``.
 """
 from __future__ import annotations
+
+import json
 
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import orchestrator
-from app.config import WEB_DIR, get_limits, get_settings
+from app.config import WEB_DIR, get_default_limits, get_limits, get_settings, limits_override
+from app.services.evaluator import THREAT_LABELS
 from app.sources import airports as ap
 
-app = FastAPI(title="Flight-Maker", version="0.1.0")
+app = FastAPI(title="Minima", version="0.2.0")
+
+
+def _parse_prefs(prefs: str | None) -> dict | None:
+    """Decode the URL-encoded JSON personal-minimums payload from a request.
+
+    Returns ``None`` for missing/blank/invalid input so the engine falls back
+    to the built-in default profile (validation/clamping happens downstream in
+    ``merge_limits``)."""
+    if not prefs:
+        return None
+    try:
+        data = json.loads(prefs)
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 @app.get("/api/config")
 async def config():
     s = get_settings()
     origin = ap.get_airport(s.origin)
+    defaults = get_default_limits()
+    ts = defaults["threat_stacking"]
+    kinds = ts.get("threat_kinds", {})
+    threats = [
+        {"key": k, "label": THREAT_LABELS.get(k, k.replace("_", " ").title()),
+         "kind": kinds.get(k, "auto")}
+        for k in ts["major_threats"]
+    ]
+    cp = defaults.get("conservatism_presets", {})
+    presets = [
+        {"key": key, "label": p.get("label", key.title()), "description": p.get("description", "")}
+        for key, p in cp.get("presets", {}).items()
+    ]
     return {
         "departure": s.origin,
         "departure_name": origin.name if origin else s.origin,
@@ -28,7 +59,13 @@ async def config():
         "default_radius_nm": s.default_radius_nm,
         "max_radius_nm": s.max_radius_nm,
         "timeline_hours": s.timeline_hours,
-        "major_threats": get_limits()["threat_stacking"]["major_threats"],
+        "major_threats": ts["major_threats"],
+        "threats": threats,
+        "conservatism_presets": presets,
+        "default_conservatism": cp.get("default", "standard"),
+        "default_limits": defaults["hard_limits"],
+        "default_ifr_minimums": defaults.get("ifr_minimums", {}),
+        "weather_flag_options": defaults["hard_limits"]["weather_flags"],
     }
 
 
@@ -44,11 +81,13 @@ async def route(
     mode: str = Query(default="day", pattern="^(day|night)$"),
     threats: str = Query(default=""),
     flight_rules: str = Query(default="vfr", pattern="^(vfr|ifr)$"),
+    prefs: str = Query(default=None),
 ):
     s = get_settings()
     dep = dep or s.origin
     manual = [t for t in threats.split(",") if t]
-    result = await orchestrator.assess_route(dep, dest, mode, manual, flight_rules=flight_rules)
+    with limits_override(_parse_prefs(prefs)):
+        result = await orchestrator.assess_route(dep, dest, mode, manual, flight_rules=flight_rules)
     if result is None:
         return JSONResponse({"error": "unknown departure or destination"}, status_code=404)
     return JSONResponse(result.model_dump())
@@ -68,14 +107,19 @@ async def suggest(
     min_width_ft: float = Query(default=0, ge=0, le=500),
     sort: str = Query(default="verdict", pattern="^(verdict|distance|time|crosswind|tailwind)$"),
     flight_rules: str = Query(default="vfr", pattern="^(vfr|ifr)$"),
+    base: str = Query(default=None),
+    prefs: str = Query(default=None),
 ):
     s = get_settings()
     radius = radius or s.default_radius_nm
     manual = [t for t in threats.split(",") if t]
-    results = await orchestrator.suggest(
-        radius, mode, manual, surface, min_length_ft, into_wind,
-        go_only=go_only, max_time_min=max_time_min, max_crosswind=max_crosswind,
-        min_width_ft=min_width_ft, sort=sort, flight_rules=flight_rules)
+    with limits_override(_parse_prefs(prefs)):
+        results = await orchestrator.suggest(
+            radius, mode, manual, surface, min_length_ft, into_wind,
+            go_only=go_only, max_time_min=max_time_min, max_crosswind=max_crosswind,
+            min_width_ft=min_width_ft, sort=sort, flight_rules=flight_rules,
+            origin_ident=base or None,
+        )
     return JSONResponse([r.model_dump() for r in results])
 
 

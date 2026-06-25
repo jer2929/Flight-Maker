@@ -40,13 +40,6 @@ def _worse(a: Verdict, b: Verdict) -> Verdict:
     return a if _SEVERITY[a] >= _SEVERITY[b] else b
 
 
-def _rules_block(outer: dict, flight_rules: str) -> dict:
-    """Return vfr or ifr sub-dict, falling back to flat layout for backwards compat."""
-    if "vfr" in outer:
-        return outer.get(flight_rules, outer["vfr"])
-    return outer
-
-
 def conditions_checks(
     weather: WeatherSummary, best_runway: RunwayWind | None, mode: str,
     location: str | None = None, ceiling_mode: str = "xc",
@@ -57,7 +50,8 @@ def conditions_checks(
     ``ceiling_mode``: "xc" (cruise — fail below the XC limit) or "endpoint"
     (departure/destination — low ceiling is circuit territory: <1000 fails,
     1000–3000 is an advisory, otherwise pass)."""
-    L = get_limits()["hard_limits"]
+    full_limits = get_limits()
+    L = full_limits["hard_limits"]
     w = L["wind"]
     src = weather.source.value if weather.source else None
     checks: list[LimitCheck] = []
@@ -83,13 +77,21 @@ def conditions_checks(
         "crosswind", "Crosswind", w["crosswind_max_kt"], xw,
         unit="kt", source=src, actual_suffix=xw_label,
     ))
-    # Ceiling — use the vfr or ifr sub-block from limits.yaml.
-    c_block = _rules_block(L["ceiling_agl_ft"], flight_rules)
-    ceil_limit = c_block.get("night_xc", c_block.get("night_xc_cloud_base", 12000)) if mode == "night" else c_block.get("day_xc", 4000)
+    # Ceiling — IFR uses ifr_minimums section; VFR uses hard_limits.
+    if flight_rules == "ifr":
+        ifr = full_limits.get("ifr_minimums", {})
+        c = ifr.get("ceiling_agl_ft", L["ceiling_agl_ft"])
+    else:
+        c = L["ceiling_agl_ft"]
+    ceil_limit = c.get("night_xc", c.get("night_xc_cloud_base", 12000)) if mode == "night" else c.get("day_xc", 4000)
     checks.append(_ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, src, ceiling_mode))
-    # Visibility — vfr or ifr sub-block.
-    v_block = _rules_block(L["visibility_sm"], flight_rules)
-    vis_limit = v_block.get("night_xc", 9) if mode == "night" else v_block.get("day_xc", 9)
+    # Visibility — IFR uses ifr_minimums section; VFR uses hard_limits.
+    if flight_rules == "ifr":
+        ifr = full_limits.get("ifr_minimums", {})
+        v = ifr.get("visibility_sm", L["visibility_sm"])
+    else:
+        v = L["visibility_sm"]
+    vis_limit = v.get("night_xc", 9) if mode == "night" else v.get("day_xc", 9)
     checks.append(_min_check(
         "visibility", "Visibility (XC)", vis_limit, weather.visibility_sm,
         unit="SM", source=src,
@@ -160,8 +162,13 @@ def derive_threats(
     is_complex_airspace: bool,
     manual_threats: list[str] | None = None,
 ) -> set[str]:
-    """Derive present 'major threats' for two-trigger stacking."""
-    threats: set[str] = set(manual_threats or [])
+    """Derive present 'major threats' for two-trigger stacking.
+
+    Manual threats (standing profile factors + per-flight toggles) are accepted
+    only if they're known threat keys, so a malformed query string can't inflate
+    the stack."""
+    known = set(get_limits()["threat_stacking"]["major_threats"])
+    threats: set[str] = {t for t in (manual_threats or []) if t in known}
     if weather.wind_kt is not None and weather.wind_kt >= 15:
         threats.add("strong_or_gusty_winds")
     if weather.gust_kt is not None and weather.wind_kt is not None and (weather.gust_kt - weather.wind_kt) >= 8:
@@ -190,6 +197,14 @@ def threat_check_list(present: set[str]) -> list[ThreatCheck]:
     ]
 
 
+def threat_weight(present: set[str]) -> int:
+    """Weighted threat count for stacking. The active conservatism preset may
+    weight 'serious' threats above 1 (e.g. a single serious weather threat = 2,
+    i.e. an instant no-go under the cautious preset). Defaults to one each."""
+    weights = get_limits()["threat_stacking"].get("weights", {})
+    return sum(weights.get(t, 1) for t in present)
+
+
 def threat_verdict(threat_count: int) -> Verdict:
     rule = get_limits()["threat_stacking"]["rule"]
     return Verdict(rule[str(min(threat_count, 3))])
@@ -210,12 +225,13 @@ def decision(
     checks = conditions_checks(weather, best_runway, mode, ceiling_mode=ceiling_mode, flight_rules=flight_rules) + (extra_checks or [])
     present = derive_threats(weather, is_complex_airspace, manual_threats)
     tchecks = threat_check_list(present)
-    count = len(present)
+    weighted = threat_weight(present)
 
     failed = any((not c.passed) and c.applicable for c in checks)
     verdict = Verdict.NOGO if failed else Verdict.GO
-    verdict = _worse(verdict, threat_verdict(count))
-    return verdict, checks, tchecks, count
+    verdict = _worse(verdict, threat_verdict(weighted))
+    # Return the weighted count so the result label matches the verdict.
+    return verdict, checks, tchecks, weighted
 
 
 def evaluate(
