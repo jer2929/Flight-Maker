@@ -72,3 +72,35 @@ def test_default_object_not_mutated():
     merge_limits(base, {"visibility_sm": {"day_xc": 1}})
     # merge_limits works on a copy — the cached default is untouched.
     assert get_default_limits()["hard_limits"]["visibility_sm"]["day_xc"] == original
+
+
+# ---- conservatism presets -------------------------------------------------
+
+def test_conservatism_confident_relaxes_rule():
+    merged = merge_limits(get_default_limits(), {"conservatism": "confident"})
+    rule = merged["threat_stacking"]["rule"]
+    assert rule["1"] == "GO" and rule["2"] == "MITIGATE" and rule["3"] == "NO-GO"
+    # Confident weights everything equally.
+    assert merged["threat_stacking"]["weights"] == {}
+
+
+def test_conservatism_cautious_weights_serious_threats():
+    merged = merge_limits(get_default_limits(), {"conservatism": "cautious"})
+    weights = merged["threat_stacking"]["weights"]
+    assert weights.get("actual_imc") == 2
+    assert weights.get("convective_nearby") == 2
+    assert "night_operations" not in weights
+
+
+def test_conservatism_standard_is_default_rule():
+    base = get_default_limits()
+    merged = merge_limits(base, {"conservatism": "standard"})
+    assert merged["threat_stacking"]["rule"] == base["threat_stacking"]["rule"]
+
+
+def test_conservatism_unknown_ignored():
+    base = get_default_limits()
+    merged = merge_limits(base, {"conservatism": "yolo"})
+    # Unknown preset name is dropped → rule unchanged, no weights written.
+    assert merged["threat_stacking"]["rule"] == base["threat_stacking"]["rule"]
+    assert "weights" not in merged["threat_stacking"]

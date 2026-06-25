@@ -1,30 +1,44 @@
-# ✈️ Minima
+# Minima
 
 A go/no-go + best-window planner that gates every proposed flight against
 **your own personal minimums**. Defaults are tuned for a VFR pilot based at
-**CYFD (Brantford Municipal, ON)** in a Cessna 172-class aircraft, but the
-minimums are fully editable and travel with you as your flying evolves. It
-answers one question through the lens of a **Personal Flight Decision Card**:
+**CYFD (Brantford Municipal, ON)** in a Cessna 172-class aircraft, but your
+home base, minimums, standing factors and risk tolerance are all editable and
+travel with you as your flying evolves. It answers one question through the lens
+of a **Personal Flight Decision Card**:
 
 > **Am I good to fly — and when, over the next 24–48 h, is the best window to go?**
 
 ### Three ways to use it
-1. **Route** *(primary)* — enter **departure + destination** (autocomplete over
-   every Canadian aerodrome + US border fields). You get the decision-card
+1. **My Minimums** *(your profile, opens here)* — set your **home base** and your
+   personal wind / ceiling / visibility / crosswind limits (drag sliders), the
+   weather hazards that force a NO-GO, your **standing factors** (e.g. single-pilot
+   no-autopilot), and a **conservatism** preset. Everything is stored in your
+   browser, persists between sessions, and gates the Route and Discovery results.
+2. **Route** — enter **departure + destination** (autocomplete over every Canadian
+   aerodrome + US border fields; departure defaults to your base). You get the
    **GO / MITIGATE / NO-GO** verdict **now** for both ends, flight time + best
    cruise altitude (winds aloft), active NOTAMs/SIGMETs, and an **hour-by-hour
    24–48 h timeline** that highlights the best GO window(s).
-2. **Discovery** — "where can I go within X nm right now," ranked by the card.
-3. **My Minimums** — set your personal wind, ceiling, visibility, crosswind and
-   weather no-go limits. They are stored in your browser and gate the Route and
-   Discovery results. The built-in card is the default / reset target.
+3. **Discovery** — "where can I go within X nm of my base right now," ranked by the card.
 
-> **Personal minimums (v1 scope).** Editing your minimums drives the hard-limit
-> PASS/FAIL rows and the weather auto-NO-GO list. It does **not** yet change the
-> two-trigger *threat-stacking* thresholds (e.g. when winds count as "strong")
-> or the route-hazard scan — those still use the built-in defaults. So tightening
-> visibility flips the visibility row but not the threat-stack count. Wiring
-> those to the profile is a planned enhancement.
+### Two-trigger threat stacking (general-audience)
+The decision card stacks "major threats": some are derived automatically from the
+forecast (actual IMC, convective, icing, strong/gusty winds, turbulence/shear),
+night is set by the day/night toggle, **standing factors** come from your saved
+profile, and **unfamiliar / complex airspace** is a per-flight toggle (it's
+pilot-relative, so it works at any airport). A **conservatism preset** sets how
+readily a stack escalates the verdict:
+
+| Preset | Behaviour |
+|--------|-----------|
+| **Standard** *(default)* | One threat → mitigate, two → no-go (the original card). |
+| **Confident** | Tolerates one threat; two → mitigate, three → no-go. |
+| **Cautious** | A single *serious* weather threat (IMC / convective / icing) is disqualifying. |
+
+> **Still using built-in defaults:** the numeric thresholds that *derive* the
+> automatic weather threats (e.g. wind ≥ 15 kt counts as "strong") are not yet
+> separately editable, and the route-hazard scan uses the built-in hazard list.
 
 > ⚠️ **Decision-support only.** Forecasts are not observations. Always confirm
 > with an official NAV CANADA briefing before flight.

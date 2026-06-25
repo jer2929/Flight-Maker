@@ -141,7 +141,27 @@ def _validate_prefs(prefs: dict, base: dict) -> dict:
     if isinstance(flags, list):
         known = base["hard_limits"]["weather_flags"]
         clean["weather_flags"] = [f for f in known if f in flags]
+    cons = prefs.get("conservatism")
+    presets = base.get("conservatism_presets", {}).get("presets", {})
+    if isinstance(cons, str) and cons in presets:
+        clean["conservatism"] = cons
     return clean
+
+
+def _apply_conservatism(limits: dict, name: str) -> None:
+    """Write the named preset's count->verdict rule and per-threat weights into
+    ``limits["threat_stacking"]`` (mutates the passed deep copy)."""
+    cp = limits.get("conservatism_presets", {})
+    preset = cp.get("presets", {}).get(name)
+    if not preset:
+        return
+    ts = limits["threat_stacking"]
+    ts["rule"] = dict(preset["rule"])
+    serious_weight = preset.get("serious_weight", 1)
+    if serious_weight and serious_weight != 1:
+        ts["weights"] = {t: serious_weight for t in cp.get("serious_threats", [])}
+    else:
+        ts["weights"] = {}
 
 
 def merge_limits(base: dict, overrides: dict) -> dict:
@@ -154,6 +174,8 @@ def merge_limits(base: dict, overrides: dict) -> dict:
             hl[group].update(clean[group])
     if "weather_flags" in clean:
         hl["weather_flags"] = clean["weather_flags"]
+    if "conservatism" in clean:
+        _apply_conservatism(out, clean["conservatism"])
     return out
 
 

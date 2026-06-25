@@ -37,6 +37,7 @@ from app.services.evaluator import (
     threat_check_list,
     threat_result_label,
     threat_verdict,
+    threat_weight,
 )
 from app.services.geo import compass, flight_time_hr, initial_bearing_true, haversine_nm
 from app.services.runway import all_runway_components, best_runway, fill_headings, surface_is_hard
@@ -594,9 +595,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     all_checks = cond_checks + weather_checks
     present = derive_threats(route_ws, ap.is_complex_airspace(dep.ident) or ap.is_complex_airspace(dest.ident), manual_threats)
     route_threats = threat_check_list(present)
+    threat_count = threat_weight(present)
     failed = any((not c.passed) and c.applicable for c in all_checks)
     verdict_now = Verdict.NOGO if failed else Verdict.GO
-    verdict_now = _worse_verdict(verdict_now, threat_verdict(len(present)))
+    verdict_now = _worse_verdict(verdict_now, threat_verdict(threat_count))
     verdict_now = _worse_verdict(verdict_now, dep_a.verdict)
     verdict_now = _worse_verdict(verdict_now, dest_a.verdict)
 
@@ -632,7 +634,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         distance_nm=round(distance, 1), bearing_true=round(bearing), bearing_mag=bearing_mag,
         flight_time_hr=dest_a.flight_time_hr,
         verdict_now=verdict_now, reasons_now=reasons_now,
-        threat_result_label=threat_result_label(len(present)),
+        threat_result_label=threat_result_label(threat_count),
         limit_checks=all_checks, threat_checks=route_threats,
         altitude=alt, cruise_altitude_ft=cruise_alt,
         enroute_ceiling_ft=enroute_ceiling, enroute_visibility_sm=enroute_vis,
@@ -683,19 +685,24 @@ async def suggest(
     surface: str = "any", min_length_ft: float = 0.0, into_wind: bool = False,
     go_only: bool = False, max_time_min: float | None = None,
     max_crosswind: bool = False, min_width_ft: float = 0.0, sort: str = "verdict",
+    origin_ident: str | None = None,
 ) -> list[AirportAssessment]:
     settings = get_settings()
-    origin = ap.get_airport(settings.origin)
+    origin_ident = (origin_ident or settings.origin).upper()
+    origin = ap.get_airport(origin_ident)
+    if origin is None:  # unknown base — fall back to the configured home field
+        origin_ident = settings.origin
+        origin = ap.get_airport(origin_ident)
     if origin is None:
         return []
-    candidates = ap.airports_within(settings.origin, radius_nm)
+    candidates = ap.airports_within(origin_ident, radius_nm)
     candidates = [(a, d) for a, d in candidates
                   if _runways_pass_filters(a.ident, surface, min_length_ft, min_width_ft)]
 
     # Only ask CFPS about real idents (synthetic "CA-####" placeholders 4xx the
     # whole request). Combined with fault-isolated chunks, reporting fields get
     # their METAR/NOTAM and the rest fall back to the model.
-    cfps_sites = [s for s in [settings.origin] + [a.ident for a, _ in candidates]
+    cfps_sites = [s for s in [origin_ident] + [a.ident for a, _ in candidates]
                   if _CFPS_IDENT_RE.match(s)]
     cand_points = [(a.lat, a.lon) for a, _ in candidates]
     metars, tafs, notams, origin_fc, fcs, ens = await asyncio.gather(

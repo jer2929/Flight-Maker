@@ -150,8 +150,13 @@ def derive_threats(
     is_complex_airspace: bool,
     manual_threats: list[str] | None = None,
 ) -> set[str]:
-    """Derive present 'major threats' for two-trigger stacking."""
-    threats: set[str] = set(manual_threats or [])
+    """Derive present 'major threats' for two-trigger stacking.
+
+    Manual threats (standing profile factors + per-flight toggles) are accepted
+    only if they're known threat keys, so a malformed query string can't inflate
+    the stack."""
+    known = set(get_limits()["threat_stacking"]["major_threats"])
+    threats: set[str] = {t for t in (manual_threats or []) if t in known}
     if weather.wind_kt is not None and weather.wind_kt >= 15:
         threats.add("strong_or_gusty_winds")
     if weather.gust_kt is not None and weather.wind_kt is not None and (weather.gust_kt - weather.wind_kt) >= 8:
@@ -180,6 +185,14 @@ def threat_check_list(present: set[str]) -> list[ThreatCheck]:
     ]
 
 
+def threat_weight(present: set[str]) -> int:
+    """Weighted threat count for stacking. The active conservatism preset may
+    weight 'serious' threats above 1 (e.g. a single serious weather threat = 2,
+    i.e. an instant no-go under the cautious preset). Defaults to one each."""
+    weights = get_limits()["threat_stacking"].get("weights", {})
+    return sum(weights.get(t, 1) for t in present)
+
+
 def threat_verdict(threat_count: int) -> Verdict:
     rule = get_limits()["threat_stacking"]["rule"]
     return Verdict(rule[str(min(threat_count, 3))])
@@ -199,12 +212,13 @@ def decision(
     checks = conditions_checks(weather, best_runway, mode, ceiling_mode=ceiling_mode) + (extra_checks or [])
     present = derive_threats(weather, is_complex_airspace, manual_threats)
     tchecks = threat_check_list(present)
-    count = len(present)
+    weighted = threat_weight(present)
 
     failed = any((not c.passed) and c.applicable for c in checks)
     verdict = Verdict.NOGO if failed else Verdict.GO
-    verdict = _worse(verdict, threat_verdict(count))
-    return verdict, checks, tchecks, count
+    verdict = _worse(verdict, threat_verdict(weighted))
+    # Return the weighted count so the result label matches the verdict.
+    return verdict, checks, tchecks, weighted
 
 
 def evaluate(
