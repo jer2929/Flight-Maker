@@ -4,6 +4,97 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 let CONFIG = null;
 
+// ---- My Minimums: pilot fitness & external pressure item catalogue ----
+const PILOT_FITNESS_ITEMS = [
+  { id: "pf_illness",   label: "Illness or feeling unwell" },
+  { id: "pf_meds",      label: "Medication affecting alertness" },
+  { id: "pf_alcohol",   label: "Alcohol within 12 hours" },
+  { id: "pf_fatigue",   label: "Significant fatigue / poor sleep" },
+  { id: "pf_stress",    label: "High stress or distraction" },
+  { id: "pf_hydration", label: "Poor hydration / no food" },
+  { id: "pf_blood",     label: "Blood donation within 24 hours" },
+  { id: "pf_scuba",     label: "Scuba diving within 12 hours" },
+  { id: "pf_co",        label: "Carbon monoxide exposure" },
+  { id: "pf_injury",    label: "Physical injury / pain affecting controls" },
+  { id: "pf_emotional", label: "Emotional distress (grief, anger, shock)" },
+];
+const EXTERNAL_PRESSURE_ITEMS = [
+  { id: "ep_schedule",  label: "Schedule pressure" },
+  { id: "ep_peers",     label: "Other pilots flying (peer pressure)" },
+  { id: "ep_training",  label: "Training pressure / behind" },
+  { id: "ep_pax",       label: "Passengers waiting" },
+  { id: "ep_gethome",   label: "Get-home-itis (must return today)" },
+  { id: "ep_sunk",      label: "Sunk-cost pressure (already paid / committed)" },
+  { id: "ep_wishful",   label: "\"It will improve\" wishful thinking" },
+  { id: "ep_pride",     label: "Pride / reluctance to cancel" },
+];
+// Items ON by default — matches the original self-assessment exactly
+const MM_DEFAULTS = new Set([
+  "pf_illness","pf_meds","pf_alcohol","pf_fatigue","pf_stress","pf_hydration",
+  "ep_schedule","ep_peers","ep_training","ep_pax",
+]);
+
+function loadEnabledMM() {
+  try {
+    const s = localStorage.getItem("fm_minimums_v1");
+    if (s) return new Set(JSON.parse(s));
+  } catch (_) {}
+  return new Set(MM_DEFAULTS);
+}
+function saveEnabledMM(set) {
+  try { localStorage.setItem("fm_minimums_v1", JSON.stringify([...set])); } catch (_) {}
+}
+let enabledMM = loadEnabledMM();
+
+function renderMyMinimumsSettings() {
+  const body = $("#my-minimums-body");
+  if (!body) return;
+  const makeField = (items, legend) =>
+    `<fieldset><legend>${legend}</legend>${items.map(({ id, label }) =>
+      `<label><input type="checkbox" class="mm-toggle" value="${id}"${enabledMM.has(id) ? " checked" : ""} /> ${label}</label>`
+    ).join("")}</fieldset>`;
+  body.innerHTML =
+    makeField(PILOT_FITNESS_ITEMS, "Pilot fitness — included in self-assessment if checked") +
+    makeField(EXTERNAL_PRESSURE_ITEMS, "External pressures — included in self-assessment if checked");
+  body.querySelectorAll(".mm-toggle").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) enabledMM.add(cb.value); else enabledMM.delete(cb.value);
+      saveEnabledMM(enabledMM);
+      renderSelfAssessment("route-self-check");
+      renderSelfAssessment("discovery-self-check");
+    });
+  });
+}
+
+function renderSelfAssessment(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const activePF = PILOT_FITNESS_ITEMS.filter((i) => enabledMM.has(i.id));
+  const activeEP = EXTERNAL_PRESSURE_ITEMS.filter((i) => enabledMM.has(i.id));
+  if (!activePF.length && !activeEP.length) { container.innerHTML = ""; return; }
+  const bannerId = `gate-banner-${containerId}`;
+  const gates = (items) => items.map(({ label }) =>
+    `<label><input type="checkbox" class="gate" data-banner="${bannerId}" /> ${label}</label>`
+  ).join("");
+  container.innerHTML = `<div class="panel self-check-inline">
+    <h3>Self-assessment <span class="hint">(decision card)</span></h3>
+    <div class="checks-grid">
+      ${activePF.length ? `<fieldset><legend>Pilot fitness — do not fly if any apply</legend>${gates(activePF)}</fieldset>` : ""}
+      ${activeEP.length ? `<fieldset><legend>External pressure — pause &amp; reassess</legend>${gates(activeEP)}</fieldset>` : ""}
+    </div>
+    <div id="${bannerId}" class="banner hidden">
+      ⚠️ One or more personal factors checked — <strong>PAUSE and reassess.</strong>
+      Would you be comfortable explaining a GO decision to your instructor?
+    </div>
+  </div>`;
+  container.querySelectorAll(".gate").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const banner = document.getElementById(cb.dataset.banner);
+      if (banner) banner.classList.toggle("hidden", !container.querySelectorAll(".gate:checked").length);
+    });
+  });
+}
+
 async function init() {
   CONFIG = await fetch("/api/config").then((r) => r.json());
   $("#dep-line").textContent =
@@ -17,6 +108,7 @@ async function init() {
     .filter((t) => manual.includes(t))
     .map((t) => `<label><input type="checkbox" class="threat" value="${t}"> ${labelOf(t)}</label>`)
     .join("");
+  renderMyMinimumsSettings();
   wire();
 }
 
@@ -25,7 +117,6 @@ const labelOf = (s) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCas
 function wire() {
   $("#radius").addEventListener("input", (e) => ($("#radius-out").textContent = `${e.target.value} nm`));
   $("#f-time").addEventListener("input", (e) => ($("#f-time-out").textContent = +e.target.value ? `${e.target.value} min` : "Any"));
-  $$(".gate").forEach((c) => c.addEventListener("change", updateGate));
   $$(".seg-btn").forEach((b) => b.addEventListener("click", () => {
     $$(".seg-btn").forEach((x) => x.classList.toggle("active", x === b));
     const n = $$(".threat").find((c) => c.value === "night_operations");
@@ -39,7 +130,6 @@ function wire() {
 }
 
 const currentMode = () => ($$(".seg-btn").find((b) => b.classList.contains("active")) || {}).dataset?.mode || "day";
-function updateGate() { $("#gate-banner").classList.toggle("hidden", !$$(".gate").some((c) => c.checked)); }
 function switchTab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   $("#tab-route").classList.toggle("hidden", name !== "route");
@@ -85,7 +175,7 @@ async function runRoute() {
 }
 
 function clearRoute() {
-  ["route-verdict", "route-checklist", "route-summary", "route-endpoints", "route-windows", "route-timeline"]
+  ["route-verdict", "route-checklist", "route-summary", "route-endpoints", "route-self-check", "route-windows", "route-timeline"]
     .forEach((id) => ($("#" + id).innerHTML = ""));
 }
 
@@ -106,6 +196,7 @@ function renderRoute(r) {
 
   $("#route-summary").innerHTML += advisoriesBlock(r);
   $("#route-endpoints").innerHTML = endpointCard(r.departure, "Departure") + endpointCard(r.destination, "Destination");
+  renderSelfAssessment("route-self-check");
 
   if (r.best_windows.length) {
     $("#route-windows").innerHTML = `<div class="timeline-wrap"><h3>Best windows (next ${CONFIG.timeline_hours} h) — wind, ceiling &amp; visibility</h3>` +
@@ -289,6 +380,7 @@ async function runDiscovery() {
     const params = new URLSearchParams(p);
     const data = await fetch(`/api/suggest?${params}`).then((r) => r.json());
     $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
+    renderSelfAssessment("discovery-self-check");
   } catch (e) { $("#discovery-results").innerHTML = `<p class="empty">Error: ${e}</p>`; }
   finally { btn.disabled = false; btn.textContent = "Find flights now"; }
 }
