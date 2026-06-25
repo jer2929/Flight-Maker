@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Minima</title>
-  <link rel="stylesheet" href="/style.css?v=20260626" />
+  <link rel="stylesheet" href="/style.css?v=20260625" />
 </head>
 <body>
   <header>
@@ -26,33 +26,6 @@
     </h1>
   </header>
 
-  <!-- Personal self-assessment: gates the whole session -->
-  <section class="panel" id="self-check">
-    <h2>Self-assessment <span class="hint">(decision card)</span></h2>
-    <div class="checks-grid">
-      <fieldset>
-        <legend>Pilot fitness — do not fly if any apply</legend>
-        <label><input type="checkbox" class="gate" /> Illness or feeling unwell</label>
-        <label><input type="checkbox" class="gate" /> Medication affecting alertness</label>
-        <label><input type="checkbox" class="gate" /> Alcohol within 12 hours</label>
-        <label><input type="checkbox" class="gate" /> Significant fatigue / poor sleep</label>
-        <label><input type="checkbox" class="gate" /> High stress or distraction</label>
-        <label><input type="checkbox" class="gate" /> Poor hydration / no food</label>
-      </fieldset>
-      <fieldset>
-        <legend>External pressure — pause &amp; reassess</legend>
-        <label><input type="checkbox" class="gate" /> Schedule pressure</label>
-        <label><input type="checkbox" class="gate" /> Other pilots flying</label>
-        <label><input type="checkbox" class="gate" /> Training pressure / behind</label>
-        <label><input type="checkbox" class="gate" /> Passengers waiting</label>
-      </fieldset>
-    </div>
-    <div id="gate-banner" class="banner hidden">
-      ⚠️ One or more personal factors checked — <strong>PAUSE and reassess.</strong>
-      Would you be comfortable explaining a GO decision to your instructor?
-    </div>
-  </section>
-
   <section class="panel">
     <div class="tabs">
       <button class="tab active" data-tab="settings">My Minimums</button>
@@ -65,6 +38,12 @@
         <div class="seg" id="mode-seg">
           <button type="button" class="seg-btn active" data-mode="day">Day flight</button>
           <button type="button" class="seg-btn" data-mode="night">Night flight</button>
+        </div>
+      </div>
+      <div class="control">Flight rules
+        <div class="seg" id="fr-seg">
+          <button type="button" class="seg-btn fr-btn active" data-rules="vfr">VFR</button>
+          <button type="button" class="seg-btn fr-btn" data-rules="ifr">IFR</button>
         </div>
       </div>
       <details class="control threats">
@@ -92,8 +71,10 @@
 
     <div id="route-verdict"></div>
     <div id="route-checklist"></div>
+    <div id="route-mitigation"></div>
     <div id="route-summary"></div>
     <div id="route-endpoints" class="results two-col"></div>
+    <div id="route-self-check"></div>
     <div id="route-windows"></div>
     <div id="route-timeline"></div>
   </section>
@@ -158,8 +139,10 @@
       <button id="run-discovery" class="primary">Find flights now</button>
     </div>
     <div id="discovery-results" class="results"></div>
+    <div id="discovery-self-check"></div>
   </section>
 
+  <!-- My Minimums / Settings tab -->
   <section id="tab-settings" class="tab-pane">
     <div class="panel">
       <h2 class="set-title">My minimums &amp; profile</h2>
@@ -182,13 +165,28 @@
         </fieldset>
 
         <fieldset class="set-group">
-          <legend>Ceiling (ft AGL) — minimum</legend>
+          <legend>VFR ceiling (ft AGL) — minimum</legend>
           <div id="grp-ceiling" class="controls slider-grid"></div>
         </fieldset>
 
         <fieldset class="set-group">
-          <legend>Visibility (SM) — minimum</legend>
+          <legend>VFR visibility (SM) — minimum</legend>
           <div id="grp-vis" class="controls slider-grid"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>IFR ceiling (ft AGL) — personal minimums above published</legend>
+          <div id="grp-ifr-ceiling" class="controls slider-grid"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>IFR visibility (SM) — personal minimums</legend>
+          <div id="grp-ifr-vis" class="controls slider-grid"></div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend>Recent experience — minimum hours in last 30 days</legend>
+          <div id="grp-recency" class="controls slider-grid"></div>
         </fieldset>
 
         <fieldset class="set-group">
@@ -216,6 +214,13 @@
         </div>
       </form>
     </div>
+
+    <!-- Pre-flight self-assessment items configurator -->
+    <div class="panel mm-panel">
+      <h2 class="set-title">Pre-flight self-assessment items</h2>
+      <p class="set-intro">Choose which fitness and external-pressure items appear in your pre-flight check below route and discovery results.</p>
+      <div class="checks-grid" id="my-minimums-body"></div>
+    </div>
   </section>
 
   <footer>
@@ -226,6 +231,6 @@
        Forecasts are not observations — <strong>always confirm with an official NAV CANADA briefing before flight.</strong></p>
   </footer>
 
-  <script src="/app.js?v=20260626"></script>
+  <script src="/app.js?v=20260625"></script>
 </body>
 </html>
