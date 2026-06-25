@@ -64,6 +64,7 @@ async def config():
         "conservatism_presets": presets,
         "default_conservatism": cp.get("default", "standard"),
         "default_limits": defaults["hard_limits"],
+        "default_ifr_minimums": defaults.get("ifr_minimums", {}),
         "weather_flag_options": defaults["hard_limits"]["weather_flags"],
     }
 
@@ -79,13 +80,14 @@ async def route(
     dest: str = Query(...),
     mode: str = Query(default="day", pattern="^(day|night)$"),
     threats: str = Query(default=""),
+    flight_rules: str = Query(default="vfr", pattern="^(vfr|ifr)$"),
     prefs: str = Query(default=None),
 ):
     s = get_settings()
     dep = dep or s.origin
     manual = [t for t in threats.split(",") if t]
     with limits_override(_parse_prefs(prefs)):
-        result = await orchestrator.assess_route(dep, dest, mode, manual)
+        result = await orchestrator.assess_route(dep, dest, mode, manual, flight_rules=flight_rules)
     if result is None:
         return JSONResponse({"error": "unknown departure or destination"}, status_code=404)
     return JSONResponse(result.model_dump())
@@ -104,6 +106,7 @@ async def suggest(
     max_crosswind: bool = Query(default=False),
     min_width_ft: float = Query(default=0, ge=0, le=500),
     sort: str = Query(default="verdict", pattern="^(verdict|distance|time|crosswind|tailwind)$"),
+    flight_rules: str = Query(default="vfr", pattern="^(vfr|ifr)$"),
     base: str = Query(default=None),
     prefs: str = Query(default=None),
 ):
@@ -114,7 +117,9 @@ async def suggest(
         results = await orchestrator.suggest(
             radius, mode, manual, surface, min_length_ft, into_wind,
             go_only=go_only, max_time_min=max_time_min, max_crosswind=max_crosswind,
-            min_width_ft=min_width_ft, sort=sort, origin_ident=base)
+            min_width_ft=min_width_ft, sort=sort, flight_rules=flight_rules,
+            origin_ident=base or None,
+        )
     return JSONResponse([r.model_dump() for r in results])
 
 

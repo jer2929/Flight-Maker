@@ -6,7 +6,7 @@ let CONFIG = null;
 
 // ---------- Pilot profile (per-browser, persists across sessions) ----------
 const LS_KEY = "minima.profile.v1";
-const LEGACY_MIN_KEY = "minima.minimums.v1";   // PR #13 stored just the minimums here
+const LEGACY_MIN_KEY = "minima.minimums.v1";
 // PROFILE: { base, minimums, standing[], conservatism }. minimums===null means
 // "using built-in defaults". Sent to the backend via prefs / base / threats.
 let PROFILE = { base: null, minimums: null, standing: [], conservatism: null };
@@ -14,44 +14,82 @@ let PROFILE = { base: null, minimums: null, standing: [], conservatism: null };
 // Editable numeric leaves: {group, key, id, label, unit, grp(container), min, max, step}.
 // group+key must match data/limits.yaml exactly so the backend merge accepts them.
 const MIN_FIELDS = [
-  { group: "wind", key: "sustained_max_kt", id: "set-wind-sustained", label: "Sustained wind", unit: "kt", grp: "grp-wind", min: 1, max: 60, step: 1 },
-  { group: "wind", key: "gust_spread_max_kt", id: "set-wind-gust", label: "Gust spread", unit: "kt", grp: "grp-wind", min: 1, max: 40, step: 1 },
-  { group: "wind", key: "crosswind_max_kt", id: "set-wind-xwind", label: "Crosswind", unit: "kt", grp: "grp-wind", min: 1, max: 40, step: 1 },
-  { group: "ceiling_agl_ft", key: "day_circuit", id: "set-ceil-day-circuit", label: "Day circuit", unit: "ft", grp: "grp-ceiling", min: 100, max: 15000, step: 100 },
-  { group: "ceiling_agl_ft", key: "day_xc", id: "set-ceil-day-xc", label: "Day cross-country", unit: "ft", grp: "grp-ceiling", min: 100, max: 15000, step: 100 },
-  { group: "ceiling_agl_ft", key: "night_circuit", id: "set-ceil-night-circuit", label: "Night circuit", unit: "ft", grp: "grp-ceiling", min: 100, max: 15000, step: 100 },
-  { group: "ceiling_agl_ft", key: "night_xc_cloud_base", id: "set-ceil-night-xc", label: "Night XC cloud base", unit: "ft", grp: "grp-ceiling", min: 100, max: 15000, step: 100 },
-  { group: "visibility_sm", key: "day_circuit", id: "set-vis-day-circuit", label: "Day circuit", unit: "SM", grp: "grp-vis", min: 0, max: 20, step: 1 },
-  { group: "visibility_sm", key: "day_xc", id: "set-vis-day-xc", label: "Day cross-country", unit: "SM", grp: "grp-vis", min: 0, max: 20, step: 1 },
-  { group: "visibility_sm", key: "night_circuit", id: "set-vis-night-circuit", label: "Night circuit", unit: "SM", grp: "grp-vis", min: 0, max: 20, step: 1 },
-  { group: "visibility_sm", key: "night_xc", id: "set-vis-night-xc", label: "Night cross-country", unit: "SM", grp: "grp-vis", min: 0, max: 20, step: 1 },
+  { group: "wind", key: "sustained_max_kt",    id: "set-wind-sustained",    label: "Sustained wind",     unit: "kt", grp: "grp-wind",        min: 1,   max: 60,    step: 1   },
+  { group: "wind", key: "gust_spread_max_kt",  id: "set-wind-gust",         label: "Gust spread",        unit: "kt", grp: "grp-wind",        min: 1,   max: 40,    step: 1   },
+  { group: "wind", key: "crosswind_max_kt",    id: "set-wind-xwind",        label: "Crosswind",          unit: "kt", grp: "grp-wind",        min: 1,   max: 40,    step: 1   },
+  { group: "ceiling_agl_ft", key: "day_circuit",          id: "set-ceil-day-circuit",  label: "Day circuit",        unit: "ft", grp: "grp-ceiling",     min: 100, max: 15000, step: 100 },
+  { group: "ceiling_agl_ft", key: "day_xc",               id: "set-ceil-day-xc",       label: "Day cross-country",  unit: "ft", grp: "grp-ceiling",     min: 100, max: 15000, step: 100 },
+  { group: "ceiling_agl_ft", key: "night_circuit",        id: "set-ceil-night-circuit",label: "Night circuit",      unit: "ft", grp: "grp-ceiling",     min: 100, max: 15000, step: 100 },
+  { group: "ceiling_agl_ft", key: "night_xc_cloud_base",  id: "set-ceil-night-xc",     label: "Night XC cloud base",unit: "ft", grp: "grp-ceiling",     min: 100, max: 15000, step: 100 },
+  { group: "visibility_sm",  key: "day_circuit",          id: "set-vis-day-circuit",   label: "Day circuit",        unit: "SM", grp: "grp-vis",         min: 0,   max: 20,    step: 1   },
+  { group: "visibility_sm",  key: "day_xc",               id: "set-vis-day-xc",        label: "Day cross-country",  unit: "SM", grp: "grp-vis",         min: 0,   max: 20,    step: 1   },
+  { group: "visibility_sm",  key: "night_circuit",        id: "set-vis-night-circuit", label: "Night circuit",      unit: "SM", grp: "grp-vis",         min: 0,   max: 20,    step: 1   },
+  { group: "visibility_sm",  key: "night_xc",             id: "set-vis-night-xc",      label: "Night cross-country",unit: "SM", grp: "grp-vis",         min: 0,   max: 20,    step: 1   },
+  { group: "ifr_ceiling_agl_ft", key: "day_xc",   id: "set-ifr-ceil-day",  label: "IFR day XC",   unit: "ft", grp: "grp-ifr-ceiling", min: 100, max: 15000, step: 100 },
+  { group: "ifr_ceiling_agl_ft", key: "night_xc", id: "set-ifr-ceil-night",label: "IFR night XC", unit: "ft", grp: "grp-ifr-ceiling", min: 100, max: 15000, step: 100 },
+  { group: "ifr_visibility_sm",  key: "day_xc",   id: "set-ifr-vis-day",   label: "IFR day XC",   unit: "SM", grp: "grp-ifr-vis",     min: 0,   max: 20,    step: 1   },
+  { group: "ifr_visibility_sm",  key: "night_xc", id: "set-ifr-vis-night", label: "IFR night XC", unit: "SM", grp: "grp-ifr-vis",     min: 0,   max: 20,    step: 1   },
 ];
 
-async function init() {
-  CONFIG = await fetch("/api/config").then((r) => r.json());
-  $("#radius").value = CONFIG.default_radius_nm;
-  $("#radius").max = CONFIG.max_radius_nm;
+// ---- My Minimums: pilot fitness & external pressure item catalogue ----
+const PILOT_FITNESS_ITEMS = [
+  { id: "pf_illness",   label: "Illness or feeling unwell" },
+  { id: "pf_meds",      label: "Medication affecting alertness" },
+  { id: "pf_alcohol",   label: "Alcohol within 12 hours" },
+  { id: "pf_fatigue",   label: "Significant fatigue / poor sleep" },
+  { id: "pf_stress",    label: "High stress or emotional distraction" },
+  { id: "pf_hydration", label: "Poor hydration or no food in several hours" },
+  { id: "pf_blood",     label: "Blood donation within 24 hours" },
+  { id: "pf_scuba",     label: "Scuba diving within 12 hours" },
+  { id: "pf_co",        label: "Carbon monoxide exposure" },
+  { id: "pf_injury",    label: "Physical injury / pain affecting controls" },
+  { id: "pf_emotional", label: "Emotional distress (grief, anger, shock)" },
+];
+const EXTERNAL_PRESSURE_ITEMS = [
+  { id: "ep_schedule",  label: "Schedule pressure" },
+  { id: "ep_peers",     label: "Other pilots flying (peer pressure)" },
+  { id: "ep_training",  label: "Training pressure or feeling behind" },
+  { id: "ep_pax",       label: "Passengers waiting" },
+  { id: "ep_gethome",   label: "Get-home-itis (must return today)" },
+  { id: "ep_sunk",      label: "Sunk-cost pressure (already paid / committed)" },
+  { id: "ep_wishful",   label: '"It will improve" wishful thinking' },
+  { id: "ep_pride",     label: "Pride / reluctance to cancel" },
+];
+// ON by default — matches the original card exactly
+const MM_DEFAULTS = new Set([
+  "pf_illness","pf_meds","pf_alcohol","pf_fatigue","pf_stress","pf_hydration",
+  "ep_schedule","ep_peers","ep_training","ep_pax",
+]);
 
-  loadProfile();
-  buildPerFlightThreats();
-  buildStandingFactors();
-  buildConservatism();
-  renderMinSliders();
-  buildWxFlags();
-  fillProfileForm();
-  renderMinimums();
-  $("#dep").value = baseIdent();          // Route departs from the saved base
-  wire();
-}
+// ---- Threat mitigation reference (straight from the decision card) ----
+const THREAT_MITIGATIONS = {
+  night_operations: {
+    label: "Night operations",
+    items: ["Familiar airport and runway", "Stable VMC forecast", "Light winds expected", "Simple direct route", "Extra fuel margin"],
+  },
+  actual_imc: {
+    label: "IMC / IFR",
+    items: ["Stable weather system (not frontal)", "Precision approaches preferred", "Higher personal minimums", "Autopilot if available"],
+  },
+  strong_or_gusty_winds: {
+    label: "Gusty winds",
+    items: ["Favour runway aligned into wind", "Longer runway preferred", "Add half gust factor on final"],
+  },
+  moderate_turbulence_or_shear: {
+    label: "Turbulence / wind shear",
+    items: ["Expect airspeed changes — stay alert", "Avoid terrain rotor areas", "Slow toward manoeuvring speed"],
+  },
+  icing_potential: {
+    label: "Icing risk",
+    items: ["Know the freezing level", "Identify warm and cold layers", "Exit immediately — usually descend"],
+  },
+};
 
-// The pilot's home base, falling back to the server default.
-const baseIdent = () => PROFILE.base || CONFIG.departure;
-
+// ---------- Storage ----------
 function loadProfile() {
   let p = null;
   try { p = JSON.parse(localStorage.getItem(LS_KEY) || "null"); } catch { p = null; }
   if (!p) {
-    // Migrate the PR #13 minimums-only store, if present.
     let legacy = null;
     try { legacy = JSON.parse(localStorage.getItem(LEGACY_MIN_KEY) || "null"); } catch { legacy = null; }
     if (legacy) p = { minimums: legacy };
@@ -65,7 +103,6 @@ function loadProfile() {
 }
 
 function saveProfile() {
-  // Persist only what differs from default to keep the store minimal.
   const out = {};
   if (PROFILE.base) out.base = PROFILE.base;
   if (PROFILE.minimums) out.minimums = PROFILE.minimums;
@@ -76,27 +113,54 @@ function saveProfile() {
   localStorage.removeItem(LEGACY_MIN_KEY);
 }
 
-// Effective limits = defaults with the custom minimums merged over them.
-function effectiveLimits() {
-  const d = CONFIG.default_limits;
-  const m = PROFILE.minimums || {};
-  return {
-    wind: { ...d.wind, ...(m.wind || {}) },
-    ceiling_agl_ft: { ...d.ceiling_agl_ft, ...(m.ceiling_agl_ft || {}) },
-    visibility_sm: { ...d.visibility_sm, ...(m.visibility_sm || {}) },
-    weather_flags: m.weather_flags || d.weather_flags,
-  };
+function loadEnabledMM() {
+  try { const s = localStorage.getItem("fm_minimums_v1"); if (s) return new Set(JSON.parse(s)); } catch (_) {}
+  return new Set(MM_DEFAULTS);
+}
+function saveEnabledMM(set) {
+  try { localStorage.setItem("fm_minimums_v1", JSON.stringify([...set])); } catch (_) {}
+}
+let enabledMM = loadEnabledMM();
+
+function loadRecencyMin() {
+  try { const v = localStorage.getItem("fm_recency_min"); if (v !== null) return +v; } catch (_) {}
+  return 5;
+}
+function saveRecencyMin(v) {
+  try { localStorage.setItem("fm_recency_min", String(v)); } catch (_) {}
 }
 
+// ---------- Init ----------
+async function init() {
+  CONFIG = await fetch("/api/config").then((r) => r.json());
+  $("#radius").value = CONFIG.default_radius_nm;
+  $("#radius").max = CONFIG.max_radius_nm;
+
+  loadProfile();
+  renderExtraThreats();
+  buildStandingFactors();
+  buildConservatism();
+  renderMinSliders();
+  renderRecencySlider();
+  buildWxFlags();
+  fillProfileForm();
+  renderMinimums();
+  renderMyMinimumsSettings();
+  $("#dep").value = baseIdent();
+  wire();
+}
+
+const baseIdent = () => PROFILE.base || CONFIG.departure;
 const labelOf = (s) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
+// ---------- Wire ----------
 function wire() {
   $("#radius").addEventListener("input", (e) => ($("#radius-out").textContent = `${e.target.value} nm`));
   $("#f-time").addEventListener("input", (e) => ($("#f-time-out").textContent = +e.target.value ? `${e.target.value} min` : "Any"));
-  $$(".gate").forEach((c) => c.addEventListener("change", updateGate));
-  // Day/night just sets the mode; threatsParam() adds night_operations for night.
+  // Scope each seg-btn toggle to its own .seg group; re-render extra threats on IFR/VFR change.
   $$(".seg-btn").forEach((b) => b.addEventListener("click", () => {
-    $$(".seg-btn").forEach((x) => x.classList.toggle("active", x === b));
+    b.closest(".seg").querySelectorAll(".seg-btn").forEach((x) => x.classList.toggle("active", x === b));
+    if (b.dataset.rules !== undefined) renderExtraThreats();
   }));
   $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
   $("#run-route").addEventListener("click", runRoute);
@@ -108,8 +172,9 @@ function wire() {
   autocomplete("set-base", "base-list");
 }
 
-const currentMode = () => ($$(".seg-btn").find((b) => b.classList.contains("active")) || {}).dataset?.mode || "day";
-function updateGate() { $("#gate-banner").classList.toggle("hidden", !$$(".gate").some((c) => c.checked)); }
+const currentMode = () => ($$(".seg-btn[data-mode]").find((b) => b.classList.contains("active")) || {}).dataset?.mode || "day";
+const currentFlightRules = () => ($$(".seg-btn[data-rules]").find((b) => b.classList.contains("active")) || {}).dataset?.rules || "vfr";
+
 function switchTab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   $("#tab-route").classList.toggle("hidden", name !== "route");
@@ -129,6 +194,21 @@ function prefsParam() {
   const p = { ...(PROFILE.minimums || {}) };
   if (PROFILE.conservatism && PROFILE.conservatism !== CONFIG.default_conservatism) p.conservatism = PROFILE.conservatism;
   return Object.keys(p).length ? { prefs: JSON.stringify(p) } : {};
+}
+
+// Effective limits = defaults with the custom minimums merged over them.
+function effectiveLimits() {
+  const d = CONFIG.default_limits;
+  const difr = CONFIG.default_ifr_minimums || {};
+  const m = PROFILE.minimums || {};
+  return {
+    wind:             { ...d.wind,             ...(m.wind             || {}) },
+    ceiling_agl_ft:  { ...d.ceiling_agl_ft,   ...(m.ceiling_agl_ft  || {}) },
+    visibility_sm:   { ...d.visibility_sm,     ...(m.visibility_sm   || {}) },
+    ifr_ceiling_agl_ft: { ...(difr.ceiling_agl_ft || {}), ...(m.ifr_ceiling_agl_ft || {}) },
+    ifr_visibility_sm:  { ...(difr.visibility_sm   || {}), ...(m.ifr_visibility_sm  || {}) },
+    weather_flags:   m.weather_flags || d.weather_flags,
+  };
 }
 
 // ---------- Autocomplete ----------
@@ -159,7 +239,7 @@ async function runRoute() {
   const btn = $("#run-route"); btn.disabled = true; btn.textContent = "Pulling data…";
   clearRoute();
   try {
-    const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam(), ...prefsParam() });
+    const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam() });
     const res = await fetch(`/api/route?${params}`);
     if (!res.ok) { $("#route-verdict").innerHTML = `<div class="empty">Unknown departure or destination.</div>`; return; }
     renderRoute(await res.json());
@@ -169,14 +249,16 @@ async function runRoute() {
 }
 
 function clearRoute() {
-  ["route-verdict", "route-checklist", "route-summary", "route-endpoints", "route-windows", "route-timeline"]
+  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-endpoints", "route-self-check", "route-windows", "route-timeline"]
     .forEach((id) => ($("#" + id).innerHTML = ""));
 }
 
 function renderRoute(r) {
   const v = r.verdict_now;
-  $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.departure.airport.ident} → ${r.destination.airport.ident}: ${v} now</div>`;
+  const frLabel = currentFlightRules() === "ifr" ? " · IFR" : " · VFR";
+  $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.departure.airport.ident} → ${r.destination.airport.ident}: ${v} now${frLabel}</div>`;
   $("#route-checklist").innerHTML = checklist(r);
+  $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
 
   const alt = r.altitude;
   $("#route-summary").innerHTML = `<div class="panel meta">
@@ -190,6 +272,7 @@ function renderRoute(r) {
 
   $("#route-summary").innerHTML += advisoriesBlock(r);
   $("#route-endpoints").innerHTML = endpointCard(r.departure, "Departure") + endpointCard(r.destination, "Destination");
+  renderSelfAssessment("route-self-check");
 
   if (r.best_windows.length) {
     $("#route-windows").innerHTML = `<div class="timeline-wrap"><h3>Best windows (next ${CONFIG.timeline_hours} h) — wind, ceiling &amp; visibility</h3>` +
@@ -290,7 +373,6 @@ function metarHistoryList(h) {
 function runwaysBlock(a) {
   const comps = a.runway_components || [];
   if (!comps.length) return `<div class="rwy-na">🛬 Runway data unavailable</div>`;
-  // Only the ends usable into wind — you never land with a tailwind component.
   const usable = comps.filter((c) => c.tailwind_kt <= 0).sort((x, y) => y.headwind_kt - x.headwind_kt);
   if (!usable.length) return "";
   const rows = usable.map((c) =>
@@ -347,7 +429,6 @@ function renderTimeline(timeline, windows) {
   html += `</div><div id="tl-detail" class="tl-detail" hidden></div>`;
   const root = $("#route-timeline");
   root.innerHTML = html;
-  // Tap a cell (mobile) to show its details — mirrors the desktop hover tooltip.
   const panel = root.querySelector("#tl-detail");
   root.querySelectorAll(".tl-cell").forEach((cell) => {
     cell.addEventListener("click", () => {
@@ -367,6 +448,7 @@ async function runDiscovery() {
   try {
     const p = {
       radius: $("#radius").value, mode: currentMode(), threats: threatsParam(), base: baseIdent(),
+      flight_rules: currentFlightRules(),
       surface: $("#f-surface").value, min_length_ft: $("#f-length").value, into_wind: $("#f-into-wind").checked,
       min_width_ft: $("#f-width").value, sort: $("#f-sort").value,
       max_crosswind: $("#f-xwind").checked, go_only: $("#f-go").checked,
@@ -377,6 +459,7 @@ async function runDiscovery() {
     const params = new URLSearchParams(p);
     const data = await fetch(`/api/suggest?${params}`).then((r) => r.json());
     $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
+    renderSelfAssessment("discovery-self-check");
   } catch (e) { $("#discovery-results").innerHTML = `<p class="empty">Error: ${e}</p>`; }
   finally { btn.disabled = false; btn.textContent = "Find flights now"; }
 }
@@ -421,11 +504,15 @@ function buildWxFlags() {
     .join("");
 }
 
-// Per-flight threat toggles (pilot-relative, e.g. unfamiliar/complex airspace).
-function buildPerFlightThreats() {
-  $("#threats-list").innerHTML = threatsOfKind("per_flight")
-    .map((t) => `<label><input type="checkbox" class="threat" value="${t.key}"> ${t.label}</label>`)
-    .join("") || `<span class="set-hint">None for this flight.</span>`;
+// Per-flight extra threats: terrain_critical always; single_pilot_ifr_no_autopilot only when IFR.
+function renderExtraThreats() {
+  const ifr = currentFlightRules() === "ifr";
+  const items = ["terrain_critical"];
+  if (ifr) items.push("single_pilot_ifr_no_autopilot");
+  const wasChecked = new Set($$(".threat").filter((c) => c.checked).map((c) => c.value));
+  $("#threats-list").innerHTML = items
+    .map((t) => `<label><input type="checkbox" class="threat" value="${t}"${wasChecked.has(t) ? " checked" : ""}> ${threatLabel(t)}</label>`)
+    .join("");
 }
 
 // Standing factors saved in the profile, applied to every flight.
@@ -447,17 +534,38 @@ function renderMinSliders() {
   const byGrp = {};
   for (const f of MIN_FIELDS) (byGrp[f.grp] ||= []).push(f);
   for (const [grp, fields] of Object.entries(byGrp)) {
-    $("#" + grp).innerHTML = fields.map((f) => `
+    const el = $("#" + grp);
+    if (!el) continue;
+    el.innerHTML = fields.map((f) => `
       <div class="sld">
         <span class="sld-label">${f.label}</span>
         <output class="sld-val" id="${f.id}-out"></output>
         <input type="range" id="${f.id}" min="${f.min}" max="${f.max}" step="${f.step}" />
       </div>`).join("");
   }
-  // Live value as you drag.
   for (const f of MIN_FIELDS) {
-    $("#" + f.id).addEventListener("input", (e) => ($("#" + f.id + "-out").textContent = `${e.target.value} ${f.unit}`));
+    const el = $("#" + f.id);
+    if (el) el.addEventListener("input", (e) => ($("#" + f.id + "-out").textContent = `${e.target.value} ${f.unit}`));
   }
+}
+
+// Recent experience slider in the settings form (local only — not sent to backend).
+function renderRecencySlider() {
+  const container = $("#grp-recency");
+  if (!container) return;
+  const v = loadRecencyMin();
+  container.innerHTML = `<div class="sld">
+    <span class="sld-label">Min hours / 30 days</span>
+    <output class="sld-val" id="set-recency-out">${v} hr</output>
+    <input type="range" id="set-recency" min="1" max="20" step="1" value="${v}" />
+  </div>`;
+  document.getElementById("set-recency").addEventListener("input", (e) => {
+    const val = +e.target.value;
+    document.getElementById("set-recency-out").textContent = `${val} hr`;
+    saveRecencyMin(val);
+    renderSelfAssessment("route-self-check");
+    renderSelfAssessment("discovery-self-check");
+  });
 }
 
 // Populate every control from the effective profile (defaults + custom).
@@ -465,8 +573,10 @@ function fillProfileForm() {
   $("#set-base").value = baseIdent();
   const eff = effectiveLimits();
   for (const f of MIN_FIELDS) {
-    $("#" + f.id).value = eff[f.group][f.key];
-    $("#" + f.id + "-out").textContent = `${eff[f.group][f.key]} ${f.unit}`;
+    const grp = eff[f.group];
+    if (!grp || grp[f.key] === undefined) continue;
+    const el = $("#" + f.id);
+    if (el) { el.value = grp[f.key]; ($("#" + f.id + "-out") || {}).textContent = `${grp[f.key]} ${f.unit}`; }
   }
   const active = new Set(eff.weather_flags);
   $$(".wxflag").forEach((c) => (c.checked = active.has(c.value)));
@@ -474,14 +584,19 @@ function fillProfileForm() {
   $$(".standing").forEach((c) => (c.checked = standing.has(c.value)));
 }
 
-// Read every control into PROFILE. Only leaves differing from default are kept,
-// so the store stays minimal and "reset" is implicit.
 function readProfileForm() {
   const d = CONFIG.default_limits;
+  const difr = CONFIG.default_ifr_minimums || {};
   const mins = {};
   for (const f of MIN_FIELDS) {
-    const v = parseFloat($("#" + f.id).value);
-    if (!Number.isFinite(v) || v === d[f.group][f.key]) continue;
+    const el = $("#" + f.id);
+    if (!el) continue;
+    const v = parseFloat(el.value);
+    if (!Number.isFinite(v)) continue;
+    const grpDefault = f.group.startsWith("ifr_")
+      ? (f.group === "ifr_ceiling_agl_ft" ? (difr.ceiling_agl_ft || {})[f.key] : (difr.visibility_sm || {})[f.key])
+      : (d[f.group] || {})[f.key];
+    if (grpDefault === undefined || v === grpDefault) continue;
     (mins[f.group] ||= {})[f.key] = v;
   }
   const checked = $$(".wxflag").filter((c) => c.checked).map((c) => c.value);
@@ -513,6 +628,7 @@ function resetMinimums() {
   buildConservatism();
   fillProfileForm();
   renderMinimums();
+  renderRecencySlider();
   $("#dep").value = baseIdent();
   flashStatus("Reset to default profile.");
 }
@@ -536,7 +652,12 @@ function renderMinimums() {
       <span class="lim">${diff ? `default ${def}${unit ? " " + unit : ""}` : "default"}</span>
     </div>`;
   const baseRow = row("Home base", baseIdent(), CONFIG.departure, "", baseIdent() !== CONFIG.departure);
-  const minRows = MIN_FIELDS.map((f) => row(`${f.label} (${f.unit})`, eff[f.group][f.key], d[f.group][f.key], f.unit, eff[f.group][f.key] !== d[f.group][f.key])).join("");
+  const vfrFields = MIN_FIELDS.filter((f) => !f.group.startsWith("ifr_"));
+  const minRows = vfrFields.map((f) => {
+    const cur = (eff[f.group] || {})[f.key];
+    const def = (d[f.group] || {})[f.key];
+    return cur !== undefined ? row(`${f.label} (${f.unit})`, cur, def, f.unit, cur !== def) : "";
+  }).join("");
   const off = d.weather_flags.filter((f) => !eff.weather_flags.includes(f));
   const flagsRow = row("Weather auto NO-GO", `${eff.weather_flags.length} of ${d.weather_flags.length} active`,
     off.length ? "removed: " + off.map(wxLabel).join(", ") : "all", "", off.length > 0);
@@ -551,6 +672,75 @@ function renderMinimums() {
       : "Using the built-in default profile."}</div>${baseRow}${minRows}${flagsRow}${standRow}${consRow}`;
 }
 
+// Self-assessment configurator (fitness/pressure items and recency, stored locally).
+function renderMyMinimumsSettings() {
+  const body = $("#my-minimums-body");
+  if (!body) return;
+  const makeField = (items, legend) =>
+    `<fieldset><legend>${legend}</legend>${items.map(({ id, label }) =>
+      `<label><input type="checkbox" class="mm-toggle" value="${id}"${enabledMM.has(id) ? " checked" : ""} /> ${label}</label>`
+    ).join("")}</fieldset>`;
+  body.innerHTML =
+    makeField(PILOT_FITNESS_ITEMS, "Pilot fitness — included in self-assessment if checked") +
+    makeField(EXTERNAL_PRESSURE_ITEMS, "External pressures — included in self-assessment if checked");
+  body.querySelectorAll(".mm-toggle").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) enabledMM.add(cb.value); else enabledMM.delete(cb.value);
+      saveEnabledMM(enabledMM);
+      renderSelfAssessment("route-self-check");
+      renderSelfAssessment("discovery-self-check");
+    });
+  });
+}
+
+// Render a self-assessment panel (fitness + pressure + recency) below results.
+function renderSelfAssessment(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const activePF = PILOT_FITNESS_ITEMS.filter((i) => enabledMM.has(i.id));
+  const activeEP = EXTERNAL_PRESSURE_ITEMS.filter((i) => enabledMM.has(i.id));
+  const recMin = loadRecencyMin();
+  if (!activePF.length && !activeEP.length) { container.innerHTML = ""; return; }
+  const bannerId = `gate-banner-${containerId}`;
+  const gates = (items) => items.map(({ label }) =>
+    `<label><input type="checkbox" class="gate" data-banner="${bannerId}" /> ${label}</label>`
+  ).join("");
+  const recencyGate = `<label><input type="checkbox" class="gate" data-banner="${bannerId}" /> Fewer than ${recMin} hours flown in last 30 days</label>`;
+  container.innerHTML = `<div class="panel self-check-inline">
+    <h3>Self-assessment <span class="hint">(decision card)</span></h3>
+    <div class="checks-grid">
+      ${activePF.length ? `<fieldset><legend>Pilot fitness — do not fly if any apply</legend>${gates(activePF)}${recencyGate}</fieldset>` : ""}
+      ${activeEP.length ? `<fieldset><legend>External pressure — pause &amp; reassess</legend>${gates(activeEP)}</fieldset>` : ""}
+    </div>
+    <div id="${bannerId}" class="banner hidden">
+      ⚠️ One or more personal factors checked — <strong>PAUSE and reassess.</strong>
+      Would you be comfortable explaining this decision to your instructor?
+    </div>
+  </div>`;
+  container.querySelectorAll(".gate").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const banner = document.getElementById(cb.dataset.banner);
+      if (banner) banner.classList.toggle("hidden", !container.querySelectorAll(".gate:checked").length);
+    });
+  });
+}
+
+// Mitigation reference block — shown when verdict is MITIGATE.
+function mitigationBlock(threatChecks) {
+  const active = (threatChecks || []).filter((t) => t.present && THREAT_MITIGATIONS[t.key]);
+  if (!active.length) return "";
+  return `<div class="panel mit-block">
+    <h3>Threat mitigation reference <span class="hint">(from your decision card — 1 threat present)</span></h3>
+    <div class="mit-grid">${active.map(({ key }) => {
+      const m = THREAT_MITIGATIONS[key];
+      return `<div class="mit-section">
+        <div class="mit-label">${m.label}</div>
+        <ul class="mit-list">${m.items.map((i) => `<li>${i}</li>`).join("")}</ul>
+      </div>`;
+    }).join("")}</div>
+  </div>`;
+}
+
 // ---------- helpers ----------
 const cls = (v) => String(v).replace("-", "");
 function dirM(magVal, trueVal) {
@@ -559,21 +749,17 @@ function dirM(magVal, trueVal) {
   return "—";
 }
 function gustStr(w) {
-  // Only show a gust when it actually exceeds the steady wind (no "14G14").
   return (w.gust_kt != null && w.wind_kt != null && w.gust_kt > w.wind_kt) ? "G" + Math.round(w.gust_kt) : "";
 }
 function windStr(w) {
   if (w.wind_kt == null) return "—";
   return `${windDir(w.wind_dir_mag, w.wind_dir_true)}/${Math.round(w.wind_kt)}${gustStr(w)} kt${blendChip(w)}`;
 }
-// When there's no METAR the wind is blended across several models — flag it so
-// the source is transparent (hover shows which models contributed).
 function blendChip(w) {
   if (!w.wind_ensemble_n) return "";
   const models = (w.wind_models || []).join(", ");
   return ` <span class="blend" title="${escapeHtml(models)}">${w.wind_ensemble_n}-model blend</span>`;
 }
-// Wind vectors are rounded to the nearest 10° (e.g. 286 → 290).
 function round10(d) { if (d == null) return null; let r = Math.round(d / 10) * 10; if (r >= 360) r -= 360; return r; }
 function windDir(magVal, trueVal) {
   if (magVal != null) return `${String(round10(magVal)).padStart(3, "0")}°M`;
@@ -581,16 +767,12 @@ function windDir(magVal, trueVal) {
   return "—";
 }
 const fmtFt = (ft) => (ft == null ? "—" : `${Math.round(ft).toLocaleString()} ft`);
-// All ceiling / cloud-base heights rounded to the nearest 100 ft for display.
 const fmtCeil = (ft) => (ft == null ? "—" : `${(Math.round(ft / 100) * 100).toLocaleString()} ft`);
-// Ceiling chip: a METAR with no BKN/OVC layer (Observed + null) means an
-// unlimited ceiling, so say "no ceiling" rather than dropping the field.
 function ceilChip(w) {
   if (w.ceiling_agl_ft != null) return `<span>☁ ${fmtCeil(w.ceiling_agl_ft)}</span>`;
   if (w.source === "Observed") return `<span>☁ no ceiling</span>`;
   return "";
 }
-// Precip/storm glyph for a timeline hour (storm & freezing take priority).
 function wxGlyph(h) {
   if ((h.hazards || []).includes("thunderstorm")) return "⛈";
   if ((h.hazards || []).includes("freezing_rain")) return "🧊";
@@ -603,8 +785,6 @@ function precipText(h) {
   if (!h.precip) return "";
   return `precip: ${h.precip}${h.precip_mm != null ? ` (${h.precip_mm} mm)` : ""}`;
 }
-
-// Age of a METAR from its DDHHMMZ stamp, vs now (UTC). Returns "" if unparseable.
 function metarAgeMin(raw) {
   const m = /\b(\d{2})(\d{2})(\d{2})Z\b/.exec(raw || "");
   if (!m) return null;
@@ -617,8 +797,8 @@ function ageChip(raw) {
   const mins = metarAgeMin(raw);
   if (mins == null) return "";
   const txt = mins < 60 ? `${mins} min ago` : `${Math.floor(mins / 60)} h ${mins % 60} min ago`;
-  const cls = mins > 90 ? " stale" : mins < 60 ? " fresh" : "";
-  return ` <span class="age${cls}">${txt}</span>`;
+  const staleClass = mins > 90 ? " stale" : mins < 60 ? " fresh" : "";
+  return ` <span class="age${staleClass}">${txt}</span>`;
 }
 function dimsText(c) {
   const l = c.length_ft ? Math.round(c.length_ft).toLocaleString() : "?";

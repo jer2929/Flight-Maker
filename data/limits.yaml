@@ -7,12 +7,12 @@ hard_limits:
     sustained_max_kt: 20
     gust_spread_max_kt: 10      # gust minus steady
     crosswind_max_kt: 9
-  ceiling_agl_ft:
+  ceiling_agl_ft:               # VFR personal minimums
     day_circuit: 2000
     day_xc: 4000
     night_circuit: 3000
     night_xc_cloud_base: 12000
-  visibility_sm:
+  visibility_sm:                # VFR personal minimums
     day_circuit: 5
     day_xc: 9
     night_circuit: 6
@@ -31,6 +31,16 @@ hard_limits:
   fuel_reserve_hr:
     vfr: 1.0
     ifr: 1.5
+
+# IFR personal minimums — used when flight_rules=ifr is selected.
+# These are separate from hard_limits so VFR profile sliders are unaffected.
+ifr_minimums:
+  ceiling_agl_ft:
+    day_xc: 1500         # personal minimum above published approach minimums
+    night_xc: 1500
+  visibility_sm:
+    day_xc: 3            # legal IFR minimum + personal margin
+    night_xc: 3
 
 # TWO-TRIGGER THREAT STACKING
 # A weighted count of major threats present -> rule. The active conservatism
@@ -64,8 +74,8 @@ threat_stacking:
     convective_nearby: auto
     strong_or_gusty_winds: auto
     moderate_turbulence_or_shear: auto
-    terrain_critical: standing
-    single_pilot_ifr_no_autopilot: standing
+    terrain_critical: per_flight
+    single_pilot_ifr_no_autopilot: per_flight
     unfamiliar_or_complex_airspace: per_flight
 
 # CONSERVATISM PRESETS — how readily stacked threats escalate the verdict.

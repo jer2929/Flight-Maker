@@ -72,6 +72,7 @@ _limits_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
 
 # Editable leaf keys per group, with [min, max] clamps. The browser is never
 # trusted: anything outside this whitelist/range is dropped or clamped.
+# Groups prefixed "ifr_" correspond to ``ifr_minimums`` in the YAML (not hard_limits).
 _NUMERIC_LIMITS: dict[str, dict[str, tuple[float, float]]] = {
     "wind": {
         "sustained_max_kt": (1, 60),
@@ -88,6 +89,14 @@ _NUMERIC_LIMITS: dict[str, dict[str, tuple[float, float]]] = {
         "day_circuit": (0, 20),
         "day_xc": (0, 20),
         "night_circuit": (0, 20),
+        "night_xc": (0, 20),
+    },
+    "ifr_ceiling_agl_ft": {
+        "day_xc": (100, 15000),
+        "night_xc": (100, 15000),
+    },
+    "ifr_visibility_sm": {
+        "day_xc": (0, 20),
         "night_xc": (0, 20),
     },
 }
@@ -121,7 +130,8 @@ def _validate_prefs(prefs: dict, base: dict) -> dict:
     Returns a clean dict containing only known groups/leaf keys. Unknown keys,
     non-numeric values, and out-of-range numbers are dropped or clamped.
     ``weather_flags`` may only be a subset of the default flags (a pilot can
-    remove a hazard from the auto-NO-GO list but not invent new ones)."""
+    remove a hazard from the auto-NO-GO list but not invent new ones).
+    Groups prefixed ``ifr_`` map to ``ifr_minimums`` in the YAML."""
     clean: dict = {}
     if not isinstance(prefs, dict):
         return clean
@@ -165,12 +175,19 @@ def _apply_conservatism(limits: dict, name: str) -> None:
 
 
 def merge_limits(base: dict, overrides: dict) -> dict:
-    """Deep-merge validated leaf ``overrides`` over a deep-copied ``base``."""
+    """Deep-merge validated leaf ``overrides`` over a deep-copied ``base``.
+
+    Groups prefixed ``ifr_`` are routed into the ``ifr_minimums`` section."""
     clean = _validate_prefs(overrides, base)
     out = copy.deepcopy(base)
     hl = out["hard_limits"]
     for group in _NUMERIC_LIMITS:
-        if group in clean:
+        if group not in clean:
+            continue
+        if group.startswith("ifr_"):
+            real = group[4:]  # "ceiling_agl_ft" or "visibility_sm"
+            out.setdefault("ifr_minimums", {}).setdefault(real, {}).update(clean[group])
+        else:
             hl[group].update(clean[group])
     if "weather_flags" in clean:
         hl["weather_flags"] = clean["weather_flags"]

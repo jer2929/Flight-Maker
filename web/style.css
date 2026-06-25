@@ -14,13 +14,6 @@ header {
 }
 header h1 { margin: 0; font-size: 1.5rem; }
 header p { margin: 4px 0 0; color: var(--muted); }
-/* Minima wordmark: word on a solid MAWP bar, then a dashed climb-out to an arrow */
-header h1.brand { line-height: 0; }
-.logo { height: 44px; width: auto; color: var(--ink); display: block; }
-.logo-word { font: 700 34px/1 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; fill: currentColor; letter-spacing: .5px; }
-.logo-bar { stroke: currentColor; stroke-width: 3; }
-.logo-climb { stroke: var(--accent); stroke-width: 3; stroke-dasharray: 7 6; stroke-linecap: round; }
-.logo-arrowhead { fill: var(--accent); }
 .panel {
   margin: 16px auto; max-width: 1000px; padding: 16px 20px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
@@ -114,63 +107,7 @@ select, input[type=text], .route-inputs input {
 .chk.fail .lbl { font-weight: 600; }
 .chk.advisory { border-left-color: var(--mitigate); } .chk.advisory .mark { color: #f5c451; }
 .chk.na { opacity: .5; }
-.chk.custom { border-left-color: var(--accent); background: rgba(59,130,246,.08); }
-.chk.custom .mark { color: var(--accent); }
-.chk.custom .lbl { font-weight: 600; }
 .chk a { color: var(--accent); }
-
-/* My Minimums (settings) */
-.set-title { margin: 0 0 6px; font-size: 1.05rem; }
-.set-intro { margin: 0 0 14px; color: var(--muted); font-size: .88rem; }
-.min-banner { margin: 0 0 10px; padding: 8px 12px; border-radius: 6px; font-size: .88rem;
-  background: rgba(255,255,255,.03); border-left: 3px solid var(--muted); }
-.min-banner.custom { border-left-color: var(--accent); background: rgba(59,130,246,.1); }
-.set-group { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 16px; padding: 12px 14px; }
-.set-group legend { padding: 0 6px; font-size: .82rem; text-transform: uppercase; letter-spacing: .03em; color: var(--accent); }
-.set-hint { margin: 0 0 8px; color: var(--muted); font-size: .8rem; }
-.set-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-
-/* Home-base picker on the profile tab */
-.base-pick { max-width: 320px; margin: 0 0 14px; }
-.base-pick label { color: var(--muted); font-size: .85rem; }
-.base-pick input { width: 100%; }
-
-/* Minimum sliders: one row per limit, label · big draggable track · live value */
-.slider-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 12px; }
-@media (min-width: 620px) { .slider-grid { grid-template-columns: 1fr 1fr; gap: 16px 28px; } }
-.sld { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; }
-.sld .sld-label { color: var(--ink); font-size: .88rem; }
-.sld .sld-val { color: var(--accent); font-weight: 700; font-size: .9rem; text-align: right; min-width: 70px; font-variant-numeric: tabular-nums; }
-.sld input[type=range] { grid-column: 1 / -1; width: 100%; }
-
-/* Touch-friendly range styling */
-input[type=range] {
-  -webkit-appearance: none; appearance: none; height: 26px; background: transparent; cursor: pointer;
-}
-input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 999px; background: var(--line); }
-input[type=range]::-moz-range-track { height: 6px; border-radius: 999px; background: var(--line); }
-input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none; margin-top: -9px;
-  height: 24px; width: 24px; border-radius: 50%; background: var(--accent); border: 2px solid #0f1419;
-}
-input[type=range]::-moz-range-thumb {
-  height: 24px; width: 24px; border-radius: 50%; background: var(--accent); border: 2px solid #0f1419;
-}
-
-/* Conservatism radio cards */
-#conservatism { display: grid; grid-template-columns: 1fr; gap: 8px; }
-@media (min-width: 620px) { #conservatism { grid-template-columns: repeat(3, 1fr); } }
-.preset { display: block; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; color: var(--ink); }
-.preset:has(input:checked) { border-color: var(--accent); background: rgba(59,130,246,.1); }
-.preset input { margin-right: 6px; }
-.preset .preset-desc { display: block; color: var(--muted); font-size: .78rem; margin-top: 4px; }
-#standing-factors label, #conservatism label { color: var(--ink); }
-.secondary {
-  background: transparent; color: var(--ink); border: 1px solid var(--line);
-  padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: .95rem;
-}
-.secondary:hover { border-color: var(--accent); }
-.set-status { color: #6ee7a0; font-size: .85rem; }
 
 /* NOTAM expansion */
 .notam-btn { cursor: pointer; color: var(--accent); }
@@ -258,12 +195,99 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; }
 .age { font-size: .72rem; color: var(--muted); white-space: nowrap; }
 .age.stale { color: #ff9b8f; font-weight: 600; }
-.age.fresh { color: #4ade80; font-weight: 600; }
 details.mhist { margin: 6px 0; font-size: .82rem; }
 details.mhist summary { cursor: pointer; color: var(--accent); }
 .links { font-size: .82rem; }
 .links a { color: var(--accent); }
 .nogo-reasons li { color: #ffb4ab; }
+
+/* My Minimums configuration panel */
+details.mm-panel > summary {
+  cursor: pointer; list-style: none; font-size: 1rem; font-weight: 600;
+  padding: 2px 0;
+}
+details.mm-panel > summary::-webkit-details-marker { display: none; }
+details.mm-panel > summary::before { content: "▶ "; font-size: .75em; color: var(--muted); }
+details.mm-panel[open] > summary::before { content: "▼ "; }
+.mm-desc { margin: 10px 0 14px; }
+
+/* Self-assessment embedded under route / discovery results */
+.self-check-inline h3 { font-size: .95rem; margin: 0 0 10px; }
+.self-check-inline { margin-top: 0; }
+
+/* Threat mitigation reference block (shown when verdict = MITIGATE) */
+.mit-block h3 { margin: 0 0 12px; font-size: .95rem; }
+.mit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.mit-section { background: rgba(201,138,0,.08); border: 1px solid var(--mitigate); border-radius: 8px; padding: 10px 12px; }
+.mit-label { font-weight: 600; color: #f5c451; font-size: .85rem; margin-bottom: 6px; }
+.mit-list { margin: 0; padding-left: 16px; font-size: .83rem; color: var(--ink); }
+.mit-list li { margin: 3px 0; }
+
+/* Recency slider in My Minimums */
+.mm-recency { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.mm-recency-label { font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
+.mm-recency-row { display: flex; align-items: center; gap: 12px; }
+.mm-recency-row input[type=range] { width: 160px; }
+.mm-recency-row span { font-size: .9rem; font-weight: 600; min-width: 90px; }
+.mm-recency-hint { margin: 8px 0 0; }
+
+/* SVG logo */
+.brand { font-size: 0; line-height: 1; }
+.logo { display: block; height: 44px; width: auto; overflow: visible; }
+.logo-word { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; font-size: 38px; font-weight: 700; fill: var(--ink); }
+.logo-bar { stroke: var(--muted); stroke-width: 2; fill: none; }
+.logo-climb { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; fill: none; }
+.logo-arrowhead { fill: var(--accent); }
+
+/* Secondary button */
+.secondary {
+  background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 10px 18px;
+  border-radius: 8px; cursor: pointer; font-size: .95rem;
+}
+.secondary:hover { border-color: var(--ink); color: var(--ink); }
+
+/* Settings panel typography */
+.set-title { margin: 0 0 8px; font-size: 1.05rem; }
+.set-intro { color: var(--muted); font-size: .86rem; margin: 0 0 16px; }
+.set-group { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; }
+.set-group legend { color: var(--muted); font-size: .84rem; padding: 0 6px; }
+.set-hint { color: var(--muted); font-size: .82rem; margin: 4px 0 10px; }
+.set-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
+.set-status { color: #6ee7a0; font-size: .85rem; }
+
+/* Home base picker */
+.base-pick { max-width: 300px; margin-bottom: 16px; }
+
+/* Slider grid — used inside settings fieldsets */
+.slider-grid { display: grid; gap: 8px; }
+.sld { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
+.sld input[type=range] { grid-column: 1 / -1; width: 100%; margin-top: 2px; }
+.sld-label { font-size: .86rem; color: var(--ink); }
+.sld-val { font-size: .86rem; font-weight: 600; color: var(--accent); text-align: right; min-width: 70px; }
+
+/* Profile readout */
+.min-banner {
+  font-size: .85rem; color: var(--muted); padding: 8px 10px; border-radius: 6px;
+  background: rgba(255,255,255,.04); border: 1px solid var(--line); margin-bottom: 8px;
+}
+.min-banner.custom { color: #f5c451; background: rgba(201,138,0,.08); border-color: var(--mitigate); }
+.chk.custom { border-left-color: var(--mitigate); background: rgba(201,138,0,.06); }
+.chk.custom .mark { color: #f5c451; }
+
+/* Conservatism presets */
+.preset { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; margin: 4px 0;
+  border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.preset:has(input:checked) { border-color: var(--accent); background: rgba(59,130,246,.1); }
+.preset input { margin-right: 6px; }
+.preset-desc { font-size: .78rem; color: var(--muted); margin-left: 22px; }
+
+/* My Minimums panel as a div (not details) */
+.mm-panel { margin-top: 16px; }
+
+/* checks-grid fieldset children */
+.checks-grid fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.checks-grid fieldset legend { color: var(--muted); font-size: .82rem; padding: 0 6px; }
+.checks-grid label { display: flex; align-items: center; gap: 6px; font-size: .87rem; margin: 5px 0; cursor: pointer; }
 
 .hidden { display: none !important; }
 footer { max-width: 1000px; margin: 20px auto; padding: 0 20px 30px; color: var(--muted); font-size: .8rem; }
