@@ -1,6 +1,6 @@
 from app.config import limits_override
 from app.models import RunwayWind, Source, Verdict, WeatherSummary
-from app.services.evaluator import check_hard_limits, conditions_checks, decision, evaluate, threat_verdict
+from app.services.evaluator import check_hard_limits, conditions_checks, decision, derive_threats, evaluate, threat_verdict
 
 
 def test_decision_returns_structured_checks():
@@ -153,3 +153,35 @@ def test_personal_minimums_remove_hazard_flag():
     with limits_override({"weather_flags": ["freezing_rain"]}):  # TS removed
         checks = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
         assert checks["hazards"].passed is True
+
+
+# ---- conservatism presets (threat stacking) -------------------------------
+
+def two_threat_wx():
+    # Strong wind (auto) + night ops (manual) = two non-serious threats.
+    return WeatherSummary(wind_dir_true=50, wind_kt=16, visibility_sm=15, ceiling_agl_ft=8000)
+
+
+def test_confident_preset_relaxes_two_threat_nogo():
+    wx = two_threat_wx()
+    v_default, _, _ = evaluate(wx, good_runway(), "day", False, manual_threats=["night_operations"])
+    assert v_default == Verdict.NOGO                     # standard: 2 → NO-GO
+    with limits_override({"conservatism": "confident"}):
+        v, _, _ = evaluate(wx, good_runway(), "day", False, manual_threats=["night_operations"])
+        assert v == Verdict.MITIGATE                     # confident: 2 → MITIGATE
+
+
+def test_cautious_preset_single_serious_threat_is_nogo():
+    # Isolate the threat stack from hard limits: calm VFR weather, but a single
+    # serious threat (convective_nearby) injected. Under cautious it weighs 2.
+    wx = calm_vfr()
+    v_default, _, n = evaluate(wx, good_runway(), "day", False, manual_threats=["convective_nearby"])
+    assert v_default == Verdict.MITIGATE                 # standard: weight 1 → MITIGATE
+    with limits_override({"conservatism": "cautious"}):
+        v, _, _ = evaluate(wx, good_runway(), "day", False, manual_threats=["convective_nearby"])
+        assert v == Verdict.NOGO                         # cautious: serious weight 2 → NO-GO
+
+
+def test_manual_threats_outside_known_set_ignored():
+    present = derive_threats(calm_vfr(), False, manual_threats=["not_a_threat", "terrain_critical"])
+    assert present == {"terrain_critical"}

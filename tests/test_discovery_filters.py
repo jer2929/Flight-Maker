@@ -2,7 +2,7 @@ from types import SimpleNamespace as NS
 
 from app.models import Verdict
 from app.orchestrator import _CFPS_IDENT_RE, _runways_pass_filters, _sort_key
-from app.sources.airports import load_airports
+from app.sources.airports import airports_within, load_airports
 
 
 def test_no_us_airports_loaded():
@@ -46,3 +46,13 @@ def test_min_length_filter():
     assert _runways_pass_filters("CYHM", "any", min_length_ft=3000)
     # An absurd minimum length filters it out.
     assert not _runways_pass_filters("CYHM", "any", min_length_ft=50000)
+
+
+def test_discovery_recenters_on_home_base():
+    # Discovery centres on the pilot's base: a shared candidate sits at a
+    # different distance depending on which base we search from.
+    from_hm = {a.ident: d for a, d in airports_within("CYHM", 100)}
+    from_yyz = {a.ident: d for a, d in airports_within("CYYZ", 100)}
+    common = set(from_hm) & set(from_yyz)
+    assert common, "expect overlapping candidates within range"
+    assert any(abs(from_hm[i] - from_yyz[i]) > 1 for i in common)

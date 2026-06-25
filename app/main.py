@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import orchestrator
 from app.config import WEB_DIR, get_default_limits, get_limits, get_settings, limits_override
+from app.services.evaluator import THREAT_LABELS
 from app.sources import airports as ap
 
 app = FastAPI(title="Minima", version="0.2.0")
@@ -39,6 +40,18 @@ async def config():
     s = get_settings()
     origin = ap.get_airport(s.origin)
     defaults = get_default_limits()
+    ts = defaults["threat_stacking"]
+    kinds = ts.get("threat_kinds", {})
+    threats = [
+        {"key": k, "label": THREAT_LABELS.get(k, k.replace("_", " ").title()),
+         "kind": kinds.get(k, "auto")}
+        for k in ts["major_threats"]
+    ]
+    cp = defaults.get("conservatism_presets", {})
+    presets = [
+        {"key": key, "label": p.get("label", key.title()), "description": p.get("description", "")}
+        for key, p in cp.get("presets", {}).items()
+    ]
     return {
         "departure": s.origin,
         "departure_name": origin.name if origin else s.origin,
@@ -46,7 +59,10 @@ async def config():
         "default_radius_nm": s.default_radius_nm,
         "max_radius_nm": s.max_radius_nm,
         "timeline_hours": s.timeline_hours,
-        "major_threats": get_limits()["threat_stacking"]["major_threats"],
+        "major_threats": ts["major_threats"],
+        "threats": threats,
+        "conservatism_presets": presets,
+        "default_conservatism": cp.get("default", "standard"),
         "default_limits": defaults["hard_limits"],
         "weather_flag_options": defaults["hard_limits"]["weather_flags"],
     }
@@ -88,6 +104,7 @@ async def suggest(
     max_crosswind: bool = Query(default=False),
     min_width_ft: float = Query(default=0, ge=0, le=500),
     sort: str = Query(default="verdict", pattern="^(verdict|distance|time|crosswind|tailwind)$"),
+    base: str = Query(default=None),
     prefs: str = Query(default=None),
 ):
     s = get_settings()
@@ -97,7 +114,7 @@ async def suggest(
         results = await orchestrator.suggest(
             radius, mode, manual, surface, min_length_ft, into_wind,
             go_only=go_only, max_time_min=max_time_min, max_crosswind=max_crosswind,
-            min_width_ft=min_width_ft, sort=sort)
+            min_width_ft=min_width_ft, sort=sort, origin_ident=base)
     return JSONResponse([r.model_dump() for r in results])
 
 

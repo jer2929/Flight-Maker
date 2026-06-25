@@ -33,7 +33,9 @@ hard_limits:
     ifr: 1.5
 
 # TWO-TRIGGER THREAT STACKING
-# Count of major threats present -> rule. 0 normal, 1 mitigate, 2 no-go solo, 3 no-go.
+# A weighted count of major threats present -> rule. The active conservatism
+# preset (below) supplies both the per-threat weights and this rule; the values
+# here are the built-in default ("standard").
 threat_stacking:
   major_threats:
     - night_operations
@@ -50,6 +52,48 @@ threat_stacking:
     "1": MITIGATE
     "2": NO-GO        # no-go solo
     "3": NO-GO
+  # How each threat is sourced, for the UI:
+  #   auto       — derived automatically from the forecast each hour
+  #   mode       — set automatically by the day/night toggle
+  #   standing   — a pilot/aircraft factor saved in the profile, applied every flight
+  #   per_flight — toggled per flight (pilot-relative)
+  threat_kinds:
+    night_operations: mode
+    actual_imc: auto
+    icing_potential: auto
+    convective_nearby: auto
+    strong_or_gusty_winds: auto
+    moderate_turbulence_or_shear: auto
+    terrain_critical: standing
+    single_pilot_ifr_no_autopilot: standing
+    unfamiliar_or_complex_airspace: per_flight
+
+# CONSERVATISM PRESETS — how readily stacked threats escalate the verdict.
+# Each preset supplies per-threat `weights` (default 1) and the count->verdict
+# `rule`. The pilot picks one in their profile; "standard" preserves the
+# original decision card and is the default.
+conservatism_presets:
+  default: standard
+  presets:
+    cautious:
+      label: Cautious
+      description: A single serious weather threat is disqualifying.
+      serious_weight: 2          # actual_imc / convective / icing count double
+      rule: {"0": GO, "1": MITIGATE, "2": NO-GO, "3": NO-GO}
+    standard:
+      label: Standard
+      description: One threat → mitigate, two → no-go (the original card).
+      rule: {"0": GO, "1": MITIGATE, "2": NO-GO, "3": NO-GO}
+    confident:
+      label: Confident
+      description: Tolerates one threat; two → mitigate, three → no-go.
+      rule: {"0": GO, "1": GO, "2": MITIGATE, "3": NO-GO}
+  # Threats treated as "serious" (double-weighted under the cautious preset).
+  serious_threats:
+    - actual_imc
+    - convective_nearby
+    - icing_potential
+
 
 # Thresholds used to derive threats/scoring from forecast model data (outlook)
 outlook:

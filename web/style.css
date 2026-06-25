@@ -14,6 +14,13 @@ header {
 }
 header h1 { margin: 0; font-size: 1.5rem; }
 header p { margin: 4px 0 0; color: var(--muted); }
+/* Minima wordmark: word on a solid MAWP bar, then a dashed climb-out to an arrow */
+header h1.brand { line-height: 0; }
+.logo { height: 44px; width: auto; color: var(--ink); display: block; }
+.logo-word { font: 700 34px/1 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; fill: currentColor; letter-spacing: .5px; }
+.logo-bar { stroke: currentColor; stroke-width: 3; }
+.logo-climb { stroke: var(--accent); stroke-width: 3; stroke-dasharray: 7 6; stroke-linecap: round; }
+.logo-arrowhead { fill: var(--accent); }
 .panel {
   margin: 16px auto; max-width: 1000px; padding: 16px 20px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
@@ -120,9 +127,44 @@ select, input[type=text], .route-inputs input {
 .min-banner.custom { border-left-color: var(--accent); background: rgba(59,130,246,.1); }
 .set-group { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 16px; padding: 12px 14px; }
 .set-group legend { padding: 0 6px; font-size: .82rem; text-transform: uppercase; letter-spacing: .03em; color: var(--accent); }
-.set-group .control input[type="number"] { width: 100%; }
 .set-hint { margin: 0 0 8px; color: var(--muted); font-size: .8rem; }
 .set-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* Home-base picker on the profile tab */
+.base-pick { max-width: 320px; margin: 0 0 14px; }
+.base-pick label { color: var(--muted); font-size: .85rem; }
+.base-pick input { width: 100%; }
+
+/* Minimum sliders: one row per limit, label · big draggable track · live value */
+.slider-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 12px; }
+@media (min-width: 620px) { .slider-grid { grid-template-columns: 1fr 1fr; gap: 16px 28px; } }
+.sld { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; }
+.sld .sld-label { color: var(--ink); font-size: .88rem; }
+.sld .sld-val { color: var(--accent); font-weight: 700; font-size: .9rem; text-align: right; min-width: 70px; font-variant-numeric: tabular-nums; }
+.sld input[type=range] { grid-column: 1 / -1; width: 100%; }
+
+/* Touch-friendly range styling */
+input[type=range] {
+  -webkit-appearance: none; appearance: none; height: 26px; background: transparent; cursor: pointer;
+}
+input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 999px; background: var(--line); }
+input[type=range]::-moz-range-track { height: 6px; border-radius: 999px; background: var(--line); }
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; margin-top: -9px;
+  height: 24px; width: 24px; border-radius: 50%; background: var(--accent); border: 2px solid #0f1419;
+}
+input[type=range]::-moz-range-thumb {
+  height: 24px; width: 24px; border-radius: 50%; background: var(--accent); border: 2px solid #0f1419;
+}
+
+/* Conservatism radio cards */
+#conservatism { display: grid; grid-template-columns: 1fr; gap: 8px; }
+@media (min-width: 620px) { #conservatism { grid-template-columns: repeat(3, 1fr); } }
+.preset { display: block; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; color: var(--ink); }
+.preset:has(input:checked) { border-color: var(--accent); background: rgba(59,130,246,.1); }
+.preset input { margin-right: 6px; }
+.preset .preset-desc { display: block; color: var(--muted); font-size: .78rem; margin-top: 4px; }
+#standing-factors label, #conservatism label { color: var(--ink); }
 .secondary {
   background: transparent; color: var(--ink); border: 1px solid var(--line);
   padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: .95rem;
