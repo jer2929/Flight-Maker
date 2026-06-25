@@ -41,6 +41,10 @@ ifr_minimums:
   visibility_sm:
     day_xc: 3            # flat personal visibility floor (confirm it meets published minimum)
     night_xc: 3
+  # When true, widespread/hard IMC counts as a two-trigger threat even on IFR
+  # flights (for pilots who'd rather not be in sustained IMC — e.g. single-engine
+  # or no autopilot). When false (default) IFR flights aren't penalised for IMC.
+  imc_as_threat: false
 
 # TWO-TRIGGER THREAT STACKING
 # A weighted count of major threats present -> rule. The active conservatism

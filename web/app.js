@@ -168,6 +168,12 @@ function wire() {
   $("#run-discovery").addEventListener("click", runDiscovery);
   $("#save-minimums").addEventListener("click", saveMinimums);
   $("#reset-minimums").addEventListener("click", resetMinimums);
+  // VFR/IFR tab on the minimums card swaps which weather-minimums set is shown.
+  $$(".rule-tab").forEach((b) => b.addEventListener("click", () => {
+    const rule = b.dataset.rule;
+    $$(".rule-tab").forEach((x) => x.classList.toggle("active", x === b));
+    $$(".rule-pane").forEach((p) => p.classList.toggle("hidden", p.dataset.rule !== rule));
+  }));
   autocomplete("dep", "dep-list");
   autocomplete("dest", "dest-list");
   autocomplete("set-base", "base-list");
@@ -209,6 +215,7 @@ function effectiveLimits() {
     ifr_ceiling_agl_ft: { ...(difr.ceiling_agl_ft || {}), ...(m.ifr_ceiling_agl_ft || {}) },
     ifr_visibility_sm:  { ...(difr.visibility_sm   || {}), ...(m.ifr_visibility_sm  || {}) },
     weather_flags:   m.weather_flags || d.weather_flags,
+    imc_as_threat:   (m.imc_as_threat !== undefined) ? m.imc_as_threat : !!difr.imc_as_threat,
   };
 }
 
@@ -577,6 +584,8 @@ function fillProfileForm() {
   }
   const active = new Set(eff.weather_flags);
   $$(".wxflag").forEach((c) => (c.checked = active.has(c.value)));
+  const imc = $("#set-imc-threat");
+  if (imc) imc.checked = !!eff.imc_as_threat;
 }
 
 function readProfileForm() {
@@ -596,6 +605,10 @@ function readProfileForm() {
   }
   const checked = $$(".wxflag").filter((c) => c.checked).map((c) => c.value);
   if (checked.length !== d.weather_flags.length) mins.weather_flags = checked;
+
+  // IMC-as-threat: only persist when it differs from the default (off).
+  const imcEl = $("#set-imc-threat");
+  if (imcEl && imcEl.checked !== !!difr.imc_as_threat) mins.imc_as_threat = imcEl.checked;
 
   const base = $("#set-base").value.trim().toUpperCase();
   const preset = ($$('input[name="conservatism"]').find((r) => r.checked) || {}).value || CONFIG.default_conservatism;
@@ -658,10 +671,11 @@ function renderMinimums() {
   const curPreset = PROFILE.conservatism || CONFIG.default_conservatism;
   const presetLabel = (CONFIG.conservatism_presets.find((p) => p.key === curPreset) || {}).label || curPreset;
   const consRow = row("Conservatism", presetLabel, "Standard", "", curPreset !== CONFIG.default_conservatism);
+  const imcRow = row("IMC as threat (IFR)", eff.imc_as_threat ? "on" : "off", "off", "", !!eff.imc_as_threat);
   $("#minimums-readout").innerHTML =
     `<div class="min-banner ${custom ? "custom" : ""}">${custom
       ? "Using your saved profile (★ = changed from default)."
-      : "Using the built-in default profile."}</div>${baseRow}${minRows}${flagsRow}${consRow}`;
+      : "Using the built-in default profile."}</div>${baseRow}${minRows}${flagsRow}${imcRow}${consRow}`;
 }
 
 // Self-assessment configurator (fitness/pressure items and recency, stored locally).

@@ -161,12 +161,16 @@ def derive_threats(
     weather: WeatherSummary,
     is_complex_airspace: bool,
     manual_threats: list[str] | None = None,
+    flight_rules: str = "vfr",
 ) -> set[str]:
     """Derive present 'major threats' for two-trigger stacking.
 
-    Manual threats (standing profile factors + per-flight toggles) are accepted
-    only if they're known threat keys, so a malformed query string can't inflate
-    the stack."""
+    Manual threats (per-flight toggles) are accepted only if they're known
+    threat keys, so a malformed query string can't inflate the stack.
+
+    IMC handling depends on the flight rules: under VFR, being in cloud / low vis
+    is always a threat; under IFR it is *expected*, so it only counts when the
+    pilot has opted in (``ifr_minimums.imc_as_threat``)."""
     known = set(get_limits()["threat_stacking"]["major_threats"])
     threats: set[str] = {t for t in (manual_threats or []) if t in known}
     if weather.wind_kt is not None and weather.wind_kt >= 15:
@@ -179,9 +183,11 @@ def derive_threats(
         threats.add("icing_potential")
     if "low_level_wind_shear" in weather.hazards:
         threats.add("moderate_turbulence_or_shear")
-    if (weather.ceiling_agl_ft is not None and weather.ceiling_agl_ft < 1000) or (
+    imc = (weather.ceiling_agl_ft is not None and weather.ceiling_agl_ft < 1000) or (
         weather.visibility_sm is not None and weather.visibility_sm < 3
-    ):
+    )
+    if imc and (flight_rules != "ifr"
+                or get_limits().get("ifr_minimums", {}).get("imc_as_threat")):
         threats.add("actual_imc")
     if is_complex_airspace:
         threats.add("unfamiliar_or_complex_airspace")
@@ -223,7 +229,7 @@ def decision(
     """Structured decision. ``extra_checks`` lets the route add weather-hazard
     rows (icing/turbulence/etc.) computed elsewhere."""
     checks = conditions_checks(weather, best_runway, mode, ceiling_mode=ceiling_mode, flight_rules=flight_rules) + (extra_checks or [])
-    present = derive_threats(weather, is_complex_airspace, manual_threats)
+    present = derive_threats(weather, is_complex_airspace, manual_threats, flight_rules=flight_rules)
     tchecks = threat_check_list(present)
     weighted = threat_weight(present)
 
@@ -247,7 +253,7 @@ def evaluate(
         weather, best_runway, mode, is_complex_airspace, manual_threats, flight_rules=flight_rules)
     reasons = [f"{c.label} {c.actual_text} (limit {c.limit_text})"
                for c in checks if not c.passed and c.applicable]
-    present = derive_threats(weather, is_complex_airspace, manual_threats)
+    present = derive_threats(weather, is_complex_airspace, manual_threats, flight_rules=flight_rules)
     if present:
         reasons.append("Threat stack (%d): %s" % (
             count, ", ".join(THREAT_LABELS.get(t, t) for t in sorted(present))))

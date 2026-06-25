@@ -605,7 +605,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     )
 
     all_checks = cond_checks + weather_checks
-    present = derive_threats(route_ws, ap.is_complex_airspace(dep.ident) or ap.is_complex_airspace(dest.ident), manual_threats)
+    present = derive_threats(route_ws, ap.is_complex_airspace(dep.ident) or ap.is_complex_airspace(dest.ident), manual_threats, flight_rules=flight_rules)
     route_threats = threat_check_list(present)
     threat_count = threat_weight(present)
     failed = any((not c.passed) and c.applicable for c in all_checks)
