@@ -35,8 +35,10 @@ select, input[type=text], .route-inputs input {
   background: #0f1419; color: var(--ink); border: 1px solid var(--line);
   border-radius: 6px; padding: 8px;
 }
-.threats summary { cursor: pointer; }
-#threats-list label { color: var(--ink); }
+.control.threats { align-self: flex-start; }
+.threats-label { font-size: .85rem; color: var(--muted); }
+#threats-list { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+#threats-list label { color: var(--ink); margin: 0; }
 .tabs { display: flex; gap: 8px; }
 .tab {
   background: transparent; color: var(--muted); border: none; padding: 8px 14px;

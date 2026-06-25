@@ -36,10 +36,10 @@ hard_limits:
 # These are separate from hard_limits so VFR profile sliders are unaffected.
 ifr_minimums:
   ceiling_agl_ft:
-    day_xc: 1500         # personal minimum above published approach minimums
+    day_xc: 1500         # flat personal ceiling floor (confirm it's >= published DA/MDA)
     night_xc: 1500
   visibility_sm:
-    day_xc: 3            # legal IFR minimum + personal margin
+    day_xc: 3            # flat personal visibility floor (confirm it meets published minimum)
     night_xc: 3
 
 # TWO-TRIGGER THREAT STACKING

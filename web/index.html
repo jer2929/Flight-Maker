@@ -46,15 +46,18 @@
           <button type="button" class="seg-btn fr-btn" data-rules="ifr">IFR</button>
         </div>
       </div>
-      <details class="control threats">
-        <summary>This flight — extra threats</summary>
+      <div class="control threats">
+        <div class="threats-label">This flight — extra threats</div>
         <div id="threats-list"></div>
-      </details>
+      </div>
     </div>
   </section>
 
   <!-- Route tab -->
   <section id="tab-route" class="tab-pane hidden">
+    <!-- Preflight self-assessment: personal hard limits, checked before pulling weather -->
+    <div id="route-self-check"></div>
+
     <div class="panel route-inputs">
       <div class="ac">
         <label>Departure</label>
@@ -74,13 +77,15 @@
     <div id="route-mitigation"></div>
     <div id="route-summary"></div>
     <div id="route-endpoints" class="results two-col"></div>
-    <div id="route-self-check"></div>
     <div id="route-windows"></div>
     <div id="route-timeline"></div>
   </section>
 
   <!-- Discovery tab -->
   <section id="tab-discovery" class="tab-pane hidden">
+    <!-- Preflight self-assessment: personal hard limits, checked before pulling weather -->
+    <div id="discovery-self-check"></div>
+
     <div class="panel">
       <div class="controls">
         <label class="control">Radius
@@ -139,11 +144,17 @@
       <button id="run-discovery" class="primary">Find flights now</button>
     </div>
     <div id="discovery-results" class="results"></div>
-    <div id="discovery-self-check"></div>
   </section>
 
   <!-- My Minimums / Settings tab -->
   <section id="tab-settings" class="tab-pane">
+    <!-- Pre-flight self-assessment items configurator — first option under My Minimums -->
+    <div class="panel mm-panel">
+      <h2 class="set-title">Pre-flight self-assessment items</h2>
+      <p class="set-intro">Choose which fitness and external-pressure items appear in your pre-flight check above the route and discovery inputs.</p>
+      <div class="checks-grid" id="my-minimums-body"></div>
+    </div>
+
     <div class="panel">
       <h2 class="set-title">My minimums &amp; profile</h2>
       <p class="set-intro">Everything below lives in this browser and gates every proposed flight.
@@ -175,12 +186,14 @@
         </fieldset>
 
         <fieldset class="set-group">
-          <legend>IFR ceiling (ft AGL) — personal minimums above published</legend>
+          <legend>IFR ceiling (ft AGL) — minimum</legend>
+          <p class="set-hint">The lowest ceiling you'll accept at the destination on an IFR flight. This is a flat personal floor — always confirm it's at or above the published approach minimums (DA/MDA) for the specific approach you'll fly.</p>
           <div id="grp-ifr-ceiling" class="controls slider-grid"></div>
         </fieldset>
 
         <fieldset class="set-group">
-          <legend>IFR visibility (SM) — personal minimums</legend>
+          <legend>IFR visibility (SM) — minimum</legend>
+          <p class="set-hint">The lowest visibility you'll accept at the destination. Confirm it meets or exceeds the published minimum for your approach.</p>
           <div id="grp-ifr-vis" class="controls slider-grid"></div>
         </fieldset>
 
@@ -196,12 +209,6 @@
         </fieldset>
 
         <fieldset class="set-group">
-          <legend>Standing factors — apply to every flight</legend>
-          <p class="set-hint">Things that are generally true of you or your aircraft. They count toward the threat stack on every flight.</p>
-          <div id="standing-factors" class="controls"></div>
-        </fieldset>
-
-        <fieldset class="set-group">
           <legend>How conservative?</legend>
           <p class="set-hint">Sets how readily stacked threats escalate the verdict.</p>
           <div id="conservatism" class="controls"></div>
@@ -213,13 +220,6 @@
           <span id="minimums-status" class="set-status"></span>
         </div>
       </form>
-    </div>
-
-    <!-- Pre-flight self-assessment items configurator -->
-    <div class="panel mm-panel">
-      <h2 class="set-title">Pre-flight self-assessment items</h2>
-      <p class="set-intro">Choose which fitness and external-pressure items appear in your pre-flight check below route and discovery results.</p>
-      <div class="checks-grid" id="my-minimums-body"></div>
     </div>
   </section>
 
