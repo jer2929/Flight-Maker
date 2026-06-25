@@ -32,8 +32,14 @@
           <button type="button" class="seg-btn" data-mode="night">Night flight</button>
         </div>
       </div>
+      <div class="control">Flight rules
+        <div class="seg" id="fr-seg">
+          <button type="button" class="seg-btn fr-btn active" data-rules="vfr">VFR</button>
+          <button type="button" class="seg-btn fr-btn" data-rules="ifr">IFR</button>
+        </div>
+      </div>
       <details class="control threats">
-        <summary>Active threats</summary>
+        <summary>This flight — extra threats</summary>
         <div id="threats-list"></div>
       </details>
     </div>
@@ -57,6 +63,7 @@
 
     <div id="route-verdict"></div>
     <div id="route-checklist"></div>
+    <div id="route-mitigation"></div>
     <div id="route-summary"></div>
     <div id="route-endpoints" class="results two-col"></div>
     <div id="route-self-check"></div>
