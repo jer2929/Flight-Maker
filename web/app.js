@@ -108,7 +108,8 @@ function renderMyMinimumsSettings() {
         <span id="mm-recency-out">${recMin} hr / 30 days</span>
       </div>
       <p class="hint mm-recency-hint">Self-assessment will flag it as a no-fly condition if you have flown less than this in the last 30 days.</p>
-    </div>`;
+    </div>` +
+    weatherMinimumsSummary();
   body.querySelectorAll(".mm-toggle").forEach((cb) => {
     cb.addEventListener("change", () => {
       if (cb.checked) enabledMM.add(cb.value); else enabledMM.delete(cb.value);
@@ -129,6 +130,38 @@ function renderMyMinimumsSettings() {
   }
 }
 
+// Read-only summary of the cross-country weather minimums the tool screens against
+// (from data/limits.yaml via /api/config). Surfaced here so the IFR ceiling figure
+// is explained where the pilot looks — it is a flat personal ceiling, NOT a value
+// added on top of each approach's published minimums.
+function weatherMinimumsSummary() {
+  const L = CONFIG && CONFIG.hard_limits;
+  if (!L) return "";
+  const c = L.ceiling_agl_ft || {}, v = L.visibility_sm || {};
+  const ft = (n) => (n == null ? "—" : `${Number(n).toLocaleString()} ft`);
+  const sm = (n) => (n == null ? "—" : `${n} SM`);
+  const vfr = (c.vfr || {}), ifr = (c.ifr || {}), vv = (v.vfr || {}), vi = (v.ifr || {});
+  const row = (label, ceil, vis) =>
+    `<tr><th>${label}</th><td>${ceil}</td><td>${vis}</td></tr>`;
+  return `<div class="mm-wx">
+    <div class="mm-recency-label">Weather minimums (cross-country)</div>
+    <table class="mm-wx-table">
+      <thead><tr><th></th><th>Ceiling</th><th>Visibility</th></tr></thead>
+      <tbody>
+        ${row("VFR day", ft(vfr.day_xc), sm(vv.day_xc))}
+        ${row("VFR night", ft(vfr.night_xc_cloud_base), sm(vv.night_xc))}
+        ${row("IFR day", ft(ifr.day_xc), sm(vi.day_xc))}
+        ${row("IFR night", ft(ifr.night_xc), sm(vi.night_xc))}
+      </tbody>
+    </table>
+    <p class="hint mm-wx-hint"><strong>IFR ceiling</strong> is a flat personal minimum — the lowest
+      forecast/observed ceiling you'll accept at the destination. It is <em>not</em> added on top of
+      each approach's published minimums. Always confirm your minimum is at or above the published
+      DA/MDA and visibility for the specific approach you'll fly.</p>
+    <p class="hint mm-wx-hint">Edit these values in <code>data/limits.yaml</code>.</p>
+  </div>`;
+}
+
 function renderSelfAssessment(containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -142,7 +175,7 @@ function renderSelfAssessment(containerId) {
   ).join("");
   const recencyGate = `<label><input type="checkbox" class="gate" data-banner="${bannerId}" /> Fewer than ${recMin} hours flown in last 30 days</label>`;
   container.innerHTML = `<div class="panel self-check-inline">
-    <h3>Self-assessment <span class="hint">(decision card)</span></h3>
+    <h3>Preflight self-assessment <span class="hint">(personal hard limits — check before pulling weather)</span></h3>
     <div class="checks-grid">
       ${activePF.length ? `<fieldset><legend>Pilot fitness — do not fly if any apply</legend>${gates(activePF)}${recencyGate}</fieldset>` : ""}
       ${activeEP.length ? `<fieldset><legend>External pressure — pause &amp; reassess</legend>${gates(activeEP)}</fieldset>` : ""}
@@ -160,13 +193,21 @@ function renderSelfAssessment(containerId) {
   });
 }
 
+// Friendlier wording than the auto-generated Title Case for known threat keys.
+const THREAT_UI_LABELS = {
+  terrain_critical: "Terrain-critical operations",
+  unfamiliar_or_complex_airspace: "Unfamiliar airport or complex airspace",
+  single_pilot_ifr_no_autopilot: "Single-pilot IFR without autopilot",
+};
+const threatLabel = (t) => THREAT_UI_LABELS[t] || labelOf(t);
+
 function renderExtraThreats() {
   const ifr = currentFlightRules() === "ifr";
-  const items = ["terrain_critical"];
+  const items = ["terrain_critical", "unfamiliar_or_complex_airspace"];
   if (ifr) items.push("single_pilot_ifr_no_autopilot");
   const wasChecked = new Set($$(".threat").filter((c) => c.checked).map((c) => c.value));
   $("#threats-list").innerHTML = items
-    .map((t) => `<label><input type="checkbox" class="threat" value="${t}"${wasChecked.has(t) ? " checked" : ""}> ${labelOf(t)}</label>`)
+    .map((t) => `<label><input type="checkbox" class="threat" value="${t}"${wasChecked.has(t) ? " checked" : ""}> ${threatLabel(t)}</label>`)
     .join("");
 }
 
@@ -180,6 +221,10 @@ async function init() {
 
   renderMyMinimumsSettings();
   renderExtraThreats();
+  // Preflight self-assessment is a standing pre-check shown above the route/discovery
+  // inputs — render it up front so it's done before weather is ever pulled.
+  renderSelfAssessment("route-self-check");
+  renderSelfAssessment("discovery-self-check");
   wire();
 }
 
@@ -251,7 +296,9 @@ async function runRoute() {
 }
 
 function clearRoute() {
-  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-endpoints", "route-self-check", "route-windows", "route-timeline"]
+  // route-self-check is a standing pre-check rendered on load — never cleared here,
+  // so the pilot's checked items survive a route assessment.
+  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-endpoints", "route-windows", "route-timeline"]
     .forEach((id) => ($("#" + id).innerHTML = ""));
 }
 
@@ -274,7 +321,6 @@ function renderRoute(r) {
 
   $("#route-summary").innerHTML += advisoriesBlock(r);
   $("#route-endpoints").innerHTML = endpointCard(r.departure, "Departure") + endpointCard(r.destination, "Destination");
-  renderSelfAssessment("route-self-check");
 
   if (r.best_windows.length) {
     $("#route-windows").innerHTML = `<div class="timeline-wrap"><h3>Best windows (next ${CONFIG.timeline_hours} h) — wind, ceiling &amp; visibility</h3>` +
@@ -459,7 +505,6 @@ async function runDiscovery() {
     const params = new URLSearchParams(p);
     const data = await fetch(`/api/suggest?${params}`).then((r) => r.json());
     $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
-    renderSelfAssessment("discovery-self-check");
   } catch (e) { $("#discovery-results").innerHTML = `<p class="empty">Error: ${e}</p>`; }
   finally { btn.disabled = false; btn.textContent = "Find flights now"; }
 }

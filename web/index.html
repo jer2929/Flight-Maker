@@ -38,15 +38,18 @@
           <button type="button" class="seg-btn fr-btn" data-rules="ifr">IFR</button>
         </div>
       </div>
-      <details class="control threats">
-        <summary>This flight — extra threats</summary>
+      <div class="control threats">
+        <div class="threats-label">This flight — extra threats</div>
         <div id="threats-list"></div>
-      </details>
+      </div>
     </div>
   </section>
 
   <!-- Route tab -->
   <section id="tab-route" class="tab-pane">
+    <!-- Preflight self-assessment: hard personal limits, checked before anything else -->
+    <div id="route-self-check"></div>
+
     <div class="panel route-inputs">
       <div class="ac">
         <label>Departure</label>
@@ -66,13 +69,15 @@
     <div id="route-mitigation"></div>
     <div id="route-summary"></div>
     <div id="route-endpoints" class="results two-col"></div>
-    <div id="route-self-check"></div>
     <div id="route-windows"></div>
     <div id="route-timeline"></div>
   </section>
 
   <!-- Discovery tab -->
   <section id="tab-discovery" class="tab-pane hidden">
+    <!-- Preflight self-assessment: hard personal limits, checked before anything else -->
+    <div id="discovery-self-check"></div>
+
     <div class="panel">
       <div class="controls">
         <label class="control">Radius
@@ -131,7 +136,6 @@
       <button id="run-discovery" class="primary">Find flights now</button>
     </div>
     <div id="discovery-results" class="results"></div>
-    <div id="discovery-self-check"></div>
   </section>
 
   <footer>

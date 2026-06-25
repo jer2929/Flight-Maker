@@ -29,6 +29,7 @@ async def config():
         "max_radius_nm": s.max_radius_nm,
         "timeline_hours": s.timeline_hours,
         "major_threats": get_limits()["threat_stacking"]["major_threats"],
+        "hard_limits": get_limits()["hard_limits"],
     }
 
 

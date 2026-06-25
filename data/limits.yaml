@@ -14,7 +14,7 @@ hard_limits:
       night_circuit: 3000
       night_xc_cloud_base: 12000
     ifr:
-      day_xc: 1500         # personal minimum above published approach minimums
+      day_xc: 1500         # flat personal ceiling minimum (confirm it's >= published DA/MDA)
       night_xc: 1500
   visibility_sm:
     vfr:
