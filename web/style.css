@@ -201,6 +201,36 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 .links a { color: var(--accent); }
 .nogo-reasons li { color: #ffb4ab; }
 
+/* My Minimums configuration panel */
+details.mm-panel > summary {
+  cursor: pointer; list-style: none; font-size: 1rem; font-weight: 600;
+  padding: 2px 0;
+}
+details.mm-panel > summary::-webkit-details-marker { display: none; }
+details.mm-panel > summary::before { content: "▶ "; font-size: .75em; color: var(--muted); }
+details.mm-panel[open] > summary::before { content: "▼ "; }
+.mm-desc { margin: 10px 0 14px; }
+
+/* Self-assessment embedded under route / discovery results */
+.self-check-inline h3 { font-size: .95rem; margin: 0 0 10px; }
+.self-check-inline { margin-top: 0; }
+
+/* Threat mitigation reference block (shown when verdict = MITIGATE) */
+.mit-block h3 { margin: 0 0 12px; font-size: .95rem; }
+.mit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.mit-section { background: rgba(201,138,0,.08); border: 1px solid var(--mitigate); border-radius: 8px; padding: 10px 12px; }
+.mit-label { font-weight: 600; color: #f5c451; font-size: .85rem; margin-bottom: 6px; }
+.mit-list { margin: 0; padding-left: 16px; font-size: .83rem; color: var(--ink); }
+.mit-list li { margin: 3px 0; }
+
+/* Recency slider in My Minimums */
+.mm-recency { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.mm-recency-label { font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
+.mm-recency-row { display: flex; align-items: center; gap: 12px; }
+.mm-recency-row input[type=range] { width: 160px; }
+.mm-recency-row span { font-size: .9rem; font-weight: 600; min-width: 90px; }
+.mm-recency-hint { margin: 8px 0 0; }
+
 .hidden { display: none !important; }
 footer { max-width: 1000px; margin: 20px auto; padding: 0 20px 30px; color: var(--muted); font-size: .8rem; }
 .empty { color: var(--muted); padding: 14px; }

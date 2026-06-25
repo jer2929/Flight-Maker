@@ -8,15 +8,23 @@ hard_limits:
     gust_spread_max_kt: 10      # gust minus steady
     crosswind_max_kt: 9
   ceiling_agl_ft:
-    day_circuit: 2000
-    day_xc: 4000
-    night_circuit: 3000
-    night_xc_cloud_base: 12000
+    vfr:
+      day_circuit: 2000
+      day_xc: 4000
+      night_circuit: 3000
+      night_xc_cloud_base: 12000
+    ifr:
+      day_xc: 1500         # personal minimum above published approach minimums
+      night_xc: 1500
   visibility_sm:
-    day_circuit: 5
-    day_xc: 9
-    night_circuit: 6
-    night_xc: 9
+    vfr:
+      day_circuit: 5
+      day_xc: 9
+      night_circuit: 6
+      night_xc: 9
+    ifr:
+      day_xc: 3            # legal IFR minimum + personal margin
+      night_xc: 3
   weather_flags:                # any present in METAR/TAF -> NO-GO
     - convective_sigmet
     - thunderstorm            # TS

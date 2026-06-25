@@ -48,6 +48,12 @@ _SEVERITY = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
 _CFPS_SITE_URL = "https://plan.navcanada.ca/"
 
 
+def _rules_block(outer: dict, flight_rules: str) -> dict:
+    if "vfr" in outer:
+        return outer.get(flight_rules, outer["vfr"])
+    return outer
+
+
 def _worse_verdict(a: Verdict, b: Verdict) -> Verdict:
     return a if _SEVERITY[a] >= _SEVERITY[b] else b
 
@@ -218,6 +224,7 @@ def _assess_endpoint(
     airport: Airport, metar, taf, fc, notams, mode, manual_threats,
     distance_nm: float, bearing: float, alt: AltitudeRecommendation | None,
     history: list[str] | None = None, ensemble: dict | None = None,
+    flight_rules: str = "vfr",
 ) -> AirportAssessment:
     settings = get_settings()
     lat, lon = airport.lat, airport.lon
@@ -235,7 +242,7 @@ def _assess_endpoint(
     rw = _rw_with_mag(best_runway(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt), lat, lon)
     verdict, checks, tchecks, n = decision(
         weather, rw, mode, ap.is_complex_airspace(airport.ident), manual_threats,
-        ceiling_mode="endpoint")
+        ceiling_mode="endpoint", flight_rules=flight_rules)
     for c in checks:
         c.location = airport.ident
     if weather.source == Source.NONE:
@@ -351,7 +358,7 @@ def _worst_crosswind(dep_a: AirportAssessment, dest_a: AirportAssessment) -> Run
     return annotated
 
 
-def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str) -> list[LimitCheck]:
+def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flight_rules: str = "vfr") -> list[LimitCheck]:
     """Wind/ceiling/vis hard limits evaluated across departure, enroute samples,
     and destination — each row says WHERE the worst value is."""
     L = get_limits()["hard_limits"]
@@ -400,11 +407,9 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str) -> l
                                  actual_text=f"{val:.0f} kt on RWY {xw.runway_ident}",
                                  passed=val <= w["crosswind_max_kt"], location=xw.runway_ident))
 
-    # Ceiling — the XC hard limit is a CRUISE concern: evaluate ENROUTE only
-    # (rounded to 100 ft). Departure/destination ceilings are circuit ops and
-    # are surfaced as advisories below, never an automatic NO-GO.
-    c = L["ceiling_agl_ft"]
-    ceil_limit = c["night_xc_cloud_base"] if mode == "night" else c["day_xc"]
+    # Ceiling — use flight-rules-specific sub-block.
+    c_block = _rules_block(L["ceiling_agl_ft"], flight_rules)
+    ceil_limit = c_block.get("night_xc", c_block.get("night_xc_cloud_base", 12000)) if mode == "night" else c_block.get("day_xc", 4000)
     enroute_ceils = [(lbl, ce, src) for lbl, _w, _g, ce, _v, src in pts[1:-1] if ce is not None]
     if enroute_ceils:
         lbl, val, src = min(enroute_ceils, key=lambda t: t[1])
@@ -437,9 +442,9 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str) -> l
                                      actual_text=f"{cv:,} ft AGL — circuit OK, verify",
                                      passed=True, advisory=True, location=lbl, source=src))
 
-    # Visibility — worst (min) across points.
-    v = L["visibility_sm"]
-    vis_limit = v["night_xc"] if mode == "night" else v["day_xc"]
+    # Visibility — flight-rules-specific sub-block.
+    v_block = _rules_block(L["visibility_sm"], flight_rules)
+    vis_limit = v_block.get("night_xc", 9) if mode == "night" else v_block.get("day_xc", 9)
     vis_pts = [(lbl, vi, src) for lbl, _w, _g, _c2, vi, src in pts if vi is not None]
     if vis_pts:
         lbl, val, src = min(vis_pts, key=lambda t: t[1])
@@ -451,7 +456,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str) -> l
     return checks
 
 
-async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threats: list[str]) -> RouteAssessment | None:
+async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threats: list[str], flight_rules: str = "vfr") -> RouteAssessment | None:
     settings = get_settings()
     dep = ap.get_airport(dep_ident)
     dest = ap.get_airport(dest_ident)
@@ -500,8 +505,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         _ens_if_needed(metars.get(dep.ident), dep, days),
         _ens_if_needed(metars.get(dest.ident), dest, days),
     )
-    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens)
-    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens)
+    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens, flight_rules=flight_rules)
+    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens, flight_rules=flight_rules)
 
     # Nearest reporting station for an endpoint that has no METAR of its own.
     async def _attach_nearby(assessment, airport, cands):
@@ -565,10 +570,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         source=Source.NONE,
     )
     # Per-location conditions checks (says where each worst value is).
-    cond_checks = _route_conditions_checks(dep_a, dest_a, enroute, mode)
+    cond_checks = _route_conditions_checks(dep_a, dest_a, enroute, mode, flight_rules=flight_rules)
 
     # --- Weather-hazard section (the card's nine Weather items) ---
-    vis_limit = L["visibility_sm"]["night_xc" if mode == "night" else "day_xc"]
+    vis_limit = _rules_block(L["visibility_sm"], flight_rules).get("night_xc" if mode == "night" else "day_xc", 9)
     metar_taf_text = " ".join(filter(None, [
         dep_a.weather.raw_metar, dep_a.weather.raw_taf,
         dest_a.weather.raw_metar, dest_a.weather.raw_taf,
@@ -683,6 +688,7 @@ async def suggest(
     surface: str = "any", min_length_ft: float = 0.0, into_wind: bool = False,
     go_only: bool = False, max_time_min: float | None = None,
     max_crosswind: bool = False, min_width_ft: float = 0.0, sort: str = "verdict",
+    flight_rules: str = "vfr",
 ) -> list[AirportAssessment]:
     settings = get_settings()
     origin = ap.get_airport(settings.origin)
@@ -720,7 +726,7 @@ async def suggest(
         a = _assess_endpoint(
             airport, metars.get(airport.ident), tafs.get(airport.ident),
             fc_by_ident.get(airport.ident), notams, mode, manual_threats, dist, bearing, alt,
-            ensemble=ens_by_ident.get(airport.ident),
+            ensemble=ens_by_ident.get(airport.ident), flight_rules=flight_rules,
         )
         rw = a.best_runway
         if into_wind and (not rw or rw.headwind_kt < 0 or rw.crosswind_kt > xw_limit):

@@ -40,9 +40,17 @@ def _worse(a: Verdict, b: Verdict) -> Verdict:
     return a if _SEVERITY[a] >= _SEVERITY[b] else b
 
 
+def _rules_block(outer: dict, flight_rules: str) -> dict:
+    """Return vfr or ifr sub-dict, falling back to flat layout for backwards compat."""
+    if "vfr" in outer:
+        return outer.get(flight_rules, outer["vfr"])
+    return outer
+
+
 def conditions_checks(
     weather: WeatherSummary, best_runway: RunwayWind | None, mode: str,
     location: str | None = None, ceiling_mode: str = "xc",
+    flight_rules: str = "vfr",
 ) -> list[LimitCheck]:
     """Applicable wind / ceiling / visibility hard-limit rows (cross-country).
 
@@ -75,19 +83,21 @@ def conditions_checks(
         "crosswind", "Crosswind", w["crosswind_max_kt"], xw,
         unit="kt", source=src, actual_suffix=xw_label,
     ))
-    # Ceiling (min) — rounded to 100 ft; a METAR with no BKN/OVC = unlimited.
-    c = L["ceiling_agl_ft"]
-    ceil_limit = c["night_xc_cloud_base"] if mode == "night" else c["day_xc"]
+    # Ceiling — use the vfr or ifr sub-block from limits.yaml.
+    c_block = _rules_block(L["ceiling_agl_ft"], flight_rules)
+    ceil_limit = c_block.get("night_xc", c_block.get("night_xc_cloud_base", 12000)) if mode == "night" else c_block.get("day_xc", 4000)
     checks.append(_ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, src, ceiling_mode))
-    # Visibility (min)
-    v = L["visibility_sm"]
-    vis_limit = v["night_xc"] if mode == "night" else v["day_xc"]
+    # Visibility — vfr or ifr sub-block.
+    v_block = _rules_block(L["visibility_sm"], flight_rules)
+    vis_limit = v_block.get("night_xc", 9) if mode == "night" else v_block.get("day_xc", 9)
     checks.append(_min_check(
         "visibility", "Visibility (XC)", vis_limit, weather.visibility_sm,
         unit="SM", source=src,
     ))
-    # Hazardous weather flags (TS / freezing rain / icing / LLWS …) — any = NO-GO
+    # Hazardous weather flags — for IFR, widespread_ifr is expected and not a no-go.
     flags = set(L.get("weather_flags", []))
+    if flight_rules == "ifr":
+        flags.discard("widespread_ifr")
     present = [h for h in weather.hazards if h in flags]
     checks.append(LimitCheck(
         key="hazards", label="Hazardous weather", limit_text="none",
@@ -193,10 +203,11 @@ def decision(
     manual_threats: list[str] | None = None,
     extra_checks: list[LimitCheck] | None = None,
     ceiling_mode: str = "xc",
+    flight_rules: str = "vfr",
 ) -> tuple[Verdict, list[LimitCheck], list[ThreatCheck], int]:
     """Structured decision. ``extra_checks`` lets the route add weather-hazard
     rows (icing/turbulence/etc.) computed elsewhere."""
-    checks = conditions_checks(weather, best_runway, mode, ceiling_mode=ceiling_mode) + (extra_checks or [])
+    checks = conditions_checks(weather, best_runway, mode, ceiling_mode=ceiling_mode, flight_rules=flight_rules) + (extra_checks or [])
     present = derive_threats(weather, is_complex_airspace, manual_threats)
     tchecks = threat_check_list(present)
     count = len(present)
@@ -213,10 +224,11 @@ def evaluate(
     mode: str,
     is_complex_airspace: bool,
     manual_threats: list[str] | None = None,
+    flight_rules: str = "vfr",
 ) -> tuple[Verdict, list[str], int]:
     """Legacy tuple form used by the timeline: (verdict, reasons, count)."""
     verdict, checks, _t, count = decision(
-        weather, best_runway, mode, is_complex_airspace, manual_threats)
+        weather, best_runway, mode, is_complex_airspace, manual_threats, flight_rules=flight_rules)
     reasons = [f"{c.label} {c.actual_text} (limit {c.limit_text})"
                for c in checks if not c.passed and c.applicable]
     present = derive_threats(weather, is_complex_airspace, manual_threats)

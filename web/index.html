@@ -12,32 +12,12 @@
     <p id="dep-line">Loading…</p>
   </header>
 
-  <!-- Personal self-assessment: gates the whole session -->
-  <section class="panel" id="self-check">
-    <h2>Self-assessment <span class="hint">(decision card)</span></h2>
-    <div class="checks-grid">
-      <fieldset>
-        <legend>Pilot fitness — do not fly if any apply</legend>
-        <label><input type="checkbox" class="gate" /> Illness or feeling unwell</label>
-        <label><input type="checkbox" class="gate" /> Medication affecting alertness</label>
-        <label><input type="checkbox" class="gate" /> Alcohol within 12 hours</label>
-        <label><input type="checkbox" class="gate" /> Significant fatigue / poor sleep</label>
-        <label><input type="checkbox" class="gate" /> High stress or distraction</label>
-        <label><input type="checkbox" class="gate" /> Poor hydration / no food</label>
-      </fieldset>
-      <fieldset>
-        <legend>External pressure — pause &amp; reassess</legend>
-        <label><input type="checkbox" class="gate" /> Schedule pressure</label>
-        <label><input type="checkbox" class="gate" /> Other pilots flying</label>
-        <label><input type="checkbox" class="gate" /> Training pressure / behind</label>
-        <label><input type="checkbox" class="gate" /> Passengers waiting</label>
-      </fieldset>
-    </div>
-    <div id="gate-banner" class="banner hidden">
-      ⚠️ One or more personal factors checked — <strong>PAUSE and reassess.</strong>
-      Would you be comfortable explaining a GO decision to your instructor?
-    </div>
-  </section>
+  <!-- My Minimums: pilot configures which self-assessment items are active -->
+  <details class="panel mm-panel" id="my-minimums-panel">
+    <summary>My Minimums <span class="hint">— personal no-fly self-assessment items (click to configure)</span></summary>
+    <p class="mm-desc hint">Check the conditions you want included in your pre-flight self-assessment. Saved to your browser. Items appear under route and discovery results.</p>
+    <div class="checks-grid" id="my-minimums-body"></div>
+  </details>
 
   <section class="panel">
     <div class="tabs">
@@ -52,8 +32,14 @@
           <button type="button" class="seg-btn" data-mode="night">Night flight</button>
         </div>
       </div>
+      <div class="control">Flight rules
+        <div class="seg" id="fr-seg">
+          <button type="button" class="seg-btn fr-btn active" data-rules="vfr">VFR</button>
+          <button type="button" class="seg-btn fr-btn" data-rules="ifr">IFR</button>
+        </div>
+      </div>
       <details class="control threats">
-        <summary>Active threats</summary>
+        <summary>This flight — extra threats</summary>
         <div id="threats-list"></div>
       </details>
     </div>
@@ -77,8 +63,10 @@
 
     <div id="route-verdict"></div>
     <div id="route-checklist"></div>
+    <div id="route-mitigation"></div>
     <div id="route-summary"></div>
     <div id="route-endpoints" class="results two-col"></div>
+    <div id="route-self-check"></div>
     <div id="route-windows"></div>
     <div id="route-timeline"></div>
   </section>
@@ -143,6 +131,7 @@
       <button id="run-discovery" class="primary">Find flights now</button>
     </div>
     <div id="discovery-results" class="results"></div>
+    <div id="discovery-self-check"></div>
   </section>
 
   <footer>
