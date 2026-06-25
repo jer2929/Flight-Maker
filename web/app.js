@@ -7,9 +7,9 @@ let CONFIG = null;
 // ---------- Pilot profile (per-browser, persists across sessions) ----------
 const LS_KEY = "minima.profile.v1";
 const LEGACY_MIN_KEY = "minima.minimums.v1";
-// PROFILE: { base, minimums, standing[], conservatism }. minimums===null means
+// PROFILE: { base, minimums, conservatism }. minimums===null means
 // "using built-in defaults". Sent to the backend via prefs / base / threats.
-let PROFILE = { base: null, minimums: null, standing: [], conservatism: null };
+let PROFILE = { base: null, minimums: null, conservatism: null };
 
 // Editable numeric leaves: {group, key, id, label, unit, grp(container), min, max, step}.
 // group+key must match data/limits.yaml exactly so the backend merge accepts them.
@@ -97,7 +97,6 @@ function loadProfile() {
   PROFILE = {
     base: (p && p.base) || null,
     minimums: (p && p.minimums) || null,
-    standing: (p && Array.isArray(p.standing)) ? p.standing : [],
     conservatism: (p && p.conservatism) || null,
   };
 }
@@ -106,7 +105,6 @@ function saveProfile() {
   const out = {};
   if (PROFILE.base) out.base = PROFILE.base;
   if (PROFILE.minimums) out.minimums = PROFILE.minimums;
-  if (PROFILE.standing.length) out.standing = PROFILE.standing;
   if (PROFILE.conservatism && PROFILE.conservatism !== CONFIG.default_conservatism) out.conservatism = PROFILE.conservatism;
   if (Object.keys(out).length) localStorage.setItem(LS_KEY, JSON.stringify(out));
   else localStorage.removeItem(LS_KEY);
@@ -138,7 +136,6 @@ async function init() {
 
   loadProfile();
   renderExtraThreats();
-  buildStandingFactors();
   buildConservatism();
   renderMinSliders();
   renderRecencySlider();
@@ -146,6 +143,10 @@ async function init() {
   fillProfileForm();
   renderMinimums();
   renderMyMinimumsSettings();
+  // Preflight self-assessment is a standing pre-check shown above the route/discovery
+  // inputs — render it up front so it's done before any weather is pulled.
+  renderSelfAssessment("route-self-check");
+  renderSelfAssessment("discovery-self-check");
   $("#dep").value = baseIdent();
   wire();
 }
@@ -182,9 +183,9 @@ function switchTab(name) {
   $("#tab-settings").classList.toggle("hidden", name !== "settings");
 }
 
-// This flight's threats = saved standing factors + per-flight toggles + night.
+// This flight's threats = per-flight toggles + night.
 function threatsParam() {
-  const set = new Set(PROFILE.standing);
+  const set = new Set();
   $$(".threat").filter((c) => c.checked).forEach((c) => set.add(c.value));
   if (currentMode() === "night") set.add("night_operations");
   return [...set].join(",");
@@ -249,7 +250,9 @@ async function runRoute() {
 }
 
 function clearRoute() {
-  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-endpoints", "route-self-check", "route-windows", "route-timeline"]
+  // route-self-check is a standing pre-check rendered on load — never cleared here,
+  // so the pilot's ticked items survive a route assessment.
+  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-endpoints", "route-windows", "route-timeline"]
     .forEach((id) => ($("#" + id).innerHTML = ""));
 }
 
@@ -272,7 +275,6 @@ function renderRoute(r) {
 
   $("#route-summary").innerHTML += advisoriesBlock(r);
   $("#route-endpoints").innerHTML = endpointCard(r.departure, "Departure") + endpointCard(r.destination, "Destination");
-  renderSelfAssessment("route-self-check");
 
   if (r.best_windows.length) {
     $("#route-windows").innerHTML = `<div class="timeline-wrap"><h3>Best windows (next ${CONFIG.timeline_hours} h) — wind, ceiling &amp; visibility</h3>` +
@@ -459,7 +461,6 @@ async function runDiscovery() {
     const params = new URLSearchParams(p);
     const data = await fetch(`/api/suggest?${params}`).then((r) => r.json());
     $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
-    renderSelfAssessment("discovery-self-check");
   } catch (e) { $("#discovery-results").innerHTML = `<p class="empty">Error: ${e}</p>`; }
   finally { btn.disabled = false; btn.textContent = "Find flights now"; }
 }
@@ -504,21 +505,17 @@ function buildWxFlags() {
     .join("");
 }
 
-// Per-flight extra threats: terrain_critical always; single_pilot_ifr_no_autopilot only when IFR.
+// Per-flight extra threats (all kind:"per_flight" from the config), e.g.
+// terrain-critical and unfamiliar/complex airspace. single_pilot_ifr_no_autopilot
+// only applies when IFR is selected.
 function renderExtraThreats() {
   const ifr = currentFlightRules() === "ifr";
-  const items = ["terrain_critical"];
-  if (ifr) items.push("single_pilot_ifr_no_autopilot");
+  const items = threatsOfKind("per_flight")
+    .map((t) => t.key)
+    .filter((k) => ifr || k !== "single_pilot_ifr_no_autopilot");
   const wasChecked = new Set($$(".threat").filter((c) => c.checked).map((c) => c.value));
   $("#threats-list").innerHTML = items
     .map((t) => `<label><input type="checkbox" class="threat" value="${t}"${wasChecked.has(t) ? " checked" : ""}> ${threatLabel(t)}</label>`)
-    .join("");
-}
-
-// Standing factors saved in the profile, applied to every flight.
-function buildStandingFactors() {
-  $("#standing-factors").innerHTML = threatsOfKind("standing")
-    .map((t) => `<label class="control checkbox"><input type="checkbox" class="standing" value="${t.key}"> ${t.label}</label>`)
     .join("");
 }
 
@@ -580,8 +577,6 @@ function fillProfileForm() {
   }
   const active = new Set(eff.weather_flags);
   $$(".wxflag").forEach((c) => (c.checked = active.has(c.value)));
-  const standing = new Set(PROFILE.standing);
-  $$(".standing").forEach((c) => (c.checked = standing.has(c.value)));
 }
 
 function readProfileForm() {
@@ -607,7 +602,6 @@ function readProfileForm() {
   PROFILE = {
     base: base && base !== CONFIG.departure ? base : null,
     minimums: Object.keys(mins).length ? mins : null,
-    standing: $$(".standing").filter((c) => c.checked).map((c) => c.value),
     conservatism: preset,
   };
 }
@@ -622,7 +616,7 @@ function saveMinimums() {
 }
 
 function resetMinimums() {
-  PROFILE = { base: null, minimums: null, standing: [], conservatism: null };
+  PROFILE = { base: null, minimums: null, conservatism: null };
   localStorage.removeItem(LS_KEY);
   localStorage.removeItem(LEGACY_MIN_KEY);
   buildConservatism();
@@ -643,7 +637,7 @@ function flashStatus(msg) {
 // Read-only "at a glance" summary; flags anything changed from the default.
 function renderMinimums() {
   const eff = effectiveLimits(), d = CONFIG.default_limits;
-  const custom = !!(PROFILE.minimums || PROFILE.standing.length ||
+  const custom = !!(PROFILE.minimums ||
     (PROFILE.conservatism && PROFILE.conservatism !== CONFIG.default_conservatism) || PROFILE.base);
   const row = (label, cur, def, unit, diff) => `<div class="chk ${diff ? "custom" : "pass"}">
       <span class="mark">${diff ? "★" : "–"}</span>
@@ -661,15 +655,13 @@ function renderMinimums() {
   const off = d.weather_flags.filter((f) => !eff.weather_flags.includes(f));
   const flagsRow = row("Weather auto NO-GO", `${eff.weather_flags.length} of ${d.weather_flags.length} active`,
     off.length ? "removed: " + off.map(wxLabel).join(", ") : "all", "", off.length > 0);
-  const standRow = row("Standing factors", PROFILE.standing.length ? PROFILE.standing.map(threatLabel).join(", ") : "none",
-    "none", "", PROFILE.standing.length > 0);
   const curPreset = PROFILE.conservatism || CONFIG.default_conservatism;
   const presetLabel = (CONFIG.conservatism_presets.find((p) => p.key === curPreset) || {}).label || curPreset;
   const consRow = row("Conservatism", presetLabel, "Standard", "", curPreset !== CONFIG.default_conservatism);
   $("#minimums-readout").innerHTML =
     `<div class="min-banner ${custom ? "custom" : ""}">${custom
       ? "Using your saved profile (★ = changed from default)."
-      : "Using the built-in default profile."}</div>${baseRow}${minRows}${flagsRow}${standRow}${consRow}`;
+      : "Using the built-in default profile."}</div>${baseRow}${minRows}${flagsRow}${consRow}`;
 }
 
 // Self-assessment configurator (fitness/pressure items and recency, stored locally).
@@ -707,7 +699,7 @@ function renderSelfAssessment(containerId) {
   ).join("");
   const recencyGate = `<label><input type="checkbox" class="gate" data-banner="${bannerId}" /> Fewer than ${recMin} hours flown in last 30 days</label>`;
   container.innerHTML = `<div class="panel self-check-inline">
-    <h3>Self-assessment <span class="hint">(decision card)</span></h3>
+    <h3>Preflight self-assessment <span class="hint">(personal hard limits — check before pulling weather)</span></h3>
     <div class="checks-grid">
       ${activePF.length ? `<fieldset><legend>Pilot fitness — do not fly if any apply</legend>${gates(activePF)}${recencyGate}</fieldset>` : ""}
       ${activeEP.length ? `<fieldset><legend>External pressure — pause &amp; reassess</legend>${gates(activeEP)}</fieldset>` : ""}
