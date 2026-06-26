@@ -257,6 +257,21 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .set-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
 .set-status { color: #6ee7a0; font-size: .85rem; }
 
+/* VFR/IFR weather-minimums card — tabs stick out of the top of the bubble */
+.rule-card { margin-bottom: 16px; }
+.rule-tabs { display: flex; gap: 4px; padding-left: 10px; }
+.rule-tab {
+  background: var(--bg); color: var(--muted); cursor: pointer;
+  border: 1px solid var(--line); border-bottom: none;
+  border-radius: 8px 8px 0 0; padding: 7px 18px; font-size: .9rem; font-weight: 600;
+  position: relative; top: 1px;
+}
+.rule-tab.active { background: var(--panel); color: var(--ink); border-color: var(--accent); border-bottom: 1px solid var(--panel); }
+.rule-bubble { border: 1px solid var(--accent); border-radius: 0 10px 10px 10px; padding: 14px; background: var(--panel); }
+.rule-pane > .set-group:last-child { margin-bottom: 0; }
+.imc-opt { border-style: dashed; }
+.imc-opt label { color: var(--ink); font-weight: 600; }
+
 /* Home base picker */
 .base-pick { max-width: 300px; margin-bottom: 16px; }
 

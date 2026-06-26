@@ -185,3 +185,31 @@ def test_cautious_preset_single_serious_threat_is_nogo():
 def test_manual_threats_outside_known_set_ignored():
     present = derive_threats(calm_vfr(), False, manual_threats=["not_a_threat", "terrain_critical"])
     assert present == {"terrain_critical"}
+
+
+def imc_wx():
+    # Ceiling 600 ft AGL = IMC; calm otherwise so only the IMC logic is exercised.
+    return WeatherSummary(wind_dir_true=50, wind_kt=6, visibility_sm=6, ceiling_agl_ft=600)
+
+
+def test_imc_is_threat_under_vfr():
+    assert "actual_imc" in derive_threats(imc_wx(), False, flight_rules="vfr")
+
+
+def test_imc_not_a_threat_under_ifr_by_default():
+    assert "actual_imc" not in derive_threats(imc_wx(), False, flight_rules="ifr")
+
+
+def test_imc_is_threat_under_ifr_when_opted_in():
+    with limits_override({"imc_as_threat": True}):
+        assert "actual_imc" in derive_threats(imc_wx(), False, flight_rules="ifr")
+
+
+def test_imc_opt_in_plus_single_pilot_ifr_stacks_to_nogo():
+    # The single-engine / no-autopilot scenario: IMC + single-pilot IFR = 2 threats.
+    with limits_override({"imc_as_threat": True}):
+        present = derive_threats(imc_wx(), False,
+                                 manual_threats=["single_pilot_ifr_no_autopilot"],
+                                 flight_rules="ifr")
+        assert present == {"actual_imc", "single_pilot_ifr_no_autopilot"}
+        assert threat_verdict(len(present)) == Verdict.NOGO
