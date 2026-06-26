@@ -335,6 +335,116 @@ function drawGfa() {
   host.querySelectorAll(".gfa-frame").forEach((b) => b.addEventListener("click", () => { GFA.frame = +b.dataset.frame; drawGfa(); }));
 }
 
+// ---------- Radar (Environment Canada GeoMet WMS, animated) ----------
+const GEOMET_WMS = "https://geo.weather.gc.ca/geomet";
+const RADAR_LABELS = { RADAR_1KM_RRAI: "Rain", RADAR_1KM_RSNO: "Snow" };
+let RADAR = { map: null, wms: null, frames: [], idx: 0, layer: "RADAR_1KM_RRAI", timer: null };
+
+const radarFallback = () => `<div class="panel radar-panel"><h3>Radar</h3>
+  <p class="hint">Radar map couldn't load.
+  <a href="https://weather.gc.ca/radar/index_e.html" target="_blank" rel="noopener">Open Environment Canada radar ↗</a></p></div>`;
+
+function parseISODurationMin(s) {
+  const m = /^P(?:T)?(?:(\d+)H)?(?:(\d+)M)?/.exec(s || "");
+  return m ? (+(m[1] || 0)) * 60 + (+(m[2] || 0)) : 0;
+}
+function radarFrameTimes(caps) {
+  if (caps.times && caps.times.length) return caps.times;
+  const start = Date.parse(caps.start), end = Date.parse(caps.end);
+  const stepMin = parseISODurationMin(caps.interval) || 6;
+  if (isNaN(start) || isNaN(end)) return caps.default ? [caps.default] : [];
+  const out = [];
+  for (let t = start; t <= end && out.length < 40; t += stepMin * 60000) {
+    out.push(new Date(t).toISOString().replace(/\.\d+Z$/, "Z"));
+  }
+  return out.length ? out : (caps.default ? [caps.default] : []);
+}
+const radarTimeLabel = (iso) => {
+  const d = new Date(iso);
+  return isNaN(d) ? iso : `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}Z`;
+};
+
+function stopRadar() {
+  if (RADAR.timer) { clearInterval(RADAR.timer); RADAR.timer = null; }
+  const b = $("#radar-play"); if (b) b.textContent = "▶";
+}
+function destroyRadar() {
+  stopRadar();
+  if (RADAR.map) { try { RADAR.map.remove(); } catch (_) {} }
+  RADAR = { map: null, wms: null, frames: [], idx: 0, layer: RADAR.layer || "RADAR_1KM_RRAI", timer: null };
+}
+
+async function loadRadar(r) {
+  const host = $("#route-radar");
+  if (!host) return;
+  if (typeof L === "undefined") { host.innerHTML = radarFallback(); return; }
+  const dep = r.departure.airport, dest = r.destination.airport;
+  const midLat = (dep.lat + dest.lat) / 2, midLon = (dep.lon + dest.lon) / 2;
+  host.innerHTML = `<div class="panel radar-panel">
+    <div class="radar-head">
+      <h3>Radar <span class="hint">Environment Canada · last 3 h</span></h3>
+      <div class="radar-types">
+        ${Object.entries(RADAR_LABELS).map(([k, v]) =>
+          `<button class="radar-type ${k === RADAR.layer ? "active" : ""}" data-layer="${k}">${v}</button>`).join("")}
+      </div>
+    </div>
+    <div id="radar-map" class="radar-map"></div>
+    <div class="radar-controls">
+      <button id="radar-play" class="radar-play" title="Play / pause">▶</button>
+      <input type="range" id="radar-slider" min="0" max="0" value="0" />
+      <span id="radar-time" class="radar-time hint">—</span>
+    </div>
+  </div>`;
+  destroyRadar();
+  RADAR.map = L.map("radar-map", { scrollWheelZoom: false }).setView([midLat, midLon], 7);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { maxZoom: 11, attribution: "© OpenStreetMap" }).addTo(RADAR.map);
+  L.marker([dep.lat, dep.lon]).addTo(RADAR.map).bindTooltip(dep.ident, { permanent: false });
+  if (dest.ident !== dep.ident) L.marker([dest.lat, dest.lon]).addTo(RADAR.map).bindTooltip(dest.ident);
+  RADAR.wms = L.tileLayer.wms(GEOMET_WMS, {
+    layers: RADAR.layer, format: "image/png", transparent: true, version: "1.3.0", opacity: 0.7,
+  }).addTo(RADAR.map);
+  setTimeout(() => RADAR.map && RADAR.map.invalidateSize(), 150);
+
+  $$("#route-radar .radar-type").forEach((b) => b.addEventListener("click", () => {
+    RADAR.layer = b.dataset.layer;
+    $$("#route-radar .radar-type").forEach((x) => x.classList.toggle("active", x === b));
+    if (RADAR.wms) RADAR.wms.setParams({ layers: RADAR.layer });
+    loadRadarFrames();
+  }));
+  $("#radar-play").addEventListener("click", toggleRadarPlay);
+  $("#radar-slider").addEventListener("input", (e) => { stopRadar(); setRadarFrame(+e.target.value); });
+  await loadRadarFrames();
+}
+
+async function loadRadarFrames() {
+  try {
+    const caps = await fetch(`/api/radar_times?layer=${RADAR.layer}`).then((r) => r.json());
+    if (caps.error) throw new Error(caps.error);
+    RADAR.frames = radarFrameTimes(caps);
+  } catch (e) { RADAR.frames = []; }
+  const slider = $("#radar-slider");
+  if (!RADAR.frames.length) { if ($("#radar-time")) $("#radar-time").textContent = "no radar frames"; return; }
+  slider.max = String(RADAR.frames.length - 1);
+  setRadarFrame(RADAR.frames.length - 1); // newest first
+}
+
+function setRadarFrame(i) {
+  if (!RADAR.frames.length) return;
+  RADAR.idx = Math.max(0, Math.min(i, RADAR.frames.length - 1));
+  const t = RADAR.frames[RADAR.idx];
+  if (RADAR.wms) RADAR.wms.setParams({ time: t });
+  const slider = $("#radar-slider"); if (slider) slider.value = String(RADAR.idx);
+  const lbl = $("#radar-time"); if (lbl) lbl.textContent = radarTimeLabel(t);
+}
+
+function toggleRadarPlay() {
+  if (RADAR.timer) { stopRadar(); return; }
+  if (RADAR.frames.length < 2) return;
+  $("#radar-play").textContent = "⏸";
+  RADAR.timer = setInterval(() => setRadarFrame((RADAR.idx + 1) % RADAR.frames.length), 700);
+}
+
 // ---------- Route ----------
 async function runRoute() {
   const dep = $("#dep").value.trim().toUpperCase(), dest = $("#dest").value.trim().toUpperCase();
@@ -356,7 +466,8 @@ async function runRoute() {
 function clearRoute() {
   // route-self-check is a standing pre-check rendered on load — never cleared here,
   // so the pilot's ticked items survive a route assessment.
-  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-gfa", "route-endpoints", "route-windows", "route-timeline"]
+  if (typeof destroyRadar === "function") destroyRadar();  // tear down any live Leaflet map
+  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-gfa", "route-radar", "route-endpoints", "route-windows", "route-timeline"]
     .forEach((id) => ($("#" + id).innerHTML = ""));
 }
 
@@ -379,6 +490,7 @@ function renderRoute(r) {
 
   $("#route-summary").innerHTML += advisoriesBlock(r);
   $("#route-endpoints").innerHTML = endpointCard(r.departure, "Departure") + endpointCard(r.destination, "Destination");
+  loadRadar(r);
 
   if (r.best_windows.length) {
     $("#route-windows").innerHTML = `<div class="timeline-wrap"><h3>Best windows (next ${CONFIG.timeline_hours} h) — wind, ceiling &amp; visibility</h3>` +

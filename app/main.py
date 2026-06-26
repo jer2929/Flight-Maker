@@ -119,6 +119,22 @@ async def gfa(
     return JSONResponse(result)
 
 
+@app.get("/api/radar_times")
+async def radar_times(layer: str = Query(default="RADAR_1KM_RRAI")):
+    """Animation time extent for a GeoMet radar layer (start/end/interval).
+
+    The browser draws the radar tiles directly from GeoMet; this only supplies
+    the time dimension so the frontend can build the animation frames."""
+    from app.sources import geomet
+    try:
+        result = await geomet.radar_times(layer)
+    except Exception as e:
+        return JSONResponse({"error": str(e)})
+    if not result:
+        return JSONResponse({"error": "no time dimension"})
+    return JSONResponse(result)
+
+
 @app.get("/api/suggest")
 async def suggest(
     radius: float = Query(default=None, ge=1, le=500),
