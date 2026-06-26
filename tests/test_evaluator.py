@@ -246,32 +246,44 @@ def test_notam_validity_prefers_api_fields():
     assert v["end"] == "2026-07-22T23:59:00Z"
 
 
-# ---- GFA parser (clouds/weather + icing/turbulence frames) ----
+# ---- GFA parser (real CFPS wxrecall shape: image item -> text JSON) ----
+import json as _json
 from app.sources.cfps import _gfa_parse, GFA_IMAGE_URL
 
 
-def test_gfa_parse_groups_by_subproduct():
-    # Synthetic CFPS GFA payload: two sub-products, each with frames -> images.
-    import json as _json
-    data = [{
-        "location": "GFACN33",
-        "text": _json.dumps({"frame_lists": [
-            {"sv": "CLDWX", "frames": [
-                {"validity": "2026-06-26T18:00:00Z", "images": [{"id": 111}]},
-                {"validity": "2026-06-27T00:00:00Z", "images": [{"id": 222}]},
-            ]},
-            {"sv": "TURBC", "frames": [
-                {"validity": "2026-06-26T18:00:00Z", "images": [{"id": 333}]},
-            ]},
-        ]}),
-    }]
-    out = _gfa_parse(data)
+def _gfa_item(sub, frame_lists):
+    return {"type": "image", "location": f"GFA/{sub}/GFACN33/",
+            "text": _json.dumps({"product": "GFA", "sub_product": sub,
+                                 "geography": "GFACN33", "frame_lists": frame_lists})}
+
+
+# Two issuances; the parser must keep the LATEST (sv 18:00) and emit its panels.
+_CLDWX = _gfa_item("CLDWX", [
+    {"id": 1, "sv": "2026-06-26T12:00:00", "frames": [
+        {"sv": "2026-06-26T12:00:00", "ev": "2026-06-26T18:00:00", "images": [{"id": 900, "created": "x"}]}]},
+    {"id": 2, "sv": "2026-06-26T18:00:00", "frames": [
+        {"sv": "2026-06-26T18:00:00", "ev": "2026-06-27T00:00:00", "images": [{"id": 111, "created": "c1"}]},
+        {"sv": "2026-06-27T00:00:00", "ev": "2026-06-27T06:00:00", "images": [{"id": 112, "created": "c2"}]}]},
+])
+_TURBC = _gfa_item("TURBC", [
+    {"id": 3, "sv": "2026-06-26T18:00:00", "frames": [
+        {"sv": "2026-06-26T18:00:00", "ev": "2026-06-27T00:00:00", "images": [{"id": 333}]}]},
+])
+
+
+def test_gfa_parse_real_shape_latest_issuance_grouped():
+    out = _gfa_parse([_TURBC, _CLDWX, {"type": "metar", "text": "METAR ..."}])
     assert set(out) == {"CLDWX", "TURBC"}
-    assert len(out["CLDWX"]) == 2 and len(out["TURBC"]) == 1
+    # latest CLDWX issuance (sv 18:00) has 2 panels; the 12:00 issuance is dropped
+    assert [f["id"] for f in out["CLDWX"]] == [111, 112]
     assert out["CLDWX"][0]["url"] == GFA_IMAGE_URL.format(id=111)
-    assert out["TURBC"][0]["validity"] == "2026-06-26T18:00:00Z"
+    # NAV CANADA stamps are UTC-but-unmarked -> validity carries a Z
+    assert out["CLDWX"][0]["validity"] == "2026-06-26T18:00:00Z"
+    assert out["TURBC"][0]["id"] == 333
 
 
 def test_gfa_parse_handles_unexpected_shape():
-    # No frame_lists / unparseable -> empty dict, never raises.
-    assert _gfa_parse([{"text": "not json"}, {"text": {"foo": "bar"}}]) == {}
+    # Non-image / unparseable / missing frame_lists -> empty dict, never raises.
+    assert _gfa_parse([{"type": "image", "text": "not json"},
+                       {"type": "metar", "text": "x"},
+                       {"type": "image", "text": _json.dumps({"sub_product": "CLDWX"})}]) == {}
