@@ -513,7 +513,10 @@ const threatsOfKind = (kind) => threatMeta().filter((t) => t.kind === kind);
 const threatLabel = (key) => (threatMeta().find((t) => t.key === key) || {}).label || labelOf(key);
 
 function buildWxFlags() {
+  // widespread_ifr ("Widespread IMC") only gates VFR, so it has its own checkbox
+  // on the VFR tab; keep it out of this shared (both-rules) hazard list.
   $("#wxflags").innerHTML = (CONFIG.weather_flag_options || [])
+    .filter((f) => f !== "widespread_ifr")
     .map((f) => `<label class="control checkbox"><input type="checkbox" class="wxflag" value="${f}"> ${wxLabel(f)}</label>`)
     .join("");
 }
