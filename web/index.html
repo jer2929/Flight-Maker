@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Minima</title>
-  <link rel="stylesheet" href="/style.css?v=20260625b" />
+  <link rel="stylesheet" href="/style.css?v=20260626" />
 </head>
 <body>
   <header>
@@ -33,7 +33,7 @@
       <button class="tab" data-tab="discovery">Discovery</button>
     </div>
 
-    <div class="controls">
+    <div class="controls" id="flight-controls">
       <div class="control">Time of day
         <div class="seg" id="mode-seg">
           <button type="button" class="seg-btn active" data-mode="day">Day flight</button>
@@ -183,6 +183,7 @@
           </div>
           <div class="rule-bubble">
             <div class="rule-pane" data-rule="vfr">
+              <p class="set-hint rule-intro">Checked at both your departure and destination — the app flags whichever is worse.</p>
               <fieldset class="set-group">
                 <legend>VFR ceiling (ft AGL) — minimum</legend>
                 <div id="grp-ceiling" class="controls slider-grid"></div>
@@ -191,22 +192,27 @@
                 <legend>VFR visibility (SM) — minimum</legend>
                 <div id="grp-vis" class="controls slider-grid"></div>
               </fieldset>
+              <fieldset class="set-group">
+                <legend>Widespread IMC</legend>
+                <label class="control checkbox"><input type="checkbox" class="wxflag" value="widespread_ifr" id="set-vfr-widespread" /> Automatic NO-GO when widespread IMC on the route</label>
+                <p class="set-hint">Most of the route in cloud / low visibility — not legal VFR. Leave checked unless you know why.</p>
+              </fieldset>
             </div>
             <div class="rule-pane hidden" data-rule="ifr">
+              <p class="set-hint rule-intro">Checked at both your departure and destination — the app flags whichever is worse. Your personal minimums can be higher than the published takeoff/approach minimums (e.g. require 2 SM even where a ½ SM takeoff is legal).</p>
               <fieldset class="set-group">
                 <legend>IFR ceiling (ft AGL) — minimum</legend>
-                <p class="set-hint">The lowest ceiling you'll accept at the destination on an IFR flight. This is a flat personal floor — always confirm it's at or above the published approach minimums (DA/MDA) for the specific approach you'll fly.</p>
+                <p class="set-hint">A flat personal floor — set it at or above the published approach minimums (DA/MDA) you'll actually fly.</p>
                 <div id="grp-ifr-ceiling" class="controls slider-grid"></div>
               </fieldset>
               <fieldset class="set-group">
                 <legend>IFR visibility (SM) — minimum</legend>
-                <p class="set-hint">The lowest visibility you'll accept at the destination. Confirm it meets or exceeds the published minimum for your approach.</p>
                 <div id="grp-ifr-vis" class="controls slider-grid"></div>
               </fieldset>
               <fieldset class="set-group imc-opt">
                 <legend>Hard IMC</legend>
-                <label class="control checkbox"><input type="checkbox" id="set-imc-threat" /> Count widespread IMC as a threat</label>
-                <p class="set-hint">For pilots who'd rather not be in sustained hard IMC — e.g. single-engine or no autopilot. Adds IMC to the threat stack (combine with the per-flight "single-pilot IFR" threat for an automatic no-go solo). Off = IFR flights aren't penalised for being in cloud.</p>
+                <label class="control checkbox"><input type="checkbox" id="set-imc-threat" /> Count hard IMC as a threat</label>
+                <p class="set-hint">For pilots who'd rather not be in sustained hard IMC.</p>
               </fieldset>
             </div>
           </div>
@@ -225,7 +231,6 @@
 
         <fieldset class="set-group">
           <legend>How conservative?</legend>
-          <p class="set-hint">Sets how readily stacked threats escalate the verdict.</p>
           <div id="conservatism" class="controls"></div>
         </fieldset>
 
@@ -246,6 +251,6 @@
        Forecasts are not observations — <strong>always confirm with an official NAV CANADA briefing before flight.</strong></p>
   </footer>
 
-  <script src="/app.js?v=20260625b"></script>
+  <script src="/app.js?v=20260626"></script>
 </body>
 </html>
