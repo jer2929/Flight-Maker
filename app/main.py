@@ -99,21 +99,17 @@ async def gfa(
     dest: str = Query(default=None),
     debug: int = Query(default=0),
 ):
-    """GFA (clouds/weather + icing/turbulence) image frames near the route.
+    """GFA (clouds/weather + icing/turbulence) image frames for the departure's
+    GFA region. ``debug=1`` includes the raw CFPS payload for diagnosis.
 
-    Uses the route midpoint when a destination is given. ``debug=1`` includes
-    the raw CFPS payload to help diagnose any field-shape mismatch."""
+    The GFA region spans a wide area, so the departure aerodrome is sufficient;
+    ``dest`` is accepted for API symmetry but not required."""
     a = ap.get_airport(dep)
     if a is None:
         return JSONResponse({"error": "unknown departure", "products": {}}, status_code=404)
-    point = (a.lat, a.lon)
-    if dest:
-        b = ap.get_airport(dest)
-        if b is not None:
-            point = ((a.lat + b.lat) / 2.0, (a.lon + b.lon) / 2.0)
     from app.sources import cfps
     try:
-        result = await cfps.gfa(point, debug=bool(debug))
+        result = await cfps.gfa(a.ident, debug=bool(debug))
     except Exception as e:  # network/shape issues degrade to an empty panel
         return JSONResponse({"error": str(e), "products": {}})
     return JSONResponse(result)

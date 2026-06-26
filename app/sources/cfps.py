@@ -230,37 +230,25 @@ GFA_IMAGE_URL = "https://plan.navcanada.ca/weather/images/{id}.image"
 GFA_SUBS = ("CLDWX", "TURBC")
 
 
+def _iso_z(s):
+    """NAV CANADA validity stamps are UTC but unmarked — append Z for JS Date()."""
+    if not isinstance(s, str) or not s:
+        return s
+    return s if s.endswith("Z") else (s + "Z" if "T" in s else s)
+
+
 def _gfa_parse(data: list[dict]) -> dict[str, list[dict]]:
-    """Group GFA image frames by sub-product (CLDWX / TURBC).
+    """Group the latest GFA panels by sub-product (CLDWX / TURBC).
 
-    The CFPS GFA item carries a JSON ``text`` payload with ``frame_lists`` →
-    ``frames`` → ``images`` (each with an ``id``). We walk that defensively
-    (field names vary), and fall back to a recursive scan for any ``images``
-    arrays so a shape change degrades rather than breaks. Returns
-    ``{sub: [{id, url, validity, created}]}``."""
+    Each ``type:"image"`` item's ``text`` is a JSON string:
+    ``{sub_product, geography, frame_lists:[{sv, frames:[{sv, ev, images:[{id}]}]}]}``.
+    ``frame_lists`` are successive 6-hourly issuances; we keep the latest (max
+    ``sv``) and emit its panels. Returns ``{sub: [{id, url, validity, valid_end,
+    created}]}``; an unexpected shape yields ``{}`` (never raises)."""
     products: dict[str, list[dict]] = {}
-
-    def add(sub: str, image_id, validity=None, created=None):
-        if image_id is None:
-            return
-        products.setdefault((sub or "GFA").upper(), []).append({
-            "id": image_id, "url": GFA_IMAGE_URL.format(id=image_id),
-            "validity": validity, "created": created,
-        })
-
-    def walk_frames(sub, frames):
-        for fr in frames or []:
-            val = fr.get("validity") or fr.get("validTime") or fr.get("sv")
-            created = fr.get("created") or fr.get("issued")
-            imgs = fr.get("images") or []
-            if imgs:
-                for im in imgs:
-                    add(sub, im.get("id"), im.get("validity") or val, im.get("created") or created)
-            else:
-                add(sub, fr.get("id") or fr.get("image"), val, created)
-
     for item in data:
-        sub_hint = item.get("sub") or item.get("product") or item.get("sv") or ""
+        if item.get("type") != "image":
+            continue
         txt = item.get("text")
         obj = txt if isinstance(txt, dict) else None
         if obj is None and isinstance(txt, str) and txt.strip().startswith("{"):
@@ -268,31 +256,60 @@ def _gfa_parse(data: list[dict]) -> dict[str, list[dict]]:
                 obj = json.loads(txt)
             except Exception:
                 obj = None
-        if isinstance(obj, dict):
-            for fl in obj.get("frame_lists", []) or []:
-                walk_frames(fl.get("sv") or fl.get("sub") or sub_hint, fl.get("frames"))
-            if not any(products.values()):
-                walk_frames(sub_hint, obj.get("frames"))
+        if not isinstance(obj, dict):
+            continue
+        sub = (obj.get("sub_product") or "").upper()
+        frame_lists = obj.get("frame_lists") or []
+        if not sub or not frame_lists:
+            continue
+        latest = max(frame_lists, key=lambda fl: fl.get("sv") or "")
+        frames_out: list[dict] = []
+        for fr in latest.get("frames") or []:
+            imgs = fr.get("images") or []
+            image_id = imgs[0].get("id") if imgs else None
+            if image_id is None:
+                continue
+            frames_out.append({
+                "id": image_id,
+                "url": GFA_IMAGE_URL.format(id=image_id),
+                "validity": _iso_z(fr.get("sv")),
+                "valid_end": _iso_z(fr.get("ev")),
+                "created": (imgs[0].get("created")),
+            })
+        if frames_out:
+            products[sub] = frames_out
     return products
 
 
-async def gfa(point: tuple[float, float], debug: bool = False) -> dict:
-    """Fetch the Graphical Area Forecast for a point: clouds/weather + icing/turb
-    image frames. Image URLs are loaded directly by the browser (no CORS issue)."""
+async def gfa(site: str, debug: bool = False) -> dict:
+    """Fetch the Graphical Area Forecast (clouds/weather + icing/turbulence) for
+    an aerodrome. GFA is requested via the ``image=GFA/<SUB>`` params with a
+    ``site`` ident; the chart images are then loaded directly by the browser."""
     settings = get_settings()
-    key = f"cfps:gfa:{round(point[0], 2)},{round(point[1], 2)}"
+    site = site.upper()
+    key = f"cfps:gfa:{site}"
     if not debug:
         cached = cache.get(key)
         if cached is not None:
             return cached
-    params = [("alpha", "gfa"), ("point", f"{point[0]},{point[1]}")]
+    params = [("site", site), ("image", "GFA/CLDWX"), ("image", "GFA/TURBC")]
     async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
         resp = await client.get(settings.cfps_base, params=params)
         resp.raise_for_status()
         raw = resp.json()
     data = raw.get("data", []) if isinstance(raw, dict) else []
-    region = next((it.get("location") or it.get("geography") for it in data
-                   if it.get("location") or it.get("geography")), None)
+    region = None
+    for it in data:
+        if it.get("type") != "image":
+            continue
+        txt = it.get("text")
+        try:
+            obj = txt if isinstance(txt, dict) else json.loads(txt)
+            region = obj.get("geography") or region
+        except Exception:
+            pass
+        if region:
+            break
     result = {"region": region, "products": _gfa_parse(data)}
     if not debug:
         cache.put(key, result, settings.cfps_cache_ttl)
