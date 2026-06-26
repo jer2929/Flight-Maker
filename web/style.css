@@ -117,6 +117,14 @@ select, input[type=text], .route-inputs input {
 .notam { font-size: .8rem; color: var(--ink); background: rgba(255,255,255,.03);
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 .notam a { color: var(--accent); font-weight: 700; margin-right: 6px; white-space: nowrap; }
+.notam-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.notam-text { white-space: pre-wrap; }
+.notam-status { font-size: .68rem; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+  text-transform: uppercase; letter-spacing: .03em; }
+.notam-status.active { background: rgba(46,160,67,.18); color: #6ee7a0; border: 1px solid #2ea043; }
+.notam-status.upcoming { background: rgba(201,138,0,.15); color: #f5c451; border: 1px solid #c98a00; }
+.notam-status.expired { background: rgba(139,152,165,.12); color: var(--muted); border: 1px solid var(--line); }
+.notam-when { font-size: .72rem; color: var(--muted); }
 
 /* source chips */
 .src { font-size: .68rem; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); }
@@ -291,12 +299,14 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .chk.custom { border-left-color: var(--mitigate); background: rgba(201,138,0,.06); }
 .chk.custom .mark { color: #f5c451; }
 
-/* Conservatism presets — one inline row of chips */
-#conservatism { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; }
+/* Conservatism presets — one inline row of chips + a single description line */
+#conservatism { display: flex; flex-direction: column; gap: 8px; }
+.preset-row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; }
 .preset { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 8px 12px;
   border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-size: .88rem; }
 .preset:has(input:checked) { border-color: var(--accent); background: rgba(59,130,246,.1); }
 .preset input { margin: 0; }
+.preset-desc { margin: 0; }
 
 /* My Minimums panel as a div (not details) */
 .mm-panel { margin-top: 16px; }

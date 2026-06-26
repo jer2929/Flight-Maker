@@ -122,15 +122,66 @@ def _notam_text(item: dict) -> str:
     return str(raw) if raw is not None else ""
 
 
+def _yymmddhhmm_to_iso(s: str) -> str | None:
+    """ICAO ``YYMMDDHHMM`` validity stamp -> ISO8601 Z (assumes 21st century)."""
+    if not (s and len(s) == 10 and s.isdigit()):
+        return None
+    mm, dd, hh, mi = int(s[2:4]), int(s[4:6]), int(s[6:8]), int(s[8:10])
+    if not (1 <= mm <= 12 and 1 <= dd <= 31 and hh <= 23 and mi <= 59):
+        return None
+    return f"20{s[0:2]}-{s[2:4]}-{s[4:6]}T{s[6:8]}:{s[8:10]}:00Z"
+
+
+def _normalize_validity(v) -> str | None:
+    """Accept a CFPS validity field as either ``YYMMDDHHMM`` or ISO; -> ISO8601 Z."""
+    if not isinstance(v, str) or not v.strip():
+        return None
+    s = v.strip()
+    if re.fullmatch(r"\d{10}", s):
+        return _yymmddhhmm_to_iso(s)
+    if re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", s):
+        return s if s.endswith("Z") else s.split("+")[0] + "Z"
+    return None
+
+
+def _notam_validity(item: dict, text: str) -> dict:
+    """Best-effort effective-from / effective-until for a NOTAM.
+
+    Prefers the API's ``startValidity``/``endValidity`` fields, falling back to
+    the ICAO ``B)`` / ``C)`` lines in the raw text. ``C) PERM`` (or a bare PERM)
+    means permanent; an ``EST`` after ``C)`` means the end time is an estimate."""
+    start = _normalize_validity(item.get("startValidity"))
+    end = _normalize_validity(item.get("endValidity"))
+    estimated = False
+    permanent = False
+    if start is None:
+        m = re.search(r"\bB\)\s*(\d{10})", text)
+        if m:
+            start = _yymmddhhmm_to_iso(m.group(1))
+    mc = re.search(r"\bC\)\s*(PERM|\d{10})", text)
+    if mc:
+        if mc.group(1) == "PERM":
+            permanent = True
+        elif end is None:
+            end = _yymmddhhmm_to_iso(mc.group(1))
+        if "EST" in text[mc.end():mc.end() + 6]:
+            estimated = True
+    if end is None and not permanent and re.search(r"\bPERM\b", text):
+        permanent = True
+    return {"start": start, "end": end, "estimated": estimated, "permanent": permanent}
+
+
 async def notams(sites: list[str]) -> dict[str, list[dict]]:
-    """Per-site NOTAMs as ``{number, text}`` dicts."""
+    """Per-site NOTAMs as ``{number, text, start, end, estimated, permanent}`` dicts."""
     out: dict[str, list[dict]] = {s.upper(): [] for s in sites}
     for item in await _fetch("notam", sites):
         loc = _location(item)
         if loc in out:
             text = _notam_text(item)
             num = _NOTAM_NUM.search(text)
-            out[loc].append({"number": num.group(1) if num else None, "text": text})
+            entry = {"number": num.group(1) if num else None, "text": text}
+            entry.update(_notam_validity(item, text))
+            out[loc].append(entry)
     return out
 
 

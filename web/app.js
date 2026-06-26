@@ -406,9 +406,37 @@ function notamToggle(a) {
   if (!a.notam_count) return `<span>📋 0 NOTAM</span>`;
   return `<span class="notam-btn" onclick="toggleNotams('${a.airport.ident}')">📋 ${a.notam_count} NOTAM ▾</span>`;
 }
+// Plain-language NOTAM timing: a colour-coded status + a one-line "when".
+// Green = active now, amber = upcoming, grey = expired. Null when we can't
+// parse any validity (so we don't mislabel it).
+function notamMeta(n) {
+  const start = n.start ? Date.parse(n.start) : null;
+  const end = n.end ? Date.parse(n.end) : null;
+  if (start === null && end === null && !n.permanent) return null;
+  const now = Date.now();
+  const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const p = (x) => String(x).padStart(2, "0");
+  const fmt = (ms) => { const d = new Date(ms);
+    return `${d.getUTCDate()} ${mon[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}Z`; };
+  if (start !== null && now < start)
+    return { cls: "upcoming", label: "Upcoming", when: `Starts ${fmt(start)}` };
+  if (end !== null && now > end)
+    return { cls: "expired", label: "Expired", when: `Ended ${fmt(end)}` };
+  if (n.permanent || end === null)
+    return { cls: "active", label: "Active", when: "Permanent" };
+  return { cls: "active", label: "Active", when: `Ends ${fmt(end)}${n.estimated ? " (est.)" : ""}` };
+}
 function notamItems(a) {
-  return (a.notams || []).map((n) =>
-    `<div class="notam"><a href="${n.url || "https://plan.navcanada.ca/"}" target="_blank" rel="noopener">${n.number || "NOTAM"} ↗</a> ${escapeHtml(n.text)}</div>`).join("");
+  return (a.notams || []).map((n) => {
+    const m = notamMeta(n);
+    const head = m
+      ? `<span class="notam-status ${m.cls}">${m.label}</span><span class="notam-when">${m.when}</span>`
+      : "";
+    return `<div class="notam">
+      <div class="notam-head"><a href="${n.url || "https://plan.navcanada.ca/"}" target="_blank" rel="noopener">${n.number || "NOTAM"} ↗</a>${head}</div>
+      <div class="notam-text">${escapeHtml(n.text)}</div>
+    </div>`;
+  }).join("");
 }
 window.toggleNotams = (id) => $("#notams-" + id).classList.toggle("hidden");
 
@@ -513,10 +541,7 @@ const threatsOfKind = (kind) => threatMeta().filter((t) => t.kind === kind);
 const threatLabel = (key) => (threatMeta().find((t) => t.key === key) || {}).label || labelOf(key);
 
 function buildWxFlags() {
-  // widespread_ifr ("Widespread IMC") only gates VFR, so it has its own checkbox
-  // on the VFR tab; keep it out of this shared (both-rules) hazard list.
   $("#wxflags").innerHTML = (CONFIG.weather_flag_options || [])
-    .filter((f) => f !== "widespread_ifr")
     .map((f) => `<label class="control checkbox"><input type="checkbox" class="wxflag" value="${f}"> ${wxLabel(f)}</label>`)
     .join("");
 }
@@ -537,9 +562,18 @@ function renderExtraThreats() {
 
 function buildConservatism() {
   const cur = PROFILE.conservatism || CONFIG.default_conservatism;
-  $("#conservatism").innerHTML = (CONFIG.conservatism_presets || [])
-    .map((p) => `<label class="preset" title="${escapeHtml(p.description)}"><input type="radio" name="conservatism" value="${p.key}" ${p.key === cur ? "checked" : ""}> ${p.label}</label>`)
-    .join("");
+  const presets = CONFIG.conservatism_presets || [];
+  $("#conservatism").innerHTML =
+    `<div class="preset-row">` +
+    presets.map((p) => `<label class="preset"><input type="radio" name="conservatism" value="${p.key}" ${p.key === cur ? "checked" : ""}> ${p.label}</label>`).join("") +
+    `</div><p class="preset-desc hint" id="conservatism-desc"></p>`;
+  const updateDesc = () => {
+    const sel = ($$('input[name="conservatism"]').find((r) => r.checked) || {}).value || cur;
+    const desc = (presets.find((p) => p.key === sel) || {}).description || "";
+    $("#conservatism-desc").textContent = desc;
+  };
+  $$('input[name="conservatism"]').forEach((r) => r.addEventListener("change", updateDesc));
+  updateDesc();
 }
 
 // Build a labelled slider per minimum, with a live value readout.
