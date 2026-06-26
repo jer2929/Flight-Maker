@@ -291,12 +291,12 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .chk.custom { border-left-color: var(--mitigate); background: rgba(201,138,0,.06); }
 .chk.custom .mark { color: #f5c451; }
 
-/* Conservatism presets */
-.preset { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; margin: 4px 0;
-  border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+/* Conservatism presets — one inline row of chips */
+#conservatism { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; }
+.preset { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-size: .88rem; }
 .preset:has(input:checked) { border-color: var(--accent); background: rgba(59,130,246,.1); }
-.preset input { margin-right: 6px; }
-.preset-desc { font-size: .78rem; color: var(--muted); margin-left: 22px; }
+.preset input { margin: 0; }
 
 /* My Minimums panel as a div (not details) */
 .mm-panel { margin-top: 16px; }

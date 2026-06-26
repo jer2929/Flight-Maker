@@ -149,6 +149,9 @@ async function init() {
   renderSelfAssessment("discovery-self-check");
   $("#dep").value = baseIdent();
   wire();
+  // Apply the initially-active tab so the per-flight controls start hidden on
+  // the default My Minimums tab.
+  switchTab(($$(".tab.active")[0] || {}).dataset?.tab || "settings");
 }
 
 const baseIdent = () => PROFILE.base || CONFIG.departure;
@@ -187,6 +190,9 @@ function switchTab(name) {
   $("#tab-route").classList.toggle("hidden", name !== "route");
   $("#tab-discovery").classList.toggle("hidden", name !== "discovery");
   $("#tab-settings").classList.toggle("hidden", name !== "settings");
+  // The per-flight controls (time of day, flight rules, extra threats) are
+  // meaningless on the My Minimums tab — hide them there.
+  $("#flight-controls").classList.toggle("hidden", name === "settings");
 }
 
 // This flight's threats = per-flight toggles + night.
@@ -499,7 +505,7 @@ const WX_LABELS = {
   convective_sigmet: "Convective SIGMET", thunderstorm: "Thunderstorm (TS)",
   embedded_thunderstorm: "Embedded TS", freezing_rain: "Freezing rain (FZRA)",
   forecast_icing: "Forecast icing", moderate_turbulence_low: "Mod. turbulence < 3000 ft",
-  low_level_wind_shear: "Low-level wind shear", widespread_ifr: "Widespread IFR",
+  low_level_wind_shear: "Low-level wind shear", widespread_ifr: "Widespread IMC",
 };
 const wxLabel = (f) => WX_LABELS[f] || labelOf(f);
 const threatMeta = () => CONFIG.threats || [];
@@ -529,7 +535,7 @@ function renderExtraThreats() {
 function buildConservatism() {
   const cur = PROFILE.conservatism || CONFIG.default_conservatism;
   $("#conservatism").innerHTML = (CONFIG.conservatism_presets || [])
-    .map((p) => `<label class="preset"><input type="radio" name="conservatism" value="${p.key}" ${p.key === cur ? "checked" : ""}> ${p.label}<span class="preset-desc">${p.description}</span></label>`)
+    .map((p) => `<label class="preset" title="${escapeHtml(p.description)}"><input type="radio" name="conservatism" value="${p.key}" ${p.key === cur ? "checked" : ""}> ${p.label}</label>`)
     .join("");
 }
 
