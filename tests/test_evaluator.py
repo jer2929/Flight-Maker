@@ -244,3 +244,34 @@ def test_notam_validity_prefers_api_fields():
     v = _notam_validity({"startValidity": "2607090901", "endValidity": "2607222359"}, "no bc lines")
     assert v["start"] == "2026-07-09T09:01:00Z"
     assert v["end"] == "2026-07-22T23:59:00Z"
+
+
+# ---- GFA parser (clouds/weather + icing/turbulence frames) ----
+from app.sources.cfps import _gfa_parse, GFA_IMAGE_URL
+
+
+def test_gfa_parse_groups_by_subproduct():
+    # Synthetic CFPS GFA payload: two sub-products, each with frames -> images.
+    import json as _json
+    data = [{
+        "location": "GFACN33",
+        "text": _json.dumps({"frame_lists": [
+            {"sv": "CLDWX", "frames": [
+                {"validity": "2026-06-26T18:00:00Z", "images": [{"id": 111}]},
+                {"validity": "2026-06-27T00:00:00Z", "images": [{"id": 222}]},
+            ]},
+            {"sv": "TURBC", "frames": [
+                {"validity": "2026-06-26T18:00:00Z", "images": [{"id": 333}]},
+            ]},
+        ]}),
+    }]
+    out = _gfa_parse(data)
+    assert set(out) == {"CLDWX", "TURBC"}
+    assert len(out["CLDWX"]) == 2 and len(out["TURBC"]) == 1
+    assert out["CLDWX"][0]["url"] == GFA_IMAGE_URL.format(id=111)
+    assert out["TURBC"][0]["validity"] == "2026-06-26T18:00:00Z"
+
+
+def test_gfa_parse_handles_unexpected_shape():
+    # No frame_lists / unparseable -> empty dict, never raises.
+    assert _gfa_parse([{"text": "not json"}, {"text": {"foo": "bar"}}]) == {}

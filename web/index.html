@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Minima</title>
-  <link rel="stylesheet" href="/style.css?v=20260626b" />
+  <link rel="stylesheet" href="/style.css?v=20260626c" />
 </head>
 <body>
   <header>
@@ -24,6 +24,16 @@
               marker-end="url(#logo-arrow)" />
       </svg>
     </h1>
+    <div class="clock" id="clock">
+      <div class="clock-row">
+        <span class="clock-label">Data time</span>
+        <span id="data-time" class="clock-val" title="Frozen at your last route/discovery assessment">—</span>
+      </div>
+      <div class="clock-row">
+        <span class="clock-label">Current time</span>
+        <span id="current-time" class="clock-val live">—</span>
+      </div>
+    </div>
   </header>
 
   <section class="panel">
@@ -76,6 +86,7 @@
     <div id="route-checklist"></div>
     <div id="route-mitigation"></div>
     <div id="route-summary"></div>
+    <div id="route-gfa"></div>
     <div id="route-endpoints" class="results two-col"></div>
     <div id="route-windows"></div>
     <div id="route-timeline"></div>
@@ -246,6 +257,6 @@
        Forecasts are not observations — <strong>always confirm with an official NAV CANADA briefing before flight.</strong></p>
   </footer>
 
-  <script src="/app.js?v=20260626b"></script>
+  <script src="/app.js?v=20260626c"></script>
 </body>
 </html>

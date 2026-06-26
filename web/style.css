@@ -9,11 +9,25 @@ body {
   background: var(--bg); color: var(--ink); line-height: 1.45;
 }
 header {
-  padding: 18px 20px; border-bottom: 1px solid var(--line);
+  padding: 14px 20px; border-bottom: 1px solid var(--line);
   background: linear-gradient(180deg, #18222c, #0f1419);
+  /* Frozen at the top so the logo + Data/Current time stay visible on scroll. */
+  position: sticky; top: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
 }
 header h1 { margin: 0; font-size: 1.5rem; }
 header p { margin: 4px 0 0; color: var(--muted); }
+
+/* Data time (frozen) + current Zulu clock (live), top-right of the header */
+.clock { text-align: right; font-variant-numeric: tabular-nums; }
+.clock-row { display: flex; justify-content: flex-end; gap: 8px; align-items: baseline; line-height: 1.5; }
+.clock-label { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
+.clock-val { font-size: .9rem; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.clock-val.live { color: var(--accent); }
+@media (max-width: 520px) {
+  .clock-label { font-size: .62rem; }
+  .clock-val { font-size: .78rem; }
+}
 .panel {
   margin: 16px auto; max-width: 1000px; padding: 16px 20px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
@@ -298,6 +312,21 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .min-banner.custom { color: #f5c451; background: rgba(201,138,0,.08); border-color: var(--mitigate); }
 .chk.custom { border-left-color: var(--mitigate); background: rgba(201,138,0,.06); }
 .chk.custom .mark { color: #f5c451; }
+
+/* GFA graphical area forecast panel */
+.gfa-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.gfa-panel h3 { margin: 0 0 10px; font-size: .95rem; }
+.gfa-tabs, .gfa-frames { display: flex; gap: 6px; flex-wrap: wrap; }
+.gfa-frames { margin: 10px 0; }
+.gfa-tab, .gfa-frame {
+  background: var(--bg); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: .82rem;
+}
+.gfa-tab.active, .gfa-frame.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.gfa-img-link { display: block; }
+.gfa-img { display: block; width: 100%; max-width: 760px; height: auto; margin: 10px auto 6px;
+  background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.gfa-cap { margin: 4px 0 0; }
 
 /* Conservatism presets — one inline row of chips + a single description line */
 #conservatism { display: flex; flex-direction: column; gap: 8px; }
