@@ -193,7 +193,9 @@ def _notams_for(ident: str, notams: dict) -> list[Notam]:
     out = []
     for n in notams.get(ident, [])[:25]:
         out.append(Notam(ident=ident, number=n.get("number"),
-                          text=n.get("text", ""), url=_CFPS_SITE_URL))
+                          text=n.get("text", ""), url=_CFPS_SITE_URL,
+                          start=n.get("start"), end=n.get("end"),
+                          estimated=bool(n.get("estimated")), permanent=bool(n.get("permanent"))))
     return out
 
 
