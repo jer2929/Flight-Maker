@@ -91,16 +91,16 @@ conservatism_presets:
   presets:
     cautious:
       label: Cautious
-      description: A single serious weather threat is disqualifying.
+      description: Stops you sooner — one serious threat can be a no-go.
       serious_weight: 2          # actual_imc / convective / icing count double
       rule: {"0": GO, "1": MITIGATE, "2": NO-GO, "3": NO-GO}
     standard:
       label: Standard
-      description: One threat → mitigate, two → no-go (the original card).
+      description: The recommended balance for most pilots.
       rule: {"0": GO, "1": MITIGATE, "2": NO-GO, "3": NO-GO}
     confident:
       label: Confident
-      description: Tolerates one threat; two → mitigate, three → no-go.
+      description: More tolerant — it takes more stacked threats to stop you.
       rule: {"0": GO, "1": GO, "2": MITIGATE, "3": NO-GO}
   # Threats treated as "serious" (double-weighted under the cautious preset).
   serious_threats:

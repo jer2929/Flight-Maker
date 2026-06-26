@@ -101,6 +101,10 @@ class Notam(BaseModel):
     number: Optional[str] = None    # e.g. "H1234/25" when parseable
     text: str
     url: Optional[str] = None       # link to CFPS for the aerodrome
+    start: Optional[str] = None     # ISO8601 Z — effective from (B] line)
+    end: Optional[str] = None       # ISO8601 Z — effective until (C] line)
+    estimated: bool = False         # end time is an estimate (EST)
+    permanent: bool = False         # no end / PERM
 
 
 class NearbyStation(BaseModel):

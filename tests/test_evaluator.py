@@ -213,3 +213,34 @@ def test_imc_opt_in_plus_single_pilot_ifr_stacks_to_nogo():
                                  flight_rules="ifr")
         assert present == {"actual_imc", "single_pilot_ifr_no_autopilot"}
         assert threat_verdict(len(present)) == Verdict.NOGO
+
+
+# ---- NOTAM validity parsing (plain-language dates / status) ----
+from app.sources.cfps import _notam_validity, _yymmddhhmm_to_iso
+
+
+def test_yymmddhhmm_to_iso():
+    assert _yymmddhhmm_to_iso("2607271800") == "2026-07-27T18:00:00Z"
+    assert _yymmddhhmm_to_iso("badvalue00") is None
+
+
+def test_notam_validity_from_raw_bc_lines():
+    text = "(H1234/26 NOTAMN Q) ... A) CYHM B) 2604281528 C) 2607271800 EST E) RWY 12 CLSD)"
+    v = _notam_validity({}, text)
+    assert v["start"] == "2026-04-28T15:28:00Z"
+    assert v["end"] == "2026-07-27T18:00:00Z"
+    assert v["estimated"] is True
+    assert v["permanent"] is False
+
+
+def test_notam_validity_permanent():
+    text = "(A1/26 NOTAMN A) CYHM B) 2601010000 C) PERM E) something)"
+    v = _notam_validity({}, text)
+    assert v["permanent"] is True
+    assert v["end"] is None
+
+
+def test_notam_validity_prefers_api_fields():
+    v = _notam_validity({"startValidity": "2607090901", "endValidity": "2607222359"}, "no bc lines")
+    assert v["start"] == "2026-07-09T09:01:00Z"
+    assert v["end"] == "2026-07-22T23:59:00Z"
