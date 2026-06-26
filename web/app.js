@@ -152,6 +152,27 @@ async function init() {
   // Apply the initially-active tab so the per-flight controls start hidden on
   // the default My Minimums tab.
   switchTab(($$(".tab.active")[0] || {}).dataset?.tab || "settings");
+  startClock();
+}
+
+// ---------- Zulu clock (header) ----------
+// Format a Date as "YYYY-MM-DD HH:MM:SSZ" in UTC.
+function fmtZulu(d) {
+  const p = (x) => String(x).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
+         `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}Z`;
+}
+// Live current Zulu time, ticking every second.
+function startClock() {
+  const el = $("#current-time");
+  const tick = () => { if (el) el.textContent = fmtZulu(new Date()); };
+  tick();
+  setInterval(tick, 1000);
+}
+// Freeze the "Data time" to now — call when a fresh assessment's data arrives.
+function stampDataTime() {
+  const el = $("#data-time");
+  if (el) el.textContent = fmtZulu(new Date());
 }
 
 const baseIdent = () => PROFILE.base || CONFIG.departure;
@@ -246,6 +267,74 @@ function autocomplete(inputId, listId) {
   function hide() { list.classList.add("hidden"); list.innerHTML = ""; }
 }
 
+// ---------- GFA (graphical area forecast) ----------
+let GFA = { region: null, products: {}, sub: null, frame: 0 };
+const GFA_LABELS = { CLDWX: "Clouds & weather", TURBC: "Icing & turbulence", GFA: "GFA" };
+
+function gfaSubs() {
+  return Object.keys(GFA.products)
+    .filter((s) => (GFA.products[s] || []).length)
+    .sort((a, b) => (a === "CLDWX" ? -1 : b === "CLDWX" ? 1 : a.localeCompare(b)));
+}
+function gfaFrameLabel(f, i) {
+  if (f && f.validity) {
+    const d = new Date(f.validity);
+    if (!isNaN(d)) return `${String(d.getUTCHours()).padStart(2, "0")}Z`;
+  }
+  return `#${i + 1}`;
+}
+function gfaFallback() {
+  return `<div class="panel gfa-panel"><h3>GFA — graphical area forecast</h3>
+    <p class="hint">Charts couldn't be loaded right now.
+    <a href="https://plan.navcanada.ca/" target="_blank" rel="noopener">Open the GFA on NAV CANADA ↗</a></p></div>`;
+}
+
+async function loadGfa(dep, dest) {
+  const host = $("#route-gfa");
+  if (!host) return;
+  host.innerHTML = `<div class="panel gfa-panel"><h3>GFA — graphical area forecast <span class="hint">loading…</span></h3></div>`;
+  try {
+    const params = new URLSearchParams({ dep, ...(dest ? { dest } : {}) });
+    const data = await fetch(`/api/gfa?${params}`).then((r) => r.json());
+    GFA = { region: data.region || null, products: data.products || {}, sub: null, frame: 0 };
+    const subs = gfaSubs();
+    if (!subs.length) { host.innerHTML = gfaFallback(); return; }
+    GFA.sub = subs[0];
+    drawGfa();
+  } catch (e) {
+    host.innerHTML = gfaFallback();
+  }
+}
+
+function drawGfa() {
+  const host = $("#route-gfa");
+  const subs = gfaSubs();
+  if (!subs.length) { host.innerHTML = gfaFallback(); return; }
+  if (!subs.includes(GFA.sub)) GFA.sub = subs[0];
+  const frames = GFA.products[GFA.sub] || [];
+  if (GFA.frame >= frames.length) GFA.frame = 0;
+  const fr = frames[GFA.frame] || {};
+  const tabs = subs.map((s) => `<button class="gfa-tab ${s === GFA.sub ? "active" : ""}" data-sub="${s}">${GFA_LABELS[s] || s}</button>`).join("");
+  const frameBtns = frames.length > 1
+    ? `<div class="gfa-frames">${frames.map((f, i) => `<button class="gfa-frame ${i === GFA.frame ? "active" : ""}" data-frame="${i}">${gfaFrameLabel(f, i)}</button>`).join("")}</div>`
+    : "";
+  host.innerHTML = `<div class="panel gfa-panel">
+    <div class="gfa-head">
+      <h3>GFA — graphical area forecast${GFA.region ? ` <span class="hint">${escapeHtml(GFA.region)}</span>` : ""}</h3>
+      <div class="gfa-tabs">${tabs}</div>
+    </div>
+    ${frameBtns}
+    <a class="gfa-img-link" href="${fr.url || "https://plan.navcanada.ca/"}" target="_blank" rel="noopener">
+      <img class="gfa-img" src="${fr.url || ""}" alt="GFA ${GFA.sub}" loading="lazy"
+           onerror="this.closest('.gfa-panel').querySelector('.gfa-err').hidden=false" />
+    </a>
+    <p class="hint gfa-err" hidden>Chart image didn't load — <a href="https://plan.navcanada.ca/" target="_blank" rel="noopener">view on NAV CANADA ↗</a></p>
+    <p class="hint gfa-cap">${fr.validity ? "Valid " + escapeHtml(String(fr.validity)) + " · " : ""}Source: NAV CANADA CFPS · tap chart to enlarge</p>
+  </div>`;
+  host.querySelectorAll(".gfa-tab").forEach((b) => b.addEventListener("click", () => { GFA.sub = b.dataset.sub; GFA.frame = 0; drawGfa(); }));
+  host.querySelectorAll(".gfa-frame").forEach((b) => b.addEventListener("click", () => { GFA.frame = +b.dataset.frame; drawGfa(); }));
+}
+
 // ---------- Route ----------
 async function runRoute() {
   const dep = $("#dep").value.trim().toUpperCase(), dest = $("#dest").value.trim().toUpperCase();
@@ -257,6 +346,8 @@ async function runRoute() {
     const res = await fetch(`/api/route?${params}`);
     if (!res.ok) { $("#route-verdict").innerHTML = `<div class="empty">Unknown departure or destination.</div>`; return; }
     renderRoute(await res.json());
+    stampDataTime();
+    loadGfa(dep, dest);
   } catch (e) {
     $("#route-verdict").innerHTML = `<div class="empty">Error: ${e}</div>`;
   } finally { btn.disabled = false; btn.textContent = "Assess route"; }
@@ -265,7 +356,7 @@ async function runRoute() {
 function clearRoute() {
   // route-self-check is a standing pre-check rendered on load — never cleared here,
   // so the pilot's ticked items survive a route assessment.
-  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-endpoints", "route-windows", "route-timeline"]
+  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-gfa", "route-endpoints", "route-windows", "route-timeline"]
     .forEach((id) => ($("#" + id).innerHTML = ""));
 }
 
@@ -502,6 +593,7 @@ async function runDiscovery() {
     const params = new URLSearchParams(p);
     const data = await fetch(`/api/suggest?${params}`).then((r) => r.json());
     $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
+    stampDataTime();
   } catch (e) { $("#discovery-results").innerHTML = `<p class="empty">Error: ${e}</p>`; }
   finally { btn.disabled = false; btn.textContent = "Find flights now"; }
 }

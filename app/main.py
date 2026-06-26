@@ -93,6 +93,32 @@ async def route(
     return JSONResponse(result.model_dump())
 
 
+@app.get("/api/gfa")
+async def gfa(
+    dep: str = Query(...),
+    dest: str = Query(default=None),
+    debug: int = Query(default=0),
+):
+    """GFA (clouds/weather + icing/turbulence) image frames near the route.
+
+    Uses the route midpoint when a destination is given. ``debug=1`` includes
+    the raw CFPS payload to help diagnose any field-shape mismatch."""
+    a = ap.get_airport(dep)
+    if a is None:
+        return JSONResponse({"error": "unknown departure", "products": {}}, status_code=404)
+    point = (a.lat, a.lon)
+    if dest:
+        b = ap.get_airport(dest)
+        if b is not None:
+            point = ((a.lat + b.lat) / 2.0, (a.lon + b.lon) / 2.0)
+    from app.sources import cfps
+    try:
+        result = await cfps.gfa(point, debug=bool(debug))
+    except Exception as e:  # network/shape issues degrade to an empty panel
+        return JSONResponse({"error": str(e), "products": {}})
+    return JSONResponse(result)
+
+
 @app.get("/api/suggest")
 async def suggest(
     radius: float = Query(default=None, ge=1, le=500),
