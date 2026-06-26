@@ -136,19 +136,19 @@ def weather_checks(
     add("lowering_ceiling", "Rapidly lowering ceilings", lowering_ceiling,
         "ceilings dropping along route" if lowering_ceiling else "ceilings steady")
 
-    # 9. Widespread IFR / visibility below personal limit
-    ifr_pts = sum(
+    # 9. Widespread IMC / visibility below personal limit
+    imc_pts = sum(
         1 for ce, vi in zip(ceiling_points, vis_points)
         if (ce is not None and ce < 1000) or (vi is not None and vi < 3)
     )
     below_personal = any(v is not None and v < personal_vis_sm for v in vis_points)
-    widespread = ifr_pts >= 2 or below_personal
+    widespread = imc_pts >= 2 or below_personal
     detail = []
-    if ifr_pts:
-        detail.append(f"{ifr_pts} IFR point(s) on route")
+    if imc_pts:
+        detail.append(f"{imc_pts} IMC point(s) on route")
     if below_personal:
         detail.append("vis below personal limit")
-    add("widespread_ifr", "Widespread IFR", widespread,
-        ", ".join(detail) if detail else "VFR along route")
+    add("widespread_ifr", "Widespread IMC", widespread,
+        ", ".join(detail) if detail else "VMC along route")
 
     return checks
