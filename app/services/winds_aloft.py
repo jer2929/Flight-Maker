@@ -62,12 +62,17 @@ def recommend_altitude(
     course_true: float,
     cruise_kt: float,
     course_mag: Optional[float] = None,
+    ceiling_ft: Optional[float] = None,
 ) -> Optional[AltitudeRecommendation]:
-    """Pick the legal VFR altitude (<12,500) with the most tailwind."""
+    """Pick the legal VFR altitude (<12,500) with the most tailwind, staying ≥1,000 ft below ceiling."""
     if not levels:
         return None
     cm = course_mag if course_mag is not None else course_true
     cands = candidate_altitudes(cm)
+    if ceiling_ft is not None:
+        cands = [a for a in cands if a <= ceiling_ft - 1000]
+    if not cands:
+        return None
 
     winds_at: list[WindAloft] = []
     for alt in cands:

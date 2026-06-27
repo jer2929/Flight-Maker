@@ -221,7 +221,7 @@ def _assess_endpoint(
     airport: Airport, metar, taf, fc, notams, mode, manual_threats,
     distance_nm: float, bearing: float, alt: AltitudeRecommendation | None,
     history: list[str] | None = None, ensemble: dict | None = None,
-    flight_rules: str = "vfr",
+    flight_rules: str = "vfr", ceiling_mode: str = "endpoint",
 ) -> AirportAssessment:
     settings = get_settings()
     lat, lon = airport.lat, airport.lon
@@ -239,7 +239,7 @@ def _assess_endpoint(
     rw = _rw_with_mag(best_runway(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt), lat, lon)
     verdict, checks, tchecks, n = decision(
         weather, rw, mode, ap.is_complex_airspace(airport.ident), manual_threats,
-        ceiling_mode="endpoint", flight_rules=flight_rules)
+        ceiling_mode=ceiling_mode, flight_rules=flight_rules)
     for c in checks:
         c.location = airport.ident
     if weather.source == Source.NONE:
@@ -500,11 +500,6 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     distance = haversine_nm(dep.lat, dep.lon, dest.lat, dest.lon)
     bearing = initial_bearing_true(dep.lat, dep.lon, dest.lat, dest.lon)
     bearing_mag = round(magvar.to_magnetic(bearing, dep.lat, dep.lon))
-    alt = recommend_altitude(_winds_aloft_now(dep_fc), bearing, settings.cruise_kt, course_mag=bearing_mag) if dep_fc else None
-    if alt:
-        for lv in alt.levels:
-            lv.direction_mag = _mag(lv.direction_true, dep.lat, dep.lon)
-
     # Blend a multi-model wind only where there's no METAR (the endpoints that
     # need it most — small fields without a station).
     dep_ens, dest_ens = await asyncio.gather(
@@ -512,7 +507,6 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         _ens_if_needed(metars.get(dest.ident), dest, days),
     )
     dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens, flight_rules=flight_rules)
-    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens, flight_rules=flight_rules)
 
     # Nearest reporting station for an endpoint that has no METAR of its own.
     async def _attach_nearby(assessment, airport, cands):
@@ -530,10 +524,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
                     direction=compass(brg), metar=m, taf=tafs.get(c.ident),
                     metar_history=hist[:8], trends=tnotes)
                 return
-    await _attach_nearby(dep_a, dep, dep_cands)
-    await _attach_nearby(dest_a, dest, dest_cands)
 
     # --- Sample conditions along the route (enroute ceilings/vis/LLJ/freezing) ---
+    # Sampled before dest_a so we can gate the altitude recommendation on the
+    # minimum ceiling seen from departure through the enroute segment.
     enroute = []
     mids = _route_midpoints(dep, dest)
     for k, (mlat, mlon) in enumerate(mids, 1):
@@ -544,6 +538,23 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         near_txt = f" near {near[0][0].ident}" if near else ""
         pt["label"] = f"~{dist_along} nm from {dep.ident}{near_txt}"
         enroute.append(pt)
+
+    # Gate cruising altitude on the minimum ceiling along the route so far
+    # (departure + enroute midpoints). Destination ceiling is not yet known from
+    # observation, but the model enroute picture is sufficient to avoid a cloud-
+    # deck clash at the recommended level.
+    gate_ceiling_pts = [dep_a.weather.ceiling_agl_ft] + [e.get("ceiling_ft") for e in enroute]
+    gate_ceiling = min([c for c in gate_ceiling_pts if c is not None], default=None)
+    alt = recommend_altitude(_winds_aloft_now(dep_fc), bearing, settings.cruise_kt,
+                             course_mag=bearing_mag, ceiling_ft=gate_ceiling) if dep_fc else None
+    if alt:
+        for lv in alt.levels:
+            lv.direction_mag = _mag(lv.direction_true, dep.lat, dep.lon)
+
+    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens, flight_rules=flight_rules)
+
+    await _attach_nearby(dep_a, dep, dep_cands)
+    await _attach_nearby(dest_a, dest, dest_cands)
 
     ceiling_points = [dep_a.weather.ceiling_agl_ft] + [e.get("ceiling_ft") for e in enroute] + [dest_a.weather.ceiling_agl_ft]
     vis_points = [dep_a.weather.visibility_sm] + [e.get("vis_sm") for e in enroute] + [dest_a.weather.visibility_sm]
@@ -717,7 +728,7 @@ async def suggest(
     # whole request). Combined with fault-isolated chunks, reporting fields get
     # their METAR/NOTAM and the rest fall back to the model.
     cfps_sites = [s for s in [origin_ident] + [a.ident for a, _ in candidates]
-                  if _CFPS_IDENT_RE.match(s)]
+                  if _REPORTING_RE.match(s)]
     cand_points = [(a.lat, a.lon) for a, _ in candidates]
     metars, tafs, notams, origin_fc, fcs, ens = await asyncio.gather(
         _safe(cfps.metars(cfps_sites), {}),
@@ -735,13 +746,17 @@ async def suggest(
     results: list[AirportAssessment] = []
     for airport, dist in candidates:
         bearing = initial_bearing_true(origin.lat, origin.lon, airport.lat, airport.lon)
+        cand_fc = fc_by_ident.get(airport.ident)
+        cand_ceiling = _point_now(cand_fc).get("ceiling_ft") if cand_fc else None
         alt = recommend_altitude(
             levels_now, bearing, settings.cruise_kt,
-            course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)))
+            course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
+            ceiling_ft=cand_ceiling)
         a = _assess_endpoint(
             airport, metars.get(airport.ident), tafs.get(airport.ident),
-            fc_by_ident.get(airport.ident), notams, mode, manual_threats, dist, bearing, alt,
+            cand_fc, notams, mode, manual_threats, dist, bearing, alt,
             ensemble=ens_by_ident.get(airport.ident), flight_rules=flight_rules,
+            ceiling_mode="xc",
         )
         rw = a.best_runway
         if into_wind and (not rw or rw.headwind_kt < 0 or rw.crosswind_kt > xw_limit):
@@ -778,3 +793,43 @@ async def _ens_if_needed(metar, airport, days):
     if metar:
         return None
     return await _safe(openmeteo.ensemble_wind_now(airport.lat, airport.lon, days), None)
+
+
+async def assess_circuits(
+    aerodrome_ident: str, mode: str, manual_threats: list[str],
+    flight_rules: str = "vfr",
+) -> AirportAssessment | None:
+    """Assess local circuit operations at a single aerodrome.
+
+    Uses circuit personal minimums (day_circuit / night_circuit ceiling and
+    visibility) rather than cross-country limits. No enroute or altitude
+    recommendation — this is a stay-in-the-pattern check."""
+    settings = get_settings()
+    airport = ap.get_airport(aerodrome_ident)
+    if airport is None:
+        return None
+
+    days = days_for(settings.timeline_hours)
+    is_reporting = bool(_REPORTING_RE.match(aerodrome_ident))
+    sites = [aerodrome_ident] if is_reporting else []
+    metar_d, taf_d, notam_d, fc_d, ens_d = await asyncio.gather(
+        _safe(cfps.metars(sites), {}) if sites else asyncio.sleep(0, result={}),
+        _safe(cfps.tafs(sites), {}) if sites else asyncio.sleep(0, result={}),
+        _safe(cfps.notams([aerodrome_ident]), {}),
+        _safe(openmeteo.forecast(airport.lat, airport.lon, days), {}),
+        _safe(openmeteo.ensemble_wind_now(airport.lat, airport.lon, days), None),
+    )
+    metar = metar_d.get(aerodrome_ident)
+    taf = taf_d.get(aerodrome_ident)
+    # Use ensemble only when there is no METAR.
+    ensemble = None if metar else ens_d
+
+    awc_hist = await _safe(awc.metar_history([aerodrome_ident], 6), {})
+    history = awc_hist.get(aerodrome_ident, [])
+
+    return _assess_endpoint(
+        airport, metar, taf, fc_d, notam_d, mode, manual_threats,
+        distance_nm=0.0, bearing=0.0, alt=None,
+        history=history, ensemble=ensemble,
+        flight_rules=flight_rules, ceiling_mode="circuit",
+    )
