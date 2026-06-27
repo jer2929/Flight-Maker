@@ -668,6 +668,17 @@ function windRunwaySvg(rwy, w, opts = {}) {
     const perp = S.font * 1.2;   // clearance to the side of the runway axis
     const beyond = S.font * 0.9; // push past the crosswind arrowhead
 
+    // Total wind: a dashed arrow that flies WITH the wind (tail upwind where it
+    // comes from, head downwind where it's blowing to) so the direction reads at
+    // a glance. Drawn at the wind's angle to the runway (delta) in the same
+    // drawn frame as the runway, then decomposed into the head/cross components.
+    const wb = (H + delta) * Math.PI / 180;        // wind FROM bearing, drawn frame
+    const fvx = Math.sin(wb), fvy = -Math.cos(wb); // unit vector toward the source
+    const Rw = S.Lr * 0.95;
+    parts.push(`<line class="wr-wind" x1="${svgNum(cx + fvx * Rw)}" y1="${svgNum(cy + fvy * Rw)}" x2="${svgNum(cx - fvx * Rw)}" y2="${svgNum(cy - fvy * Rw)}" stroke-width="${svgNum(S.comp * 0.85)}" marker-end="url(#wr-arrow-wind)"/>`);
+    // A hub at the centre makes it clear the component arrows share one origin.
+    parts.push(`<circle class="wr-hub" cx="${cx}" cy="${cy}" r="${svgNum(S.comp * 0.6)}"/>`);
+
     // Headwind component along the runway axis: toward the approach end for a
     // headwind (-u), reversed for a tailwind. Green normally, red for a tailwind.
     const hlen = len(head);
