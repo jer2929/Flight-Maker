@@ -219,6 +219,7 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; }
 .age { font-size: .72rem; color: var(--muted); white-space: nowrap; }
 .age.stale { color: #ff9b8f; font-weight: 600; }
+.age.fresh { color: #6fcf97; font-weight: 600; }
 details.mhist { margin: 6px 0; font-size: .82rem; }
 details.mhist summary { cursor: pointer; color: var(--accent); }
 .links { font-size: .82rem; }

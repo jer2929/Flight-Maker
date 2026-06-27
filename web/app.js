@@ -216,6 +216,7 @@ function currentFlightType() {
 
 function applyFlightType(ftype) {
   const isCircuits = ftype === "circuits";
+  $("#dep-row").classList.toggle("hidden", isCircuits);
   $("#dest-row").classList.toggle("hidden", isCircuits);
   $("#circ-row").classList.toggle("hidden", !isCircuits);
   if (isCircuits && !$("#circ-aerodrome").value) {
@@ -779,7 +780,7 @@ function discoveryCard(a) {
     </div>
     ${rw ? `<div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${rw.crosswind_kt} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
     ${runwaysBlock(a)}
-    <div class="meta"><span>📋 ${a.notam_count} NOTAM</span><span class="links">${linksHtml(a)}</span></div>
+    <div class="meta">${notamToggle(a)}<span class="links">${linksHtml(a)}</span></div>
     ${a.reasons.length ? `<ul class="reasons">${a.reasons.map((x) => `<li>${x}</li>`).join("")}</ul>` : ""}
     ${w.raw_metar ? `<div class="raw">METAR ${escapeHtml(w.raw_metar)}${ageChip(w.raw_metar)}</div>` : ""}
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
@@ -799,8 +800,11 @@ const threatsOfKind = (kind) => threatMeta().filter((t) => t.kind === kind);
 const threatLabel = (key) => (threatMeta().find((t) => t.key === key) || {}).label || labelOf(key);
 
 function buildWxFlags() {
-  $("#wxflags").innerHTML = (CONFIG.weather_flag_options || [])
-    .map((f) => `<label class="control checkbox"><input type="checkbox" class="wxflag" value="${f}"> ${wxLabel(f)}</label>`)
+  const ifr = currentFlightRules() === "ifr";
+  const flags = (CONFIG.weather_flag_options || []).filter((f) => !ifr || f !== "widespread_ifr");
+  const prev = new Set($$(".wxflag").filter((c) => c.checked).map((c) => c.value));
+  $("#wxflags").innerHTML = flags
+    .map((f) => `<label class="control checkbox"><input type="checkbox" class="wxflag" value="${f}"${prev.has(f) ? " checked" : ""}> ${wxLabel(f)}</label>`)
     .join("");
 }
 
@@ -816,6 +820,7 @@ function renderExtraThreats() {
   $("#threats-list").innerHTML = items
     .map((t) => `<label><input type="checkbox" class="threat" value="${t}"${wasChecked.has(t) ? " checked" : ""}> ${threatLabel(t)}</label>`)
     .join("");
+  buildWxFlags();
 }
 
 function buildConservatism() {
