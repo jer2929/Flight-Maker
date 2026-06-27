@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Minima</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/style.css?v=20260703" />
+  <link rel="stylesheet" href="/style.css?v=20260704" />
 </head>
 <body>
   <!-- Shared arrowheads for the wind-vs-runway diagrams. Defined once globally so the
@@ -13,17 +13,22 @@
        markerUnits="userSpaceOnUse" keeps the heads a fixed size regardless of line width. -->
   <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
     <defs>
-      <marker id="wr-arrow-head" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-        <path d="M0,0 L6,3 L0,6 Z" class="wr-ah-head" />
+      <marker id="wr-arrow-head" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M0,0 L8,4 L0,8 Z" class="wr-ah-head" />
       </marker>
-      <marker id="wr-arrow-tail" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-        <path d="M0,0 L6,3 L0,6 Z" class="wr-ah-tail" />
+      <marker id="wr-arrow-tail" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M0,0 L8,4 L0,8 Z" class="wr-ah-tail" />
       </marker>
-      <marker id="wr-arrow-cross-mit" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-        <path d="M0,0 L6,3 L0,6 Z" class="wr-ah-cross-mit" />
+      <marker id="wr-arrow-cross-mit" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M0,0 L8,4 L0,8 Z" class="wr-ah-cross-mit" />
       </marker>
-      <marker id="wr-arrow-cross-nogo" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-        <path d="M0,0 L6,3 L0,6 Z" class="wr-ah-cross-nogo" />
+      <marker id="wr-arrow-cross-nogo" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M0,0 L8,4 L0,8 Z" class="wr-ah-cross-nogo" />
+      </marker>
+      <!-- Total-wind indicator: a bold, slightly barbed (windsock-like) head so the
+           dashed wind arrow reads clearly as "blowing this way". -->
+      <marker id="wr-arrow-wind" markerWidth="12" markerHeight="11" refX="8" refY="5.5" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M0,0 L12,5.5 L0,11 L3.6,5.5 Z" class="wr-ah-wind" />
       </marker>
     </defs>
   </svg>
