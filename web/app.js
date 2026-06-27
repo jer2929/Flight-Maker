@@ -589,6 +589,115 @@ function rowThreat(t) {
   return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${t.label}</span><span class="act">${t.present ? "present" : "—"}</span><span class="lim"></span></div>`;
 }
 
+// ---------- Wind-vs-runway diagram ----------
+// A small NORTH-UP graphic: the runway is drawn at its real compass orientation
+// (RWY 09 lies along the 9-/3-o'clock axis, "N" marks the top) with two component
+// arrows — green headwind down the runway axis and a crosswind across it — so a
+// pilot can read runway orientation, where the wind is coming from, and whether the
+// crosswind is from the left or right at a glance. Frontend-only: every value comes
+// from the API. Component magnitudes reuse the backend headwind_kt/crosswind_kt so
+// the arrows match the printed text; the signed wind angle (computed here from true
+// bearings, mirroring app/services/runway.py) decides the crosswind side and whether
+// it's a severe (mostly-crosswind) situation.
+const XW_SEVERE_DEG = 60; // wind more than this far off the runway => severe crosswind (red)
+const svgNum = (n) => Math.round(n * 10) / 10; // trim coordinate precision
+
+function windRunwaySvg(rwy, w, opts = {}) {
+  try {
+    if (!rwy || !w) return "";
+    const ident = rwy.runway_ident || rwy.ident || "";
+    // Orient by magnetic heading so the picture matches the runway number (09 = E-W).
+    const H = rwy.heading_mag != null ? rwy.heading_mag : rwy.heading_true;
+    if (H == null) return "";
+    const compact = !!opts.compact;
+    const S = compact
+      ? { vb: 64, Lr: 16, rw: 6, maxArrow: 20, pad: 8,  font: 7, comp: 1.8, labels: false }
+      : { vb: 100, Lr: 24, rw: 9, maxArrow: 28, pad: 12, font: 9, comp: 2.5, labels: true };
+    const cx = S.vb / 2, cy = S.vb / 2;
+
+    // North-up unit vectors (screen y points down). Bearing th -> (sin, -cos).
+    const h = H * Math.PI / 180;
+    const ux = Math.sin(h), uy = -Math.cos(h);   // landing direction (toward the active end)
+    const prx = Math.cos(h), pry = Math.sin(h);   // right of the landing direction
+
+    // Runway strip drawn through the centre at its true bearing, with the active
+    // (selected ident) end at +u and its reciprocal at -u.
+    const ax = cx + ux * S.Lr, ay = cy + uy * S.Lr;
+    const bx = cx - ux * S.Lr, by = cy - uy * S.Lr;
+    const parts = [
+      `<line class="wr-strip-line" x1="${svgNum(bx)}" y1="${svgNum(by)}" x2="${svgNum(ax)}" y2="${svgNum(ay)}" stroke-width="${S.rw}"/>`,
+      `<line class="wr-center" x1="${svgNum(bx)}" y1="${svgNum(by)}" x2="${svgNum(ax)}" y2="${svgNum(ay)}"/>`,
+      `<text class="wr-n" x="${cx}" y="${S.font + 1}" font-size="${S.font - 1}">N</text>`,
+    ];
+    // The runway designator is painted at the APPROACH end (opposite the direction
+    // you travel), so the active ident sits at -u and its reciprocal at +u.
+    if (ident) parts.push(`<text class="wr-ident" x="${svgNum(cx - ux * (S.Lr + S.pad))}" y="${svgNum(cy - uy * (S.Lr + S.pad) + S.font / 3)}" font-size="${S.font}">${escapeHtml(ident)}</text>`);
+    const recipNum = parseInt(ident, 10);
+    if (!Number.isNaN(recipNum)) {
+      const recip = String((recipNum + 18) % 36 || 36).padStart(2, "0");
+      parts.push(`<text class="wr-ident wr-recip" x="${svgNum(cx + ux * (S.Lr + S.pad))}" y="${svgNum(cy + uy * (S.Lr + S.pad) + S.font / 3)}" font-size="${S.font}">${recip}</text>`);
+    }
+
+    const wrap = (label) => `<svg class="wr${compact ? " wr-sm" : ""}" viewBox="0 0 ${S.vb} ${S.vb}" role="img" aria-label="${escapeHtml(label)}">${parts.join("")}</svg>`;
+    const wind = w.wind_kt;
+
+    if (wind == null || wind < 1) {
+      parts.push(`<text class="wr-calm" x="${cx}" y="${cy + S.font / 3}" font-size="${S.font}">CALM</text>`);
+      return wrap(`Runway ${ident}: winds calm`);
+    }
+    if (w.wind_dir_true == null) {
+      parts.push(`<text class="wr-calm" x="${cx}" y="${cy + S.font / 3}" font-size="${S.font}">VRB</text>`);
+      return wrap(`Runway ${ident}: wind variable`);
+    }
+
+    // Side / severity from true bearings (variation cancels, matches the backend).
+    const delta = ((w.wind_dir_true - rwy.heading_true + 180) % 360 + 360) % 360 - 180;
+    const fromRight = delta > 0;
+    const severe = Math.abs(delta) > XW_SEVERE_DEG;
+    const head = Math.round(rwy.headwind_kt);   // negative = tailwind
+    const xw = Math.round(rwy.crosswind_kt);
+    const pxPerKt = S.maxArrow / 18; // ~18 kt fills the arrow; stronger winds clamp
+    const len = (kt) => Math.min(Math.abs(kt) * pxPerKt, S.maxArrow);
+
+    // Headwind component along the runway axis: toward the approach end for a
+    // headwind (-u), reversed for a tailwind. Green normally, red for a tailwind.
+    const hlen = len(head);
+    if (hlen >= 3) {
+      const sign = head >= 0 ? -1 : 1;
+      const hx = cx + sign * ux * hlen, hy = cy + sign * uy * hlen;
+      const tail = head < 0;
+      parts.push(`<line class="wr-head${tail ? " wr-head-tail" : ""}" x1="${cx}" y1="${cy}" x2="${svgNum(hx)}" y2="${svgNum(hy)}" stroke-width="${S.comp}" marker-end="url(#${tail ? "wr-arrow-tail" : "wr-arrow-head"})"/>`);
+      if (S.labels) {
+        // Label at the arrow's midpoint, nudged to the side away from the crosswind arrow.
+        const off = fromRight ? 1 : -1;
+        const lx = cx + sign * ux * hlen * 0.55 + off * prx * 7;
+        const ly = cy + sign * uy * hlen * 0.55 + off * pry * 7 + S.font / 3;
+        parts.push(`<text class="wr-kt wr-kt-head${tail ? " wr-kt-tail" : ""}" x="${svgNum(lx)}" y="${svgNum(ly)}" text-anchor="middle">${Math.abs(head)}</text>`);
+      }
+    }
+
+    // Crosswind component across the runway axis: toward the side the wind pushes
+    // the aircraft. Yellow normally, red when the wind is mostly a crosswind.
+    const xlen = len(xw);
+    if (xlen >= 3) {
+      const sign = fromRight ? -1 : 1; // wind from the right pushes the aircraft left
+      const xx = cx + sign * prx * xlen, xy = cy + sign * pry * xlen;
+      const sev = severe ? "nogo" : "mit";
+      parts.push(`<line class="wr-cross wr-sev-${sev}" x1="${cx}" y1="${cy}" x2="${svgNum(xx)}" y2="${svgNum(xy)}" stroke-width="${S.comp}" marker-end="url(#wr-arrow-cross-${sev})"/>`);
+      if (S.labels) {
+        // Label at the arrow's midpoint, nudged to the side away from the headwind arrow.
+        const off = head >= 0 ? 1 : -1;
+        const lx = cx + sign * prx * xlen * 0.55 + off * ux * 7;
+        const ly = cy + sign * pry * xlen * 0.55 + off * uy * 7 + S.font / 3;
+        parts.push(`<text class="wr-kt wr-kt-cross${severe ? " wr-kt-severe" : ""}" x="${svgNum(lx)}" y="${svgNum(ly)}" text-anchor="middle">${xw}</text>`);
+      }
+    }
+
+    const headTxt = head >= 0 ? `headwind ${head}` : `tailwind ${Math.abs(head)}`;
+    return wrap(`Runway ${ident}: wind ${Math.round(w.wind_dir_true)} at ${Math.round(wind)} knots, ${headTxt}, crosswind ${xw} from the ${fromRight ? "right" : "left"}`);
+  } catch (e) { return ""; }
+}
+
 function endpointCard(a, role) {
   const w = a.weather || {};
   const issues = a.reasons || [];
@@ -604,10 +713,8 @@ function endpointCard(a, role) {
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
       ${notamToggle(a)}
     </div>
-    <div class="rwy-lines">
-      ${to ? `<div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt · xwind ${to.crosswind_kt} kt</div>` : ""}
-      ${ld ? `<div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · xwind ${ld.crosswind_kt} kt${ld.crosswind_kt_gust ? ` (gust ${ld.crosswind_kt_gust})` : ""}</div>` : ""}
-    </div>
+    ${to ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(to, w)}</span><div class="rwy-lines"><div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt · xwind ${Math.round(to.crosswind_kt)} kt</div></div></div>` : ""}
+    ${ld ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(ld, w)}</span><div class="rwy-lines"><div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · xwind ${Math.round(ld.crosswind_kt)} kt${ld.crosswind_kt_gust ? ` (gust ${Math.round(ld.crosswind_kt_gust)})` : ""}</div></div></div>` : ""}
     ${a.nearby_station ? nearbyBlock(a.nearby_station) : ""}
     ${trendsBlock(a)}
     ${runwaysBlock(a)}
@@ -648,10 +755,11 @@ function metarHistoryList(h) {
 function runwaysBlock(a) {
   const comps = a.runway_components || [];
   if (!comps.length) return `<div class="rwy-na">🛬 Runway data unavailable</div>`;
+  const w = a.weather || {};
   const usable = comps.filter((c) => c.tailwind_kt <= 0).sort((x, y) => y.headwind_kt - x.headwind_kt);
   if (!usable.length) return "";
   const rows = usable.map((c) =>
-    `<div class="rwy-comp">RWY ${c.ident} ${dirM(c.heading_mag, c.heading_true)} · ${dimsText(c)} · head ${Math.round(c.headwind_kt)} kt / xwind ${c.crosswind_kt} kt</div>`).join("");
+    `<div class="rwy-comp-row"><span class="rwy-diag-sm">${windRunwaySvg(c, w, { compact: true })}</span><div class="rwy-comp">RWY ${c.ident} ${dirM(c.heading_mag, c.heading_true)} · ${dimsText(c)} · head ${Math.round(c.headwind_kt)} kt / xwind ${Math.round(c.crosswind_kt)} kt</div></div>`).join("");
   return `<details class="runways"><summary>Usable runways into wind: ${usable.length} <span class="hint">(no tailwind component)</span></summary>${rows}</details>`;
 }
 
@@ -780,7 +888,7 @@ function discoveryCard(a) {
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
       ${a.altitude ? `<span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "🟢 tailwind" : "🔴 headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
-    ${rw ? `<div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${rw.crosswind_kt} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
+    ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
     ${runwaysBlock(a)}
     <div class="meta">${notamToggle(a)}<span class="links">${linksHtml(a)}</span></div>
     ${a.reasons.length ? `<ul class="reasons">${a.reasons.map((x) => `<li>${x}</li>`).join("")}</ul>` : ""}

@@ -5,9 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Minima</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/style.css?v=20260702" />
+  <link rel="stylesheet" href="/style.css?v=20260703" />
 </head>
 <body>
+  <!-- Shared arrowheads for the wind-vs-runway diagrams. Defined once globally so the
+       many per-card SVGs don't each repeat a <defs> (which would clash on marker ids).
+       markerUnits="userSpaceOnUse" keeps the heads a fixed size regardless of line width. -->
+  <svg width="0" height="0" aria-hidden="true" focusable="false" style="position:absolute">
+    <defs>
+      <marker id="wr-arrow-head" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M0,0 L6,3 L0,6 Z" class="wr-ah-head" />
+      </marker>
+      <marker id="wr-arrow-tail" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M0,0 L6,3 L0,6 Z" class="wr-ah-tail" />
+      </marker>
+      <marker id="wr-arrow-cross-mit" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M0,0 L6,3 L0,6 Z" class="wr-ah-cross-mit" />
+      </marker>
+      <marker id="wr-arrow-cross-nogo" markerWidth="6" markerHeight="6" refX="4.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+        <path d="M0,0 L6,3 L0,6 Z" class="wr-ah-cross-nogo" />
+      </marker>
+    </defs>
+  </svg>
   <header>
     <h1 class="brand">
       <svg class="logo" viewBox="0 0 250 54" role="img" aria-label="Minima">
@@ -271,6 +290,6 @@
   </footer>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js?v=20260702"></script>
+  <script src="/app.js?v=20260703"></script>
 </body>
 </html>

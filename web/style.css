@@ -211,6 +211,38 @@ details.runways { margin: 6px 0; font-size: .82rem; }
 details.runways summary { cursor: pointer; color: var(--accent); }
 .rwy-comp { color: var(--muted); padding: 3px 0 3px 14px; }
 .rwy-na { font-size: .84rem; color: var(--muted); font-style: italic; margin: 6px 0; }
+
+/* wind-vs-runway diagram: graphic beside the runway text */
+.rwy-wrap { display: flex; align-items: flex-start; gap: 12px; margin: 8px 0; }
+.rwy-wrap .rwy-lines { margin: 0; flex: 1 1 auto; min-width: 0; }
+.rwy-diag { flex: 0 0 auto; }
+.rwy-comp-row { display: flex; align-items: center; gap: 8px; }
+.rwy-comp-row .rwy-comp { padding: 3px 0; flex: 1 1 auto; min-width: 0; }
+.rwy-diag-sm { flex: 0 0 auto; }
+.wr { display: block; width: 84px; height: 84px; overflow: visible; }
+.wr.wr-sm { width: 52px; height: 52px; }
+.wr-strip-line { stroke: var(--muted); fill: none; stroke-linecap: butt; opacity: .55; }
+.wr-center { stroke: rgba(230, 237, 243, .45); fill: none; stroke-dasharray: 2 3; }
+.wr-n { fill: var(--muted); text-anchor: middle; font-family: system-ui, sans-serif; }
+.wr-ident { fill: var(--ink); font-weight: 700; text-anchor: middle; font-family: system-ui, sans-serif; }
+.wr-recip { fill: var(--muted); font-weight: 400; }
+.wr-calm { fill: var(--muted); text-anchor: middle; font-family: system-ui, sans-serif; letter-spacing: .05em; }
+.wr-head { stroke: var(--go); fill: none; stroke-linecap: round; }
+.wr-head-tail { stroke: var(--nogo); }
+.wr-cross { fill: none; stroke-linecap: round; }
+.wr-sev-mit { stroke: var(--mitigate); }
+.wr-sev-nogo { stroke: var(--nogo); }
+.wr-kt { font-size: 8px; font-family: system-ui, sans-serif; }
+.wr-kt-head { fill: var(--go); }
+.wr-kt-tail { fill: var(--nogo); }
+.wr-kt-cross { fill: var(--mitigate); }
+.wr-kt-severe { fill: var(--nogo); }
+/* arrowhead fills (shared markers live in index.html) */
+.wr-ah-head { fill: var(--go); }
+.wr-ah-tail { fill: var(--nogo); }
+.wr-ah-cross-mit { fill: var(--mitigate); }
+.wr-ah-cross-nogo { fill: var(--nogo); }
+@media (max-width: 480px) { .rwy-wrap { flex-direction: column; gap: 6px; } }
 .ppr { font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
   color: #f5c451; border: 1px solid var(--mitigate); border-radius: 999px; padding: 1px 7px; vertical-align: middle; }
 .nearby { margin: 6px 0; font-size: .84rem; color: var(--ink); background: rgba(255,255,255,.03);
