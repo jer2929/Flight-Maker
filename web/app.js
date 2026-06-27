@@ -611,8 +611,8 @@ function windRunwaySvg(rwy, w, opts = {}) {
     if (H == null) return "";
     const compact = !!opts.compact;
     const S = compact
-      ? { vb: 64, Lr: 16, rw: 6, maxArrow: 22, pad: 8,  font: 7, comp: 1.8, labels: false }
-      : { vb: 100, Lr: 24, rw: 9, maxArrow: 32, pad: 11, font: 9, comp: 2.5, labels: true };
+      ? { vb: 64, Lr: 16, rw: 6, maxArrow: 20, pad: 8,  font: 7, comp: 1.8, labels: false }
+      : { vb: 100, Lr: 24, rw: 9, maxArrow: 28, pad: 12, font: 9, comp: 2.5, labels: true };
     const cx = S.vb / 2, cy = S.vb / 2;
 
     // North-up unit vectors (screen y points down). Bearing th -> (sin, -cos).
@@ -629,11 +629,13 @@ function windRunwaySvg(rwy, w, opts = {}) {
       `<line class="wr-center" x1="${svgNum(bx)}" y1="${svgNum(by)}" x2="${svgNum(ax)}" y2="${svgNum(ay)}"/>`,
       `<text class="wr-n" x="${cx}" y="${S.font + 1}" font-size="${S.font - 1}">N</text>`,
     ];
-    if (ident) parts.push(`<text class="wr-ident" x="${svgNum(cx + ux * (S.Lr + S.pad))}" y="${svgNum(cy + uy * (S.Lr + S.pad) + S.font / 3)}" font-size="${S.font}">${escapeHtml(ident)}</text>`);
+    // The runway designator is painted at the APPROACH end (opposite the direction
+    // you travel), so the active ident sits at -u and its reciprocal at +u.
+    if (ident) parts.push(`<text class="wr-ident" x="${svgNum(cx - ux * (S.Lr + S.pad))}" y="${svgNum(cy - uy * (S.Lr + S.pad) + S.font / 3)}" font-size="${S.font}">${escapeHtml(ident)}</text>`);
     const recipNum = parseInt(ident, 10);
     if (!Number.isNaN(recipNum)) {
       const recip = String((recipNum + 18) % 36 || 36).padStart(2, "0");
-      parts.push(`<text class="wr-ident wr-recip" x="${svgNum(cx - ux * (S.Lr + S.pad))}" y="${svgNum(cy - uy * (S.Lr + S.pad) + S.font / 3)}" font-size="${S.font}">${recip}</text>`);
+      parts.push(`<text class="wr-ident wr-recip" x="${svgNum(cx + ux * (S.Lr + S.pad))}" y="${svgNum(cy + uy * (S.Lr + S.pad) + S.font / 3)}" font-size="${S.font}">${recip}</text>`);
     }
 
     const wrap = (label) => `<svg class="wr${compact ? " wr-sm" : ""}" viewBox="0 0 ${S.vb} ${S.vb}" role="img" aria-label="${escapeHtml(label)}">${parts.join("")}</svg>`;
@@ -665,7 +667,13 @@ function windRunwaySvg(rwy, w, opts = {}) {
       const hx = cx + sign * ux * hlen, hy = cy + sign * uy * hlen;
       const tail = head < 0;
       parts.push(`<line class="wr-head${tail ? " wr-head-tail" : ""}" x1="${cx}" y1="${cy}" x2="${svgNum(hx)}" y2="${svgNum(hy)}" stroke-width="${S.comp}" marker-end="url(#${tail ? "wr-arrow-tail" : "wr-arrow-head"})"/>`);
-      if (S.labels) parts.push(`<text class="wr-kt wr-kt-head${tail ? " wr-kt-tail" : ""}" x="${svgNum(hx + 3)}" y="${svgNum(hy)}">${Math.abs(head)}</text>`);
+      if (S.labels) {
+        // Label at the arrow's midpoint, nudged to the side away from the crosswind arrow.
+        const off = fromRight ? 1 : -1;
+        const lx = cx + sign * ux * hlen * 0.55 + off * prx * 7;
+        const ly = cy + sign * uy * hlen * 0.55 + off * pry * 7 + S.font / 3;
+        parts.push(`<text class="wr-kt wr-kt-head${tail ? " wr-kt-tail" : ""}" x="${svgNum(lx)}" y="${svgNum(ly)}" text-anchor="middle">${Math.abs(head)}</text>`);
+      }
     }
 
     // Crosswind component across the runway axis: toward the side the wind pushes
@@ -676,7 +684,13 @@ function windRunwaySvg(rwy, w, opts = {}) {
       const xx = cx + sign * prx * xlen, xy = cy + sign * pry * xlen;
       const sev = severe ? "nogo" : "mit";
       parts.push(`<line class="wr-cross wr-sev-${sev}" x1="${cx}" y1="${cy}" x2="${svgNum(xx)}" y2="${svgNum(xy)}" stroke-width="${S.comp}" marker-end="url(#wr-arrow-cross-${sev})"/>`);
-      if (S.labels) parts.push(`<text class="wr-kt wr-kt-cross${severe ? " wr-kt-severe" : ""}" x="${svgNum(xx + sign * 4)}" y="${svgNum(xy - 2)}" text-anchor="${sign < 0 ? "end" : "start"}">${xw}</text>`);
+      if (S.labels) {
+        // Label at the arrow's midpoint, nudged to the side away from the headwind arrow.
+        const off = head >= 0 ? 1 : -1;
+        const lx = cx + sign * prx * xlen * 0.55 + off * ux * 7;
+        const ly = cy + sign * pry * xlen * 0.55 + off * uy * 7 + S.font / 3;
+        parts.push(`<text class="wr-kt wr-kt-cross${severe ? " wr-kt-severe" : ""}" x="${svgNum(lx)}" y="${svgNum(ly)}" text-anchor="middle">${xw}</text>`);
+      }
     }
 
     const headTxt = head >= 0 ? `headwind ${head}` : `tailwind ${Math.abs(head)}`;
