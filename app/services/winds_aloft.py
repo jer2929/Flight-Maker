@@ -1,9 +1,12 @@
 """Best-cruise-altitude recommendation from winds aloft.
 
-Evaluates the legal VFR cruising altitudes (hemispheric rule, **capped below
+Evaluates the legal cruising altitudes for the hemispheric rule (**capped below
 12,500 ft** so no oxygen is required) and picks the one with the most tailwind
-(best groundspeed). Winds at each candidate altitude are interpolated from the
+(best groundspeed). VFR uses the odd/even thousands **+500**; IFR uses the plain
+odd/even thousands. Winds at each candidate altitude are interpolated from the
 model's pressure-level winds. The hemispheric rule uses the *magnetic* course.
+VFR picks stay at least 500 ft below the ceiling (cloud clearance); IFR is not
+gated on the ceiling.
 """
 from __future__ import annotations
 
@@ -14,8 +17,11 @@ from app.models import AltitudeRecommendation, WindAloft
 from app.services.runway import angular_difference
 
 # VFR cruising altitudes (thousands+500), capped < 12,500 ft.
-_EASTBOUND = [3500, 5500, 7500, 9500, 11500]   # magnetic track 0-179, odd+500
-_WESTBOUND = [4500, 6500, 8500, 10500]         # magnetic track 180-359, even+500
+_VFR_EASTBOUND = [3500, 5500, 7500, 9500, 11500]   # magnetic track 0-179, odd+500
+_VFR_WESTBOUND = [4500, 6500, 8500, 10500]         # magnetic track 180-359, even+500
+# IFR cruising altitudes (plain thousands), capped < 12,500 ft.
+_IFR_EASTBOUND = [3000, 5000, 7000, 9000, 11000]   # magnetic track 0-179, odd thousands
+_IFR_WESTBOUND = [4000, 6000, 8000, 10000, 12000]  # magnetic track 180-359, even thousands
 
 
 def route_wind_component(wind_dir_true: float, wind_kt: float, course_true: float) -> float:
@@ -53,8 +59,11 @@ def _interp_wind(levels: list[WindAloft], altitude_ft: float) -> Optional[tuple[
     return lv[-1].direction_true, lv[-1].speed_kt
 
 
-def candidate_altitudes(course_mag: float) -> list[int]:
-    return _EASTBOUND if course_mag < 180.0 else _WESTBOUND
+def candidate_altitudes(course_mag: float, flight_rules: str = "vfr") -> list[int]:
+    eastbound = course_mag < 180.0
+    if flight_rules == "ifr":
+        return _IFR_EASTBOUND if eastbound else _IFR_WESTBOUND
+    return _VFR_EASTBOUND if eastbound else _VFR_WESTBOUND
 
 
 def recommend_altitude(
@@ -63,14 +72,19 @@ def recommend_altitude(
     cruise_kt: float,
     course_mag: Optional[float] = None,
     ceiling_ft: Optional[float] = None,
+    flight_rules: str = "vfr",
 ) -> Optional[AltitudeRecommendation]:
-    """Pick the legal VFR altitude (<12,500) with the most tailwind, staying ≥1,000 ft below ceiling."""
+    """Pick the legal cruising altitude (<12,500) with the most tailwind.
+
+    VFR stays ≥500 ft below the ceiling (cloud clearance); IFR is not gated on
+    the ceiling.
+    """
     if not levels:
         return None
     cm = course_mag if course_mag is not None else course_true
-    cands = candidate_altitudes(cm)
-    if ceiling_ft is not None:
-        cands = [a for a in cands if a <= ceiling_ft - 1000]
+    cands = candidate_altitudes(cm, flight_rules)
+    if flight_rules != "ifr" and ceiling_ft is not None:
+        cands = [a for a in cands if a <= ceiling_ft - 500]
     if not cands:
         return None
 

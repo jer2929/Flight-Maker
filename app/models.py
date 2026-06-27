@@ -50,6 +50,7 @@ class RunwayWind(BaseModel):
     heading_true: float
     heading_mag: Optional[float] = None
     headwind_kt: float  # negative = tailwind
+    headwind_kt_gust: Optional[float] = None  # using gust + half-gust factor
     crosswind_kt: float
     crosswind_kt_gust: Optional[float] = None  # using gust + half-gust factor
     length_ft: Optional[float] = None
@@ -69,7 +70,9 @@ class RunwayComponent(BaseModel):
     surface: Optional[str] = None
     surface_label: Optional[str] = None
     headwind_kt: float       # positive = headwind, negative = tailwind
+    headwind_kt_gust: Optional[float] = None   # using gust + half-gust factor
     crosswind_kt: float      # magnitude
+    crosswind_kt_gust: Optional[float] = None  # using gust + half-gust factor
     tailwind_kt: float       # positive only when there is a tailwind, else 0
 
 
