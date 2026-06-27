@@ -219,8 +219,8 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .rwy-comp-row { display: flex; align-items: center; gap: 8px; }
 .rwy-comp-row .rwy-comp { padding: 3px 0; flex: 1 1 auto; min-width: 0; }
 .rwy-diag-sm { flex: 0 0 auto; }
-.wr { display: block; width: 108px; height: 108px; overflow: visible; }
-.wr.wr-sm { width: 76px; height: 76px; }
+.wr { display: block; width: 138px; height: 138px; overflow: visible; }
+.wr.wr-sm { width: 96px; height: 96px; }
 .wr-strip-line { stroke: var(--muted); fill: none; stroke-linecap: butt; opacity: .55; }
 .wr-center { stroke: rgba(230, 237, 243, .45); fill: none; stroke-dasharray: 2 3; }
 .wr-n { fill: var(--muted); text-anchor: middle; font-family: system-ui, sans-serif; }
@@ -236,11 +236,12 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .wr-wind { stroke: #6cb6ff; fill: none; stroke-linecap: round; stroke-dasharray: 4 3; opacity: .9; }
 .wr-ah-wind { fill: #6cb6ff; }
 .wr-hub { fill: var(--ink); }
-.wr-kt { font-size: 11px; font-weight: 600; font-family: system-ui, sans-serif; }
+.wr-kt { font-size: 12px; font-weight: 700; font-family: system-ui, sans-serif; }
 .wr-kt-head { fill: var(--go); }
 .wr-kt-tail { fill: var(--nogo); }
 .wr-kt-cross { fill: var(--mitigate); }
 .wr-kt-severe { fill: var(--nogo); }
+.wr-kt-wind { fill: #6cb6ff; }
 /* arrowhead fills (shared markers live in index.html) */
 .wr-ah-head { fill: var(--go); }
 .wr-ah-tail { fill: var(--nogo); }
