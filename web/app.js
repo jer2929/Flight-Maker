@@ -956,14 +956,15 @@ function buildConservatism() {
 // lands on the bare track, so there's no jump and no bounce-back. Desktop mouse
 // behaviour (click-to-jump) is untouched.
 function makeDragOnly(el) {
-  const THUMB = 26; // keep in sync with the range thumb width in style.css
+  const THUMB = 18;            // approx native thumb width
+  const GRAB = THUMB / 2 + 10; // forgiving grab radius around the small ball
   el.addEventListener('pointerdown', e => {
     if (e.pointerType !== 'touch') return;
     const r = el.getBoundingClientRect();
     const min = +el.min, max = +el.max;
     const frac = (el.value - min) / (max - min || 1);
     const center = r.left + THUMB / 2 + frac * (r.width - THUMB);
-    if (Math.abs(e.clientX - center) > THUMB / 2 + 6) e.preventDefault();
+    if (Math.abs(e.clientX - center) > GRAB) e.preventDefault();
   }, { passive: false });
 }
 
