@@ -1,7 +1,13 @@
 import math
 
 from app.models import Runway
-from app.services.runway import angular_difference, best_runway, surface_is_hard, wind_components
+from app.services.runway import (
+    all_runway_components,
+    angular_difference,
+    best_runway,
+    surface_is_hard,
+    wind_components,
+)
 
 
 def test_surface_classification():
@@ -73,6 +79,24 @@ def test_gust_crosswind_uses_half_gust_factor():
     assert sol.crosswind_kt_gust is not None
     assert sol.crosswind_kt_gust > sol.crosswind_kt
     assert math.isclose(sol.crosswind_kt_gust, 19, abs_tol=0.5)
+
+
+def test_gust_headwind_uses_half_gust_factor():
+    # Wind 050/14 gust 24 straight down runway 05: full headwind, gust-adjusted.
+    rws = [rwy("05", 50, "23", 230)]
+    sol = best_runway(rws, wind_dir_true=50, wind_kt=14, gust_kt=24)
+    # effective gust speed = 14 + 0.5*(24-14) = 19
+    assert sol.headwind_kt_gust is not None
+    assert sol.headwind_kt_gust > sol.headwind_kt
+    assert math.isclose(sol.headwind_kt_gust, 19, abs_tol=0.5)
+
+
+def test_all_runway_components_carry_gusts():
+    rws = [rwy("05", 50, "23", 230)]
+    comps = all_runway_components(rws, wind_dir_true=50, wind_kt=14, gust_kt=24)
+    active = next(c for c in comps if c.ident == "05")
+    assert active.headwind_kt_gust is not None
+    assert active.headwind_kt_gust > active.headwind_kt
 
 
 def test_fill_headings_derives_from_runway_number():

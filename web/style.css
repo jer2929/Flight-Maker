@@ -15,7 +15,7 @@ header {
   padding: 14px 20px; border-bottom: 1px solid var(--line);
   background: linear-gradient(180deg, #18222c, #0f1419);
   /* Frozen at the top so the logo + Data/Current time stay visible on scroll. */
-  position: sticky; top: 0; z-index: 100;
+  position: sticky; top: 0; z-index: 1000;
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
 }
 header h1 { margin: 0; font-size: 1.5rem; }
@@ -219,8 +219,8 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .rwy-comp-row { display: flex; align-items: center; gap: 8px; }
 .rwy-comp-row .rwy-comp { padding: 3px 0; flex: 1 1 auto; min-width: 0; }
 .rwy-diag-sm { flex: 0 0 auto; }
-.wr { display: block; width: 84px; height: 84px; overflow: visible; }
-.wr.wr-sm { width: 52px; height: 52px; }
+.wr { display: block; width: 108px; height: 108px; overflow: visible; }
+.wr.wr-sm { width: 76px; height: 76px; }
 .wr-strip-line { stroke: var(--muted); fill: none; stroke-linecap: butt; opacity: .55; }
 .wr-center { stroke: rgba(230, 237, 243, .45); fill: none; stroke-dasharray: 2 3; }
 .wr-n { fill: var(--muted); text-anchor: middle; font-family: system-ui, sans-serif; }
@@ -232,7 +232,7 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .wr-cross { fill: none; stroke-linecap: round; }
 .wr-sev-mit { stroke: var(--mitigate); }
 .wr-sev-nogo { stroke: var(--nogo); }
-.wr-kt { font-size: 8px; font-family: system-ui, sans-serif; }
+.wr-kt { font-size: 11px; font-weight: 600; font-family: system-ui, sans-serif; }
 .wr-kt-head { fill: var(--go); }
 .wr-kt-tail { fill: var(--nogo); }
 .wr-kt-cross { fill: var(--mitigate); }
@@ -362,7 +362,10 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .radar-type { background: var(--bg); color: var(--muted); border: 1px solid var(--line);
   border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: .82rem; }
 .radar-type.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-.radar-map { height: 380px; width: 100%; border-radius: 8px; border: 1px solid var(--line); }
+/* position+z-index makes the map its own stacking context so Leaflet's internal
+   panes/controls (z-index up to ~1000) stay trapped below the sticky header. */
+.radar-map { height: 380px; width: 100%; border-radius: 8px; border: 1px solid var(--line);
+  position: relative; z-index: 0; }
 .radar-controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .radar-play { background: var(--accent); color: #fff; border: none; border-radius: 8px;
   width: 38px; height: 32px; cursor: pointer; font-size: .9rem; }

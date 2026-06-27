@@ -612,8 +612,8 @@ function windRunwaySvg(rwy, w, opts = {}) {
     if (H == null) return "";
     const compact = !!opts.compact;
     const S = compact
-      ? { vb: 64, Lr: 16, rw: 6, maxArrow: 20, pad: 8,  font: 7, comp: 1.8, labels: false }
-      : { vb: 100, Lr: 24, rw: 9, maxArrow: 28, pad: 12, font: 9, comp: 2.5, labels: true };
+      ? { vb: 76, Lr: 18, rw: 6,  maxArrow: 22, pad: 10, font: 8,  comp: 2.0, labels: true }
+      : { vb: 116, Lr: 27, rw: 10, maxArrow: 32, pad: 14, font: 10, comp: 2.8, labels: true };
     const cx = S.vb / 2, cy = S.vb / 2;
 
     // North-up unit vectors (screen y points down). Bearing th -> (sin, -cos).
@@ -659,39 +659,46 @@ function windRunwaySvg(rwy, w, opts = {}) {
     const xw = Math.round(rwy.crosswind_kt);
     const pxPerKt = S.maxArrow / 18; // ~18 kt fills the arrow; stronger winds clamp
     const len = (kt) => Math.min(Math.abs(kt) * pxPerKt, S.maxArrow);
+    // Aviation-style "12G18" when a gust component is present (gust > steady).
+    const gustTxt = (base, gust) => gust != null ? `${base}G${Math.round(Math.abs(gust))}` : `${base}`;
+    // The two arrows ride perpendicular axes (along / across the runway). To keep
+    // their (possibly wide "NNGNN") labels from ever colliding, the headwind
+    // label is set beside its arrow and the crosswind label is pushed clear past
+    // its arrowhead — opposite halves of the diagram. Labels always show for a
+    // non-zero component, even when the arrow is too short to draw.
+    const perp = S.font * 1.2;   // clearance to the side of the runway axis
+    const beyond = S.font * 0.9; // push past the crosswind arrowhead
 
     // Headwind component along the runway axis: toward the approach end for a
     // headwind (-u), reversed for a tailwind. Green normally, red for a tailwind.
     const hlen = len(head);
+    const tail = head < 0;
+    const hsign = head >= 0 ? -1 : 1;
     if (hlen >= 3) {
-      const sign = head >= 0 ? -1 : 1;
-      const hx = cx + sign * ux * hlen, hy = cy + sign * uy * hlen;
-      const tail = head < 0;
+      const hx = cx + hsign * ux * hlen, hy = cy + hsign * uy * hlen;
       parts.push(`<line class="wr-head${tail ? " wr-head-tail" : ""}" x1="${cx}" y1="${cy}" x2="${svgNum(hx)}" y2="${svgNum(hy)}" stroke-width="${S.comp}" marker-end="url(#${tail ? "wr-arrow-tail" : "wr-arrow-head"})"/>`);
-      if (S.labels) {
-        // Label at the arrow's midpoint, nudged to the side away from the crosswind arrow.
-        const off = fromRight ? 1 : -1;
-        const lx = cx + sign * ux * hlen * 0.55 + off * prx * 7;
-        const ly = cy + sign * uy * hlen * 0.55 + off * pry * 7 + S.font / 3;
-        parts.push(`<text class="wr-kt wr-kt-head${tail ? " wr-kt-tail" : ""}" x="${svgNum(lx)}" y="${svgNum(ly)}" text-anchor="middle">${Math.abs(head)}</text>`);
-      }
+    }
+    if (S.labels && Math.abs(head) >= 1) {
+      const ndg = fromRight ? 1 : -1; // away from the crosswind arrow
+      const lx = cx + hsign * ux * hlen * 0.55 + ndg * prx * perp;
+      const ly = cy + hsign * uy * hlen * 0.55 + ndg * pry * perp + S.font / 3;
+      parts.push(`<text class="wr-kt wr-kt-head${tail ? " wr-kt-tail" : ""}" x="${svgNum(lx)}" y="${svgNum(ly)}" text-anchor="middle">${gustTxt(Math.abs(head), rwy.headwind_kt_gust)}</text>`);
     }
 
     // Crosswind component across the runway axis: toward the side the wind pushes
     // the aircraft. Yellow normally, red when the wind is mostly a crosswind.
     const xlen = len(xw);
+    const xsign = fromRight ? -1 : 1; // wind from the right pushes the aircraft left
     if (xlen >= 3) {
-      const sign = fromRight ? -1 : 1; // wind from the right pushes the aircraft left
-      const xx = cx + sign * prx * xlen, xy = cy + sign * pry * xlen;
+      const xx = cx + xsign * prx * xlen, xy = cy + xsign * pry * xlen;
       const sev = severe ? "nogo" : "mit";
       parts.push(`<line class="wr-cross wr-sev-${sev}" x1="${cx}" y1="${cy}" x2="${svgNum(xx)}" y2="${svgNum(xy)}" stroke-width="${S.comp}" marker-end="url(#wr-arrow-cross-${sev})"/>`);
-      if (S.labels) {
-        // Label at the arrow's midpoint, nudged to the side away from the headwind arrow.
-        const off = head >= 0 ? 1 : -1;
-        const lx = cx + sign * prx * xlen * 0.55 + off * ux * 7;
-        const ly = cy + sign * pry * xlen * 0.55 + off * uy * 7 + S.font / 3;
-        parts.push(`<text class="wr-kt wr-kt-cross${severe ? " wr-kt-severe" : ""}" x="${svgNum(lx)}" y="${svgNum(ly)}" text-anchor="middle">${xw}</text>`);
-      }
+    }
+    if (S.labels && xw >= 1) {
+      const ndg = -hsign; // nudge off the runway axis, toward the headwind arrow's side
+      const lx = cx + xsign * prx * (xlen + beyond) + ndg * ux * (S.font * 0.5);
+      const ly = cy + xsign * pry * (xlen + beyond) + ndg * uy * (S.font * 0.5) + S.font / 3;
+      parts.push(`<text class="wr-kt wr-kt-cross${severe ? " wr-kt-severe" : ""}" x="${svgNum(lx)}" y="${svgNum(ly)}" text-anchor="middle">${gustTxt(xw, rwy.crosswind_kt_gust)}</text>`);
     }
 
     const headTxt = head >= 0 ? `headwind ${head}` : `tailwind ${Math.abs(head)}`;
@@ -704,6 +711,11 @@ function endpointCard(a, role) {
   const issues = a.reasons || [];
   const wind = windStr(w);
   const to = a.best_takeoff, ld = a.best_landing;
+  // Departure cards show only takeoff, destination cards only landing; an
+  // aerodrome (circuits) shows both.
+  const showTakeoff = role !== "Destination";
+  const showLanding = role !== "Departure";
+  const gust = (g) => g ? ` (gust ${Math.round(Math.abs(g))})` : "";
   return `<div class="card ${cls(a.verdict)}">
     <div class="card-head"><h3>${role}: ${a.airport.ident} · ${a.airport.name}</h3><span class="badge ${cls(a.verdict)}">${a.verdict}</span></div>
     ${issues.length ? `<ul class="reasons nogo-reasons">${issues.map((x) => `<li>${x}</li>`).join("")}</ul>` : `<div class="ok-line">✓ Within personal limits</div>`}
@@ -714,8 +726,8 @@ function endpointCard(a, role) {
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
       ${notamToggle(a)}
     </div>
-    ${to ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(to, w)}</span><div class="rwy-lines"><div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt · xwind ${Math.round(to.crosswind_kt)} kt</div></div></div>` : ""}
-    ${ld ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(ld, w)}</span><div class="rwy-lines"><div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · xwind ${Math.round(ld.crosswind_kt)} kt${ld.crosswind_kt_gust ? ` (gust ${Math.round(ld.crosswind_kt_gust)})` : ""}</div></div></div>` : ""}
+    ${showTakeoff && to ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(to, w)}</span><div class="rwy-lines"><div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt${gust(to.headwind_kt_gust)} · xwind ${Math.round(to.crosswind_kt)} kt${gust(to.crosswind_kt_gust)}</div></div></div>` : ""}
+    ${showLanding && ld ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(ld, w)}</span><div class="rwy-lines"><div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · headwind ${Math.round(ld.headwind_kt)} kt${gust(ld.headwind_kt_gust)} · xwind ${Math.round(ld.crosswind_kt)} kt${gust(ld.crosswind_kt_gust)}</div></div></div>` : ""}
     ${a.nearby_station ? nearbyBlock(a.nearby_station) : ""}
     ${trendsBlock(a)}
     ${runwaysBlock(a)}
@@ -759,8 +771,9 @@ function runwaysBlock(a) {
   const w = a.weather || {};
   const usable = comps.filter((c) => c.tailwind_kt <= 0).sort((x, y) => y.headwind_kt - x.headwind_kt);
   if (!usable.length) return "";
+  const gust = (g) => g ? ` (gust ${Math.round(Math.abs(g))})` : "";
   const rows = usable.map((c) =>
-    `<div class="rwy-comp-row"><span class="rwy-diag-sm">${windRunwaySvg(c, w, { compact: true })}</span><div class="rwy-comp">RWY ${c.ident} ${dirM(c.heading_mag, c.heading_true)} · ${dimsText(c)} · head ${Math.round(c.headwind_kt)} kt / xwind ${Math.round(c.crosswind_kt)} kt</div></div>`).join("");
+    `<div class="rwy-comp-row"><span class="rwy-diag-sm">${windRunwaySvg(c, w, { compact: true })}</span><div class="rwy-comp">RWY ${c.ident} ${dirM(c.heading_mag, c.heading_true)} · ${dimsText(c)} · head ${Math.round(c.headwind_kt)} kt${gust(c.headwind_kt_gust)} / xwind ${Math.round(c.crosswind_kt)} kt${gust(c.crosswind_kt_gust)}</div></div>`).join("");
   return `<details class="runways"><summary>Usable runways into wind: ${usable.length} <span class="hint">(no tailwind component)</span></summary>${rows}</details>`;
 }
 

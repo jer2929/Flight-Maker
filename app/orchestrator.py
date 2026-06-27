@@ -247,7 +247,7 @@ def _assess_endpoint(
 
     # Runway components (all ends), magnetic headings filled.
     comps: list[RunwayComponent] = []
-    for comp in all_runway_components(runways, weather.wind_dir_true, weather.wind_kt):
+    for comp in all_runway_components(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt):
         comps.append(comp.model_copy(update={"heading_mag": _mag(comp.heading_true, lat, lon)}))
 
     gs = alt.groundspeed_kt if alt else None
@@ -539,14 +539,18 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         pt["label"] = f"~{dist_along} nm from {dep.ident}{near_txt}"
         enroute.append(pt)
 
-    # Gate cruising altitude on the minimum ceiling along the route so far
-    # (departure + enroute midpoints). Destination ceiling is not yet known from
-    # observation, but the model enroute picture is sufficient to avoid a cloud-
-    # deck clash at the recommended level.
-    gate_ceiling_pts = [dep_a.weather.ceiling_agl_ft] + [e.get("ceiling_ft") for e in enroute]
+    # Gate the (VFR) cruising altitude on the minimum ceiling along the whole
+    # route — departure, enroute midpoints and destination — so a recommended
+    # level never clashes with a cloud deck. The destination ceiling is derived
+    # here (before its full assessment) with the same _endpoint_weather helper.
+    dest_ceiling = _endpoint_weather(metars.get(dest.ident), tafs.get(dest.ident),
+                                     dest_fc, dest_ens).ceiling_agl_ft
+    gate_ceiling_pts = ([dep_a.weather.ceiling_agl_ft, dest_ceiling]
+                        + [e.get("ceiling_ft") for e in enroute])
     gate_ceiling = min([c for c in gate_ceiling_pts if c is not None], default=None)
     alt = recommend_altitude(_winds_aloft_now(dep_fc), bearing, settings.cruise_kt,
-                             course_mag=bearing_mag, ceiling_ft=gate_ceiling) if dep_fc else None
+                             course_mag=bearing_mag, ceiling_ft=gate_ceiling,
+                             flight_rules=flight_rules) if dep_fc else None
     if alt:
         for lv in alt.levels:
             lv.direction_mag = _mag(lv.direction_true, dep.lat, dep.lon)
@@ -751,7 +755,7 @@ async def suggest(
         alt = recommend_altitude(
             levels_now, bearing, settings.cruise_kt,
             course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
-            ceiling_ft=cand_ceiling)
+            ceiling_ft=cand_ceiling, flight_rules=flight_rules)
         a = _assess_endpoint(
             airport, metars.get(airport.ident), tafs.get(airport.ident),
             cand_fc, notams, mode, manual_threats, dist, bearing, alt,

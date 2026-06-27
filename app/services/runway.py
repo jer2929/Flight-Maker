@@ -116,9 +116,10 @@ def best_runway(
     if not ends:
         return None
 
-    def mk(ident, hdg, rw, hw, xw, xwg=None):
+    def mk(ident, hdg, rw, hw, xw, hwg=None, xwg=None):
         return RunwayWind(
             runway_ident=ident, heading_true=hdg, headwind_kt=round(hw, 1),
+            headwind_kt_gust=(round(hwg, 1) if hwg is not None else None),
             crosswind_kt=round(xw, 1), crosswind_kt_gust=(round(xwg, 1) if xwg is not None else None),
             length_ft=rw.length_ft, width_ft=rw.width_ft,
             surface=rw.surface, surface_label=surface_label(rw.surface),
@@ -132,8 +133,8 @@ def best_runway(
     best: Optional[RunwayWind] = None
     for ident, hdg, rw in ends:
         hw, xw = wind_components(wind_dir_true, wind_kt, hdg)
-        xwg = wind_components(wind_dir_true, gust_speed, hdg)[1] if gust_speed is not None else None
-        cand = mk(ident, hdg, rw, hw, xw, xwg)
+        hwg, xwg = wind_components(wind_dir_true, gust_speed, hdg) if gust_speed is not None else (None, None)
+        cand = mk(ident, hdg, rw, hw, xw, hwg, xwg)
         # Prefer most headwind (into wind); tie-break least crosswind.
         if best is None or (-cand.headwind_kt, cand.crosswind_kt) < (-best.headwind_kt, best.crosswind_kt):
             best = cand
@@ -144,18 +145,25 @@ def all_runway_components(
     runways: list[Runway],
     wind_dir_true: Optional[float],
     wind_kt: Optional[float],
+    gust_kt: Optional[float] = None,
 ) -> list[RunwayComponent]:
     """Head/cross/tail components for every runway end (true headings)."""
     out: list[RunwayComponent] = []
+    calm = wind_dir_true is None or wind_kt is None or wind_kt <= 0
+    gust_speed = (wind_kt + 0.5 * (gust_kt - wind_kt)
+                  if (not calm and gust_kt and gust_kt > wind_kt) else None)
     for ident, hdg, rw in _ends(runways):
-        if wind_dir_true is None or wind_kt is None or wind_kt <= 0:
+        if calm:
             hw = xw = 0.0
+            hwg = xwg = None
         else:
             hw, xw = wind_components(wind_dir_true, wind_kt, hdg)
+            hwg, xwg = wind_components(wind_dir_true, gust_speed, hdg) if gust_speed is not None else (None, None)
         out.append(RunwayComponent(
             ident=ident, heading_true=hdg, length_ft=rw.length_ft, width_ft=rw.width_ft,
             surface=rw.surface, surface_label=surface_label(rw.surface),
-            headwind_kt=round(hw, 1), crosswind_kt=round(xw, 1),
+            headwind_kt=round(hw, 1), headwind_kt_gust=(round(hwg, 1) if hwg is not None else None),
+            crosswind_kt=round(xw, 1), crosswind_kt_gust=(round(xwg, 1) if xwg is not None else None),
             tailwind_kt=round(-hw, 1) if hw < 0 else 0.0,
         ))
     return out
