@@ -197,6 +197,7 @@ function wire() {
     const rule = b.dataset.rule;
     $$(".rule-tab").forEach((x) => x.classList.toggle("active", x === b));
     $$(".rule-pane").forEach((p) => p.classList.toggle("hidden", p.dataset.rule !== rule));
+    buildWxFlags();
   }));
   autocomplete("dep", "dep-list");
   autocomplete("dest", "dest-list");
@@ -800,7 +801,8 @@ const threatsOfKind = (kind) => threatMeta().filter((t) => t.kind === kind);
 const threatLabel = (key) => (threatMeta().find((t) => t.key === key) || {}).label || labelOf(key);
 
 function buildWxFlags() {
-  const ifr = currentFlightRules() === "ifr";
+  const ruleTabIfr = ($$(".rule-tab").find(b => b.classList.contains("active")) || {}).dataset?.rule === "ifr";
+  const ifr = currentFlightRules() === "ifr" || ruleTabIfr;
   const flags = (CONFIG.weather_flag_options || []).filter((f) => !ifr || f !== "widespread_ifr");
   const prev = new Set($$(".wxflag").filter((c) => c.checked).map((c) => c.value));
   $("#wxflags").innerHTML = flags
