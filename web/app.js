@@ -180,9 +180,10 @@ const labelOf = (s) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCas
 
 // ---------- Wire ----------
 function wire() {
+  // makeDragOnly first so its guard runs before the readout listener (see note there).
+  makeDragOnly($("#radius")); makeDragOnly($("#f-time"));
   $("#radius").addEventListener("input", (e) => ($("#radius-out").textContent = `${e.target.value} nm`));
   $("#f-time").addEventListener("input", (e) => ($("#f-time-out").textContent = +e.target.value ? `${e.target.value} min` : "Any"));
-  makeDragOnly($("#radius")); makeDragOnly($("#f-time"));
   // Scope each seg-btn toggle to its own .seg group; re-render extra threats on IFR/VFR change.
   $$(".seg-btn").forEach((b) => b.addEventListener("click", () => {
     b.closest(".seg").querySelectorAll(".seg-btn").forEach((x) => x.classList.toggle("active", x === b));
@@ -950,22 +951,35 @@ function buildConservatism() {
   updateDesc();
 }
 
-// On touch devices, a tap anywhere off the thumb does nothing at all — the
-// value only moves when the pilot grabs the thumb and drags it. We compute the
-// thumb centre from the current value and preventDefault() on any touch that
-// lands on the bare track, so there's no jump and no bounce-back. Desktop mouse
-// behaviour (click-to-jump) is untouched.
+// On touch devices the value only moves when the pilot grabs the thumb and drags
+// it — a tap/touch anywhere on the bare bar does nothing. preventDefault() on
+// pointerdown does NOT stop a native range from jumping to the tap, so instead we
+// decide on pointerdown whether the touch landed on the thumb, and if it didn't,
+// revert the value on the resulting `input` event (same task → no visible jump)
+// and stopImmediatePropagation() so the readout listener never sees it. We never
+// preventDefault a touch, so an inadvertent touch while scrolling still scrolls.
+// NOTE: makeDragOnly() must be wired BEFORE the readout `input` listener so this
+// guard runs first (AT_TARGET listeners fire in registration order).
 function makeDragOnly(el) {
-  const THUMB = 18;            // approx native thumb width
-  const GRAB = THUMB / 2 + 10; // forgiving grab radius around the small ball
+  const THUMB = 18, GRAB = THUMB / 2 + 12; // grab radius around the small ball
+  let allow = true, startVal = el.value;
   el.addEventListener('pointerdown', e => {
-    if (e.pointerType !== 'touch') return;
+    startVal = el.value;
+    if (e.pointerType !== 'touch') { allow = true; return; } // desktop unchanged
     const r = el.getBoundingClientRect();
     const min = +el.min, max = +el.max;
     const frac = (el.value - min) / (max - min || 1);
     const center = r.left + THUMB / 2 + frac * (r.width - THUMB);
-    if (Math.abs(e.clientX - center) > GRAB) e.preventDefault();
-  }, { passive: false });
+    allow = Math.abs(e.clientX - center) <= GRAB; // only when grabbing the ball
+  });
+  el.addEventListener('input', e => {
+    if (allow) return;
+    el.value = startVal;          // undo the tap-jump…
+    e.stopImmediatePropagation(); // …and hide it from the readout listener
+  });
+  const release = () => { allow = true; };
+  el.addEventListener('pointerup', release);
+  el.addEventListener('pointercancel', release);
 }
 
 // Build a labelled slider per minimum, with a live value readout.
@@ -985,8 +999,8 @@ function renderMinSliders() {
   for (const f of MIN_FIELDS) {
     const el = $("#" + f.id);
     if (el) {
+      makeDragOnly(el); // before the readout listener — see note on makeDragOnly
       el.addEventListener("input", (e) => ($("#" + f.id + "-out").textContent = `${e.target.value} ${f.unit}`));
-      makeDragOnly(el);
     }
   }
 }
@@ -1002,6 +1016,7 @@ function renderRecencySlider() {
     <input type="range" id="set-recency" min="1" max="20" step="1" value="${v}" />
   </div>`;
   const recencyEl = document.getElementById("set-recency");
+  makeDragOnly(recencyEl); // before the readout listener — see note on makeDragOnly
   recencyEl.addEventListener("input", (e) => {
     const val = +e.target.value;
     document.getElementById("set-recency-out").textContent = `${val} hr`;
@@ -1009,7 +1024,6 @@ function renderRecencySlider() {
     renderSelfAssessment("route-self-check");
     renderSelfAssessment("discovery-self-check");
   });
-  makeDragOnly(recencyEl);
 }
 
 // Populate every control from the effective profile (defaults + custom).
