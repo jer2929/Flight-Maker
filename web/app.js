@@ -200,7 +200,28 @@ function wire() {
   }));
   autocomplete("dep", "dep-list");
   autocomplete("dest", "dest-list");
+  autocomplete("circ-aerodrome", "circ-list");
   autocomplete("set-base", "base-list");
+
+  // Flight-type toggle: XC ↔ Circuits
+  $$("[data-ftype]").forEach((b) => b.addEventListener("click", () => {
+    $$("[data-ftype]").forEach((x) => x.classList.toggle("active", x === b));
+    applyFlightType(b.dataset.ftype);
+  }));
+}
+
+function currentFlightType() {
+  return ($$("[data-ftype].active")[0] || {}).dataset?.ftype || "xc";
+}
+
+function applyFlightType(ftype) {
+  const isCircuits = ftype === "circuits";
+  $("#dest-row").classList.toggle("hidden", isCircuits);
+  $("#circ-row").classList.toggle("hidden", !isCircuits);
+  if (isCircuits && !$("#circ-aerodrome").value) {
+    $("#circ-aerodrome").value = $("#dep").value || baseIdent();
+  }
+  $("#run-route").textContent = isCircuits ? "Assess circuits" : "Assess route";
 }
 
 const currentMode = () => ($$(".seg-btn[data-mode]").find((b) => b.classList.contains("active")) || {}).dataset?.mode || "day";
@@ -447,6 +468,7 @@ function toggleRadarPlay() {
 
 // ---------- Route ----------
 async function runRoute() {
+  if (currentFlightType() === "circuits") { runCircuits(); return; }
   const dep = $("#dep").value.trim().toUpperCase(), dest = $("#dest").value.trim().toUpperCase();
   if (!dest) { $("#route-verdict").innerHTML = `<div class="empty">Enter a destination.</div>`; return; }
   const btn = $("#run-route"); btn.disabled = true; btn.textContent = "Pulling data…";
@@ -461,6 +483,38 @@ async function runRoute() {
   } catch (e) {
     $("#route-verdict").innerHTML = `<div class="empty">Error: ${e}</div>`;
   } finally { btn.disabled = false; btn.textContent = "Assess route"; }
+}
+
+async function runCircuits() {
+  const aerodrome = ($("#circ-aerodrome").value.trim() || baseIdent()).toUpperCase();
+  const btn = $("#run-route"); btn.disabled = true; btn.textContent = "Pulling data…";
+  clearRoute();
+  try {
+    const params = new URLSearchParams({ aerodrome, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam() });
+    const res = await fetch(`/api/circuits?${params}`);
+    if (!res.ok) { $("#route-verdict").innerHTML = `<div class="empty">Unknown aerodrome.</div>`; return; }
+    renderCircuits(await res.json());
+    stampDataTime();
+  } catch (e) {
+    $("#route-verdict").innerHTML = `<div class="empty">Error: ${e}</div>`;
+  } finally { btn.disabled = false; btn.textContent = "Assess circuits"; }
+}
+
+function renderCircuits(r) {
+  const v = r.verdict;
+  const frLabel = currentFlightRules() === "ifr" ? " · IFR" : " · VFR";
+  $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.airport.ident} circuits: ${v} now${frLabel}</div>`;
+  const cond = r.limit_checks.filter((c) => c.group === "conditions");
+  const wx = r.limit_checks.filter((c) => c.group === "weather");
+  const n = r.threat_checks.filter((t) => t.present).length;
+  const label = r.threat_result_label || stackWord(n);
+  $("#route-checklist").innerHTML = `<div class="panel checklist">
+    <div class="cl-group"><h3>Hard limits — conditions <span class="hint">(circuit minimums)</span></h3>${cond.map(rowCheck).join("")}</div>
+    <div class="cl-group"><h3>Weather</h3>${wx.map(rowCheck).join("")}</div>
+    <div class="cl-group"><h3>Two-trigger threat stack <span class="badge ${cls(labelVerdict(label))}">${n} present → ${label}</span></h3>${r.threat_checks.map(rowThreat).join("")}</div>
+  </div>`;
+  $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
+  $("#route-endpoints").innerHTML = endpointCard(r, "Aerodrome");
 }
 
 function clearRoute() {

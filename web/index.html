@@ -70,15 +70,26 @@
     <div id="route-self-check"></div>
 
     <div class="panel route-inputs">
-      <div class="ac">
+      <div class="control" style="margin-bottom:0.5rem">Flight type
+        <div class="seg" id="ftype-seg">
+          <button type="button" class="seg-btn active" data-ftype="xc">Cross-country</button>
+          <button type="button" class="seg-btn" data-ftype="circuits">Circuits</button>
+        </div>
+      </div>
+      <div class="ac" id="dep-row">
         <label>Departure</label>
         <input id="dep" autocomplete="off" placeholder="CYFD" />
         <div class="ac-list hidden" id="dep-list"></div>
       </div>
-      <div class="ac">
+      <div class="ac" id="dest-row">
         <label>Destination</label>
         <input id="dest" autocomplete="off" placeholder="Type ident or city…" />
         <div class="ac-list hidden" id="dest-list"></div>
+      </div>
+      <div class="ac hidden" id="circ-row">
+        <label>Aerodrome</label>
+        <input id="circ-aerodrome" autocomplete="off" placeholder="CYFD" />
+        <div class="ac-list hidden" id="circ-list"></div>
       </div>
       <button id="run-route" class="primary">Assess route</button>
     </div>

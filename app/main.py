@@ -93,6 +93,24 @@ async def route(
     return JSONResponse(result.model_dump())
 
 
+@app.get("/api/circuits")
+async def circuits(
+    aerodrome: str = Query(default=None),
+    mode: str = Query(default="day", pattern="^(day|night)$"),
+    threats: str = Query(default=""),
+    flight_rules: str = Query(default="vfr", pattern="^(vfr|ifr)$"),
+    prefs: str = Query(default=None),
+):
+    s = get_settings()
+    ident = (aerodrome or s.origin).upper()
+    manual = [t for t in threats.split(",") if t]
+    with limits_override(_parse_prefs(prefs)):
+        result = await orchestrator.assess_circuits(ident, mode, manual, flight_rules=flight_rules)
+    if result is None:
+        return JSONResponse({"error": "unknown aerodrome"}, status_code=404)
+    return JSONResponse(result.model_dump())
+
+
 @app.get("/api/gfa")
 async def gfa(
     dep: str = Query(...),

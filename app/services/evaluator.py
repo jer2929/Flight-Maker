@@ -83,7 +83,10 @@ def conditions_checks(
         c = ifr.get("ceiling_agl_ft", L["ceiling_agl_ft"])
     else:
         c = L["ceiling_agl_ft"]
-    ceil_limit = c.get("night_xc", c.get("night_xc_cloud_base", 12000)) if mode == "night" else c.get("day_xc", 4000)
+    if ceiling_mode == "circuit":
+        ceil_limit = c.get("night_circuit", 3000) if mode == "night" else c.get("day_circuit", 2000)
+    else:
+        ceil_limit = c.get("night_xc", c.get("night_xc_cloud_base", 12000)) if mode == "night" else c.get("day_xc", 4000)
     checks.append(_ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, src, ceiling_mode))
     # Visibility — IFR uses ifr_minimums section; VFR uses hard_limits.
     if flight_rules == "ifr":
@@ -91,9 +94,14 @@ def conditions_checks(
         v = ifr.get("visibility_sm", L["visibility_sm"])
     else:
         v = L["visibility_sm"]
-    vis_limit = v.get("night_xc", 9) if mode == "night" else v.get("day_xc", 9)
+    if ceiling_mode == "circuit":
+        vis_limit = v.get("night_circuit", 6) if mode == "night" else v.get("day_circuit", 5)
+        vis_label = "Visibility (circuits)"
+    else:
+        vis_limit = v.get("night_xc", 9) if mode == "night" else v.get("day_xc", 9)
+        vis_label = "Visibility (XC)"
     checks.append(_min_check(
-        "visibility", "Visibility (XC)", vis_limit, weather.visibility_sm,
+        "visibility", vis_label, vis_limit, weather.visibility_sm,
         unit="SM", source=src,
     ))
     # Hazardous weather flags — for IFR, widespread_ifr is expected and not a no-go.
@@ -127,9 +135,14 @@ def _num_check(key, label, limit, actual, unit, source=None, actual_suffix="") -
 def _ceiling_check(limit, actual, wx_source, src, mode="xc") -> LimitCheck:
     """Ceiling row, rounded to 100 ft. An observed report with no BKN/OVC layer is
     an unlimited ceiling (pass). In ``endpoint`` mode a low ceiling is circuit
-    territory: <1000 fails, 1000–3000 is an advisory, otherwise pass."""
-    label = "Ceiling (departure/dest)" if mode == "endpoint" else "Ceiling (XC)"
-    limit_text = "≥ 1,000 ft (circuit)" if mode == "endpoint" else f"≥ {limit:,} ft AGL"
+    territory: <1000 fails, 1000–3000 is an advisory, otherwise pass.
+    In ``circuit`` mode the personal circuit minimum is a hard limit."""
+    if mode == "endpoint":
+        label, limit_text = "Ceiling (departure/dest)", "≥ 1,000 ft (circuit)"
+    elif mode == "circuit":
+        label, limit_text = "Ceiling (circuits)", f"≥ {limit:,} ft AGL"
+    else:
+        label, limit_text = "Ceiling (XC)", f"≥ {limit:,} ft AGL"
     base = dict(key="ceiling", label=label, limit_text=limit_text, source=src)
     if actual is None:
         if wx_source == Source.OBSERVED:
