@@ -307,19 +307,6 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 /* Home base picker */
 .base-pick { max-width: 300px; margin-bottom: 16px; }
 
-/* Range sliders — explicit thumb size so touch hit-testing (makeDragOnly) is
-   reliable, and a bigger grab target. */
-input[type=range] { -webkit-appearance: none; appearance: none; height: 26px; background: transparent; }
-input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: var(--line); }
-input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--line); }
-input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none; appearance: none; margin-top: -10px;
-  width: 26px; height: 26px; border-radius: 50%; background: var(--accent); cursor: pointer;
-}
-input[type=range]::-moz-range-thumb {
-  width: 26px; height: 26px; border: none; border-radius: 50%; background: var(--accent); cursor: pointer;
-}
-
 /* Slider grid — used inside settings fieldsets */
 .slider-grid { display: grid; gap: 8px; }
 .sld { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
