@@ -4,10 +4,12 @@
   --line: #2a3540; --accent: #3b82f6;
 }
 * { box-sizing: border-box; }
-html { overflow-x: hidden; }
+/* overflow-x: clip (not hidden) stops sideways scroll without creating a scroll
+   container — `hidden` would break the sticky header's freeze-on-scroll. */
+html { overflow-x: clip; }
 body {
   margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  background: var(--bg); color: var(--ink); line-height: 1.45; overflow-x: hidden;
+  background: var(--bg); color: var(--ink); line-height: 1.45; overflow-x: clip;
 }
 header {
   padding: 14px 20px; border-bottom: 1px solid var(--line);
@@ -304,6 +306,19 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 
 /* Home base picker */
 .base-pick { max-width: 300px; margin-bottom: 16px; }
+
+/* Range sliders — explicit thumb size so touch hit-testing (makeDragOnly) is
+   reliable, and a bigger grab target. */
+input[type=range] { -webkit-appearance: none; appearance: none; height: 26px; background: transparent; }
+input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: var(--line); }
+input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--line); }
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; margin-top: -10px;
+  width: 26px; height: 26px; border-radius: 50%; background: var(--accent); cursor: pointer;
+}
+input[type=range]::-moz-range-thumb {
+  width: 26px; height: 26px; border: none; border-radius: 50%; background: var(--accent); cursor: pointer;
+}
 
 /* Slider grid — used inside settings fieldsets */
 .slider-grid { display: grid; gap: 8px; }

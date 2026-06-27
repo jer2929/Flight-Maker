@@ -8,7 +8,9 @@ def test_decision_returns_structured_checks():
     verdict, checks, threats, n = decision(wx, None, "day", False)
     keys = {c.key for c in checks}
     assert {"wind", "gust_spread", "crosswind", "ceiling", "visibility", "hazards"} <= keys
-    assert len(threats) == 9  # full major-threat list
+    # 8 of 9 major threats shown — single-pilot IFR is hidden on VFR (not selected).
+    assert len(threats) == 8
+    assert not any(t.key == "single_pilot_ifr_no_autopilot" for t in threats)
     assert verdict == Verdict.GO
 
 
@@ -213,6 +215,23 @@ def test_imc_opt_in_plus_single_pilot_ifr_stacks_to_nogo():
                                  flight_rules="ifr")
         assert present == {"actual_imc", "single_pilot_ifr_no_autopilot"}
         assert threat_verdict(len(present)) == Verdict.NOGO
+
+
+def test_single_pilot_ifr_dropped_under_vfr():
+    # Selecting the IFR-only threat on a VFR flight must not stack it.
+    present = derive_threats(WeatherSummary(wind_dir_true=50, wind_kt=5, visibility_sm=15,
+                                            ceiling_agl_ft=8000), False,
+                             manual_threats=["single_pilot_ifr_no_autopilot"],
+                             flight_rules="vfr")
+    assert "single_pilot_ifr_no_autopilot" not in present
+
+
+def test_single_pilot_ifr_row_only_when_present():
+    from app.services.evaluator import threat_check_list
+    # Absent → no row at all; present → row shown.
+    assert not any(t.key == "single_pilot_ifr_no_autopilot" for t in threat_check_list(set()))
+    rows = threat_check_list({"single_pilot_ifr_no_autopilot"})
+    assert any(t.key == "single_pilot_ifr_no_autopilot" and t.present for t in rows)
 
 
 # ---- NOTAM validity parsing (plain-language dates / status) ----

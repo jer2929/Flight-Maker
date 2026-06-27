@@ -186,6 +186,10 @@ def derive_threats(
     pilot has opted in (``ifr_minimums.imc_as_threat``)."""
     known = set(get_limits()["threat_stacking"]["major_threats"])
     threats: set[str] = {t for t in (manual_threats or []) if t in known}
+    # Single-pilot IFR without autopilot only makes sense as an IFR threat — drop
+    # it under VFR so a stale/forged query string can't surface it.
+    if flight_rules != "ifr":
+        threats.discard("single_pilot_ifr_no_autopilot")
     if weather.wind_kt is not None and weather.wind_kt >= 15:
         threats.add("strong_or_gusty_winds")
     if weather.gust_kt is not None and weather.wind_kt is not None and (weather.gust_kt - weather.wind_kt) >= 8:
@@ -209,10 +213,15 @@ def derive_threats(
 
 def threat_check_list(present: set[str]) -> list[ThreatCheck]:
     order = get_limits()["threat_stacking"]["major_threats"]
+    # Single-pilot IFR without autopilot is an IFR-only pilot factor; only show
+    # the row when the pilot actually selected it (i.e. it's present). Otherwise
+    # it would clutter the stack as an absent row on every VFR flight.
+    hide_when_absent = {"single_pilot_ifr_no_autopilot"}
     return [
         ThreatCheck(key=k, label=THREAT_LABELS.get(k, k.replace("_", " ").title()),
                     present=k in present)
         for k in order
+        if k not in hide_when_absent or k in present
     ]
 
 
