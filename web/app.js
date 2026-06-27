@@ -182,6 +182,7 @@ const labelOf = (s) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCas
 function wire() {
   $("#radius").addEventListener("input", (e) => ($("#radius-out").textContent = `${e.target.value} nm`));
   $("#f-time").addEventListener("input", (e) => ($("#f-time-out").textContent = +e.target.value ? `${e.target.value} min` : "Any"));
+  makeDragOnly($("#radius")); makeDragOnly($("#f-time"));
   // Scope each seg-btn toggle to its own .seg group; re-render extra threats on IFR/VFR change.
   $$(".seg-btn").forEach((b) => b.addEventListener("click", () => {
     b.closest(".seg").querySelectorAll(".seg-btn").forEach((x) => x.classList.toggle("active", x === b));
@@ -197,6 +198,7 @@ function wire() {
     const rule = b.dataset.rule;
     $$(".rule-tab").forEach((x) => x.classList.toggle("active", x === b));
     $$(".rule-pane").forEach((p) => p.classList.toggle("hidden", p.dataset.rule !== rule));
+    buildWxFlags();
   }));
   autocomplete("dep", "dep-list");
   autocomplete("dest", "dest-list");
@@ -800,7 +802,8 @@ const threatsOfKind = (kind) => threatMeta().filter((t) => t.kind === kind);
 const threatLabel = (key) => (threatMeta().find((t) => t.key === key) || {}).label || labelOf(key);
 
 function buildWxFlags() {
-  const ifr = currentFlightRules() === "ifr";
+  const ruleTabIfr = ($$(".rule-tab").find(b => b.classList.contains("active")) || {}).dataset?.rule === "ifr";
+  const ifr = currentFlightRules() === "ifr" || ruleTabIfr;
   const flags = (CONFIG.weather_flag_options || []).filter((f) => !ifr || f !== "widespread_ifr");
   const prev = new Set($$(".wxflag").filter((c) => c.checked).map((c) => c.value));
   $("#wxflags").innerHTML = flags
@@ -839,6 +842,26 @@ function buildConservatism() {
   updateDesc();
 }
 
+// On touch devices, prevent a tap anywhere on the slider track from jumping the
+// value — the user must intentionally drag the thumb. Desktop mouse behaviour
+// is unchanged (click-to-jump still works there as expected).
+function makeDragOnly(el) {
+  let startVal, startX, moved;
+  el.addEventListener('pointerdown', e => {
+    if (e.pointerType !== 'touch') return;
+    startVal = el.value; startX = e.clientX; moved = false;
+  });
+  el.addEventListener('pointermove', e => {
+    if (e.pointerType !== 'touch') return;
+    if (Math.abs(e.clientX - startX) > 8) moved = true;
+  });
+  el.addEventListener('pointerup', e => {
+    if (e.pointerType !== 'touch' || moved) return;
+    el.value = startVal;
+    el.dispatchEvent(new Event('input'));
+  });
+}
+
 // Build a labelled slider per minimum, with a live value readout.
 function renderMinSliders() {
   const byGrp = {};
@@ -855,7 +878,10 @@ function renderMinSliders() {
   }
   for (const f of MIN_FIELDS) {
     const el = $("#" + f.id);
-    if (el) el.addEventListener("input", (e) => ($("#" + f.id + "-out").textContent = `${e.target.value} ${f.unit}`));
+    if (el) {
+      el.addEventListener("input", (e) => ($("#" + f.id + "-out").textContent = `${e.target.value} ${f.unit}`));
+      makeDragOnly(el);
+    }
   }
 }
 
@@ -869,13 +895,15 @@ function renderRecencySlider() {
     <output class="sld-val" id="set-recency-out">${v} hr</output>
     <input type="range" id="set-recency" min="1" max="20" step="1" value="${v}" />
   </div>`;
-  document.getElementById("set-recency").addEventListener("input", (e) => {
+  const recencyEl = document.getElementById("set-recency");
+  recencyEl.addEventListener("input", (e) => {
     const val = +e.target.value;
     document.getElementById("set-recency-out").textContent = `${val} hr`;
     saveRecencyMin(val);
     renderSelfAssessment("route-self-check");
     renderSelfAssessment("discovery-self-check");
   });
+  makeDragOnly(recencyEl);
 }
 
 // Populate every control from the effective profile (defaults + custom).
