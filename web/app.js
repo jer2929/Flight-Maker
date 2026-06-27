@@ -842,24 +842,21 @@ function buildConservatism() {
   updateDesc();
 }
 
-// On touch devices, prevent a tap anywhere on the slider track from jumping the
-// value — the user must intentionally drag the thumb. Desktop mouse behaviour
-// is unchanged (click-to-jump still works there as expected).
+// On touch devices, a tap anywhere off the thumb does nothing at all — the
+// value only moves when the pilot grabs the thumb and drags it. We compute the
+// thumb centre from the current value and preventDefault() on any touch that
+// lands on the bare track, so there's no jump and no bounce-back. Desktop mouse
+// behaviour (click-to-jump) is untouched.
 function makeDragOnly(el) {
-  let startVal, startX, moved;
+  const THUMB = 26; // keep in sync with the range thumb width in style.css
   el.addEventListener('pointerdown', e => {
     if (e.pointerType !== 'touch') return;
-    startVal = el.value; startX = e.clientX; moved = false;
-  });
-  el.addEventListener('pointermove', e => {
-    if (e.pointerType !== 'touch') return;
-    if (Math.abs(e.clientX - startX) > 8) moved = true;
-  });
-  el.addEventListener('pointerup', e => {
-    if (e.pointerType !== 'touch' || moved) return;
-    el.value = startVal;
-    el.dispatchEvent(new Event('input'));
-  });
+    const r = el.getBoundingClientRect();
+    const min = +el.min, max = +el.max;
+    const frac = (el.value - min) / (max - min || 1);
+    const center = r.left + THUMB / 2 + frac * (r.width - THUMB);
+    if (Math.abs(e.clientX - center) > THUMB / 2 + 6) e.preventDefault();
+  }, { passive: false });
 }
 
 // Build a labelled slider per minimum, with a live value readout.
