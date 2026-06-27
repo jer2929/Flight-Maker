@@ -216,6 +216,7 @@ function currentFlightType() {
 
 function applyFlightType(ftype) {
   const isCircuits = ftype === "circuits";
+  $("#dep-row").classList.toggle("hidden", isCircuits);
   $("#dest-row").classList.toggle("hidden", isCircuits);
   $("#circ-row").classList.toggle("hidden", !isCircuits);
   if (isCircuits && !$("#circ-aerodrome").value) {
