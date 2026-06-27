@@ -611,8 +611,8 @@ function windRunwaySvg(rwy, w, opts = {}) {
     if (H == null) return "";
     const compact = !!opts.compact;
     const S = compact
-      ? { vb: 76, Lr: 18, rw: 6,  maxArrow: 22, pad: 10, font: 8,  comp: 2.0, labels: true }
-      : { vb: 116, Lr: 27, rw: 10, maxArrow: 32, pad: 14, font: 10, comp: 2.8, labels: true };
+      ? { vb: 88,  Lr: 21, rw: 7,  maxArrow: 26, pad: 12, font: 9,  comp: 2.2, labels: true }
+      : { vb: 132, Lr: 31, rw: 11, maxArrow: 36, pad: 16, font: 11, comp: 3.2, labels: true };
     const cx = S.vb / 2, cy = S.vb / 2;
 
     // North-up unit vectors (screen y points down). Bearing th -> (sin, -cos).
@@ -660,18 +660,10 @@ function windRunwaySvg(rwy, w, opts = {}) {
     const len = (kt) => Math.min(Math.abs(kt) * pxPerKt, S.maxArrow);
     // Aviation-style "12G18" when a gust component is present (gust > steady).
     const gustTxt = (base, gust) => gust != null ? `${base}G${Math.round(Math.abs(gust))}` : `${base}`;
-    // The two arrows ride perpendicular axes (along / across the runway). To keep
-    // their (possibly wide "NNGNN") labels from ever colliding, the headwind
-    // label is set beside its arrow and the crosswind label is pushed clear past
-    // its arrowhead — opposite halves of the diagram. Labels always show for a
-    // non-zero component, even when the arrow is too short to draw.
-    const perp = S.font * 1.2;   // clearance to the side of the runway axis
-    const beyond = S.font * 0.9; // push past the crosswind arrowhead
 
     // Total wind: a dashed arrow that flies WITH the wind (tail upwind where it
     // comes from, head downwind where it's blowing to) so the direction reads at
-    // a glance. Drawn at the wind's angle to the runway (delta) in the same
-    // drawn frame as the runway, then decomposed into the head/cross components.
+    // a glance, then decomposed into the head/cross components below.
     const wb = (H + delta) * Math.PI / 180;        // wind FROM bearing, drawn frame
     const fvx = Math.sin(wb), fvy = -Math.cos(wb); // unit vector toward the source
     const Rw = S.Lr * 0.95;
@@ -679,36 +671,50 @@ function windRunwaySvg(rwy, w, opts = {}) {
     // A hub at the centre makes it clear the component arrows share one origin.
     parts.push(`<circle class="wr-hub" cx="${cx}" cy="${cy}" r="${svgNum(S.comp * 0.6)}"/>`);
 
-    // Headwind component along the runway axis: toward the approach end for a
-    // headwind (-u), reversed for a tailwind. Green normally, red for a tailwind.
-    const hlen = len(head);
     const tail = head < 0;
-    const hsign = head >= 0 ? -1 : 1;
+    const hsign = head >= 0 ? -1 : 1;  // headwind points to the approach end (-u)
+    const xsign = fromRight ? -1 : 1;  // wind from the right pushes the aircraft left
+    const hlen = len(head), xlen = len(xw);
+
+    // The three numbers (head / cross / total wind) are parked in the diagram's
+    // diagonal corners, which sit clear of the on-axis runway idents and of each
+    // other — so labels never overlap, whatever the wind angle. Head and cross
+    // take opposite corners; the wind speed takes whichever of the two remaining
+    // corners is nearer the arrow's tail.
+    const Rlbl = S.Lr + S.font * 1.1;
+    const corner = (su, sp) => {
+      const dx = (su * ux + sp * prx) / Math.SQRT2, dy = (su * uy + sp * pry) / Math.SQRT2;
+      return [svgNum(cx + dx * Rlbl), svgNum(cy + dy * Rlbl + S.font / 3)];
+    };
+
+    // Headwind arrow (green; red for a tailwind) + its corner label.
     if (hlen >= 3) {
       const hx = cx + hsign * ux * hlen, hy = cy + hsign * uy * hlen;
       parts.push(`<line class="wr-head${tail ? " wr-head-tail" : ""}" x1="${cx}" y1="${cy}" x2="${svgNum(hx)}" y2="${svgNum(hy)}" stroke-width="${S.comp}" marker-end="url(#${tail ? "wr-arrow-tail" : "wr-arrow-head"})"/>`);
     }
     if (S.labels && Math.abs(head) >= 1) {
-      const ndg = fromRight ? 1 : -1; // away from the crosswind arrow
-      const lx = cx + hsign * ux * hlen * 0.55 + ndg * prx * perp;
-      const ly = cy + hsign * uy * hlen * 0.55 + ndg * pry * perp + S.font / 3;
-      parts.push(`<text class="wr-kt wr-kt-head${tail ? " wr-kt-tail" : ""}" x="${svgNum(lx)}" y="${svgNum(ly)}" text-anchor="middle">${gustTxt(Math.abs(head), rwy.headwind_kt_gust)}</text>`);
+      const [lx, ly] = corner(hsign, -xsign);
+      parts.push(`<text class="wr-kt wr-kt-head${tail ? " wr-kt-tail" : ""}" x="${lx}" y="${ly}" text-anchor="middle">${gustTxt(Math.abs(head), rwy.headwind_kt_gust)}</text>`);
     }
 
-    // Crosswind component across the runway axis: toward the side the wind pushes
-    // the aircraft. Yellow normally, red when the wind is mostly a crosswind.
-    const xlen = len(xw);
-    const xsign = fromRight ? -1 : 1; // wind from the right pushes the aircraft left
+    // Crosswind arrow (amber; red when severe) + its opposite-corner label.
     if (xlen >= 3) {
       const xx = cx + xsign * prx * xlen, xy = cy + xsign * pry * xlen;
       const sev = severe ? "nogo" : "mit";
       parts.push(`<line class="wr-cross wr-sev-${sev}" x1="${cx}" y1="${cy}" x2="${svgNum(xx)}" y2="${svgNum(xy)}" stroke-width="${S.comp}" marker-end="url(#wr-arrow-cross-${sev})"/>`);
     }
     if (S.labels && xw >= 1) {
-      const ndg = -hsign; // nudge off the runway axis, toward the headwind arrow's side
-      const lx = cx + xsign * prx * (xlen + beyond) + ndg * ux * (S.font * 0.5);
-      const ly = cy + xsign * pry * (xlen + beyond) + ndg * uy * (S.font * 0.5) + S.font / 3;
-      parts.push(`<text class="wr-kt wr-kt-cross${severe ? " wr-kt-severe" : ""}" x="${svgNum(lx)}" y="${svgNum(ly)}" text-anchor="middle">${gustTxt(xw, rwy.crosswind_kt_gust)}</text>`);
+      const [lx, ly] = corner(-hsign, xsign);
+      parts.push(`<text class="wr-kt wr-kt-cross${severe ? " wr-kt-severe" : ""}" x="${lx}" y="${ly}" text-anchor="middle">${gustTxt(xw, rwy.crosswind_kt_gust)}</text>`);
+    }
+
+    // Total wind speed (with gust) in the free corner nearest the tail (upwind).
+    if (S.labels) {
+      const uf = ux * fvx + uy * fvy, pf = prx * fvx + pry * fvy;
+      const neg = ((-hsign) * uf + (-xsign) * pf) >= (hsign * uf + xsign * pf);
+      const [lx, ly] = corner(neg ? -hsign : hsign, neg ? -xsign : xsign);
+      const gust = (w.gust_kt != null && w.gust_kt > wind) ? w.gust_kt : null;
+      parts.push(`<text class="wr-kt wr-kt-wind" x="${lx}" y="${ly}" text-anchor="middle">${gustTxt(Math.round(wind), gust)}</text>`);
     }
 
     const headTxt = head >= 0 ? `headwind ${head}` : `tailwind ${Math.abs(head)}`;
