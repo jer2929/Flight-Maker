@@ -1,4 +1,4 @@
-"""Minima — FastAPI app.
+"""Minima - FastAPI app.
 
 Tactical ("fly now") and strategic ("best days in next 10") flight suggestions,
 gated by the pilot's own personal minimums. Serves a small single-page UI from

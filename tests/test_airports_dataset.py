@@ -1,5 +1,5 @@
 """The dataset-rebuild trigger must fire on every load, not just when the file is
-missing — otherwise a stale Replit copy never picks up schema bumps (e.g. runway
+missing - otherwise a stale Replit copy never picks up schema bumps (e.g. runway
 width). See app/sources/airports.py::_pick."""
 from app.sources import airports
 

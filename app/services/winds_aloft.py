@@ -23,6 +23,12 @@ _VFR_WESTBOUND = [4500, 6500, 8500, 10500]         # magnetic track 180-359, eve
 _IFR_EASTBOUND = [3000, 5000, 7000, 9000, 11000]   # magnetic track 0-179, odd thousands
 _IFR_WESTBOUND = [4000, 6000, 8000, 10000, 12000]  # magnetic track 180-359, even thousands
 
+# Distance realism: roughly how much climb height (ft, above the departure field)
+# is worth unlocking per nm of leg. A short hop shouldn't be told to climb to the
+# flight levels when the climb + descent alone would eat the whole leg. At ~200
+# ft/nm a 20 nm leg tops out near 3,500 and a 60 nm leg can reach 11,500.
+CLIMB_DESCENT_FT_PER_NM = 200.0
+
 
 def route_wind_component(wind_dir_true: float, wind_kt: float, course_true: float) -> float:
     """Headwind component along the course (positive = headwind, negative = tail)."""
@@ -73,11 +79,16 @@ def recommend_altitude(
     course_mag: Optional[float] = None,
     ceiling_ft: Optional[float] = None,
     flight_rules: str = "vfr",
+    distance_nm: Optional[float] = None,
+    field_elev_ft: Optional[float] = None,
 ) -> Optional[AltitudeRecommendation]:
     """Pick the legal cruising altitude (<12,500) with the most tailwind.
 
     VFR stays ≥500 ft below the ceiling (cloud clearance); IFR is not gated on
-    the ceiling.
+    the ceiling. When ``distance_nm`` is given, higher levels are capped to what
+    is realistic for the leg length (see ``CLIMB_DESCENT_FT_PER_NM``), measured as
+    climb height above ``field_elev_ft``; the lowest legal level is always kept so
+    short hops still get a suggestion.
     """
     if not levels:
         return None
@@ -87,6 +98,14 @@ def recommend_altitude(
         cands = [a for a in cands if a <= ceiling_ft - 500]
     if not cands:
         return None
+    # Distance realism: don't suggest climbing higher than the leg can justify.
+    # Runs after the cloud gate, so it can only lower the pick (never re-add a
+    # level the ceiling removed); the floor keeps the lowest legal level.
+    if distance_nm and distance_nm > 0:
+        cap = distance_nm * CLIMB_DESCENT_FT_PER_NM
+        elev = field_elev_ft or 0.0
+        capped = [a for a in cands if (a - elev) <= cap]
+        cands = capped or [min(cands)]
 
     winds_at: list[WindAloft] = []
     for alt in cands:

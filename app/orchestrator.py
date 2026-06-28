@@ -106,7 +106,7 @@ def _point_now(fc: dict) -> dict:
 
 def _ceiling_dropping(fc: dict) -> bool:
     """True if the model ceiling falls > 1500 ft (and below 5000) over the next
-    ~4 hours from now — 'rapidly lowering ceilings'."""
+    ~4 hours from now - 'rapidly lowering ceilings'."""
     if not fc:
         return False
     base = fc.get("hourly", {}).get("cloud_base", [])
@@ -149,7 +149,7 @@ def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None,
         # at fields reporting only SCT/FEW).
         return ws
 
-    # No METAR — ceiling/vis/hazards from the single HRDPS run …
+    # No METAR - ceiling/vis/hazards from the single HRDPS run …
     if model_now:
         ws.source = Source.MODEL
         _apply(ws, model_now)
@@ -253,7 +253,7 @@ def _assess_endpoint(
     site_notams = _notams_for(airport.ident, notams)
     reasons = _explicit_reasons(checks)
     if weather.source == Source.NONE:
-        reasons.append("No live weather available — verify manually")
+        reasons.append("No live weather available - verify manually")
     links = cfs_links.airport_links(airport.ident)
     return AirportAssessment(
         airport=airport, distance_nm=round(distance_nm, 1), bearing_true=round(bearing),
@@ -356,10 +356,10 @@ def _worst_crosswind(dep_a: AirportAssessment, dest_a: AirportAssessment) -> Run
 
 def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flight_rules: str = "vfr") -> list[LimitCheck]:
     """Wind/ceiling/vis hard limits evaluated across departure, enroute samples,
-    and destination — each row says WHERE the worst value is."""
+    and destination - each row says WHERE the worst value is."""
     L = get_limits()["hard_limits"]
     w = L["wind"]
-    # Endpoint points (departure + destination) — wind/gust/crosswind are a
+    # Endpoint points (departure + destination) - wind/gust/crosswind are a
     # takeoff/landing concern, so they're evaluated ONLY at the two ends.
     endpoint_pts = [
         (f"{dep_a.airport.ident} (departure)", dep_a.weather.wind_kt, dep_a.weather.gust_kt,
@@ -367,7 +367,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
         (f"{dest_a.airport.ident} (destination)", dest_a.weather.wind_kt, dest_a.weather.gust_kt,
          dest_a.weather.ceiling_agl_ft, dest_a.weather.visibility_sm, dest_a.weather.source.value),
     ]
-    # All points (ends + enroute samples) — ceiling/vis apply along the route.
+    # All points (ends + enroute samples) - ceiling/vis apply along the route.
     pts = [endpoint_pts[0]]
     for i, e in enumerate(enroute, 1):
         pts.append((e.get("label") or f"enroute {i}", e.get("wind_kt"), e.get("gust_kt"),
@@ -376,7 +376,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
 
     checks: list[LimitCheck] = []
 
-    # Sustained wind — worst (max) at the endpoints only.
+    # Sustained wind - worst (max) at the endpoints only.
     wind_pts = [(lbl, wk, src) for lbl, wk, _g, _c, _v, src in endpoint_pts if wk is not None]
     if wind_pts:
         lbl, val, src = max(wind_pts, key=lambda t: t[1])
@@ -387,7 +387,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
         checks.append(LimitCheck(key="wind", label="Sustained wind", limit_text=f"≤ {w['sustained_max_kt']} kt",
                                  actual_text="no data", passed=True))
 
-    # Gust spread — endpoints only.
+    # Gust spread - endpoints only.
     spreads = [(lbl, gk - wk, src) for lbl, wk, gk, _c, _v, src in endpoint_pts if wk is not None and gk is not None]
     if spreads:
         lbl, val, src = max(spreads, key=lambda t: t[1])
@@ -395,7 +395,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                                  actual_text=f"{val:.0f} kt", passed=val <= w["gust_spread_max_kt"],
                                  location=lbl, source=src))
 
-    # Crosswind — worst endpoint best-runway (enroute has no runway).
+    # Crosswind - worst endpoint best-runway (enroute has no runway).
     xw = _worst_crosswind(dep_a, dest_a)
     if xw is not None:
         val = xw.crosswind_kt_gust or xw.crosswind_kt
@@ -403,7 +403,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                                  actual_text=f"{val:.0f} kt on RWY {xw.runway_ident}",
                                  passed=val <= w["crosswind_max_kt"], location=xw.runway_ident))
 
-    # Ceiling — IFR uses ifr_minimums section; VFR uses hard_limits.
+    # Ceiling - IFR uses ifr_minimums section; VFR uses hard_limits.
     full_limits = get_limits()
     if flight_rules == "ifr":
         ifr = full_limits.get("ifr_minimums", {})
@@ -427,7 +427,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                                  actual_text="no ceiling (clear)" if sampled else "no data",
                                  passed=True, source="HRDPS" if sampled else None))
 
-    # Departure/destination ceiling — advisory only (circuit territory).
+    # Departure/destination ceiling - advisory only (circuit territory).
     for lbl, _w, _g, ce, _v, src in (pts[0], pts[-1]):
         if ce is None:
             continue
@@ -440,10 +440,10 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
         elif ce < 3000:
             checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
                                      limit_text="circuit",
-                                     actual_text=f"{cv:,} ft AGL — circuit OK, verify",
+                                     actual_text=f"{cv:,} ft AGL - circuit OK, verify",
                                      passed=True, advisory=True, location=lbl, source=src))
 
-    # Visibility — IFR uses ifr_minimums section; VFR uses hard_limits.
+    # Visibility - IFR uses ifr_minimums section; VFR uses hard_limits.
     if flight_rules == "ifr":
         ifr = full_limits.get("ifr_minimums", {})
         v_block = ifr.get("visibility_sm", L["visibility_sm"])
@@ -500,7 +500,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     bearing = initial_bearing_true(dep.lat, dep.lon, dest.lat, dest.lon)
     bearing_mag = round(magvar.to_magnetic(bearing, dep.lat, dep.lon))
     # Blend a multi-model wind only where there's no METAR (the endpoints that
-    # need it most — small fields without a station).
+    # need it most - small fields without a station).
     dep_ens, dest_ens = await asyncio.gather(
         _ens_if_needed(metars.get(dep.ident), dep, days),
         _ens_if_needed(metars.get(dest.ident), dest, days),
@@ -539,7 +539,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         enroute.append(pt)
 
     # Gate the (VFR) cruising altitude on the minimum ceiling along the whole
-    # route — departure, enroute midpoints and destination — so a recommended
+    # route - departure, enroute midpoints and destination - so a recommended
     # level never clashes with a cloud deck. The destination ceiling is derived
     # here (before its full assessment) with the same _endpoint_weather helper.
     dest_ceiling = _endpoint_weather(metars.get(dest.ident), tafs.get(dest.ident),
@@ -549,7 +549,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     gate_ceiling = min([c for c in gate_ceiling_pts if c is not None], default=None)
     alt = recommend_altitude(_winds_aloft_now(dep_fc), bearing, get_cruise_kt(),
                              course_mag=bearing_mag, ceiling_ft=gate_ceiling,
-                             flight_rules=flight_rules) if dep_fc else None
+                             flight_rules=flight_rules, distance_nm=distance,
+                             field_elev_ft=dep.elevation_ft) if dep_fc else None
     if alt:
         for lv in alt.levels:
             lv.direction_mag = _mag(lv.direction_true, dep.lat, dep.lon)
@@ -691,7 +692,7 @@ def _runways_pass_filters(ident: str, surface: str, min_length_ft: float = 0.0,
     return True
 
 
-# Idents we'll actually ask CFPS about — real 4-char ICAO/TC codes, not synthetic
+# Idents we'll actually ask CFPS about - real 4-char ICAO/TC codes, not synthetic
 # OurAirports placeholders like "CA-0508" that 4xx the whole multi-site request.
 _CFPS_IDENT_RE = re.compile(r"^[A-Z][A-Z0-9]{3}$")
 
@@ -749,7 +750,7 @@ async def suggest(
     cruise_kt = get_cruise_kt()
     # Origin ceiling gates the cruising altitude along with each destination's, so a
     # low deck near home lowers the suggestion for every candidate (the "enroute
-    # ceiling" — origin + destination, without an extra forecast call per candidate).
+    # ceiling" - origin + destination, without an extra forecast call per candidate).
     origin_ceiling = _point_now(origin_fc).get("ceiling_ft") if origin_fc else None
     results: list[AirportAssessment] = []
     for airport, dist in candidates:
@@ -761,7 +762,8 @@ async def suggest(
         alt = recommend_altitude(
             levels_now, bearing, cruise_kt,
             course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
-            ceiling_ft=gate_ceiling, flight_rules=flight_rules)
+            ceiling_ft=gate_ceiling, flight_rules=flight_rules,
+            distance_nm=dist, field_elev_ft=origin.elevation_ft)
         a = _assess_endpoint(
             airport, metars.get(airport.ident), tafs.get(airport.ident),
             cand_fc, notams, mode, manual_threats, dist, bearing, alt,
@@ -821,7 +823,7 @@ async def assess_circuits(
 
     Uses circuit personal minimums (day_circuit / night_circuit ceiling and
     visibility) rather than cross-country limits. No enroute or altitude
-    recommendation — this is a stay-in-the-pattern check."""
+    recommendation - this is a stay-in-the-pattern check."""
     settings = get_settings()
     airport = ap.get_airport(aerodrome_ident)
     if airport is None:

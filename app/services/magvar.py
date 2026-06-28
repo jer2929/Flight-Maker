@@ -1,6 +1,6 @@
 """Magnetic variation via the World Magnetic Model (pygeomag, offline).
 
-METAR and model winds — and the runway ``*_heading_degT`` values — are all in
+METAR and model winds - and the runway ``*_heading_degT`` values - are all in
 TRUE north. Pilots fly magnetic (runway numbers, ATIS), so the UI shows
 everything in magnetic. ``declination`` is east-positive; the standard relation
 is ``true = magnetic + declination`` → ``magnetic = true - declination``.

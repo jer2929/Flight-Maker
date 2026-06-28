@@ -1,4 +1,4 @@
-"""Aviation Weather Center (aviationweather.gov) — free, no key.
+"""Aviation Weather Center (aviationweather.gov) - free, no key.
 
 Used specifically for **METAR history** (the `hours` parameter returns several
 hours of observations, which CFPS's latest-only METAR product does not). Covers

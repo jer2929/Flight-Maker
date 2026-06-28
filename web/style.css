@@ -5,7 +5,7 @@
 }
 * { box-sizing: border-box; }
 /* overflow-x: clip (not hidden) stops sideways scroll without creating a scroll
-   container — `hidden` would break the sticky header's freeze-on-scroll. */
+   container - `hidden` would break the sticky header's freeze-on-scroll. */
 html { overflow-x: clip; }
 body {
   margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
@@ -349,7 +349,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .set-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
 .set-status { color: #6ee7a0; font-size: .85rem; }
 
-/* VFR/IFR weather-minimums card — tabs stick out of the top of the bubble */
+/* VFR/IFR weather-minimums card - tabs stick out of the top of the bubble */
 .rule-card { margin-bottom: 16px; }
 .rule-tabs { display: flex; gap: 4px; padding-left: 10px; }
 .rule-tab {
@@ -367,7 +367,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 /* Home base picker */
 .base-pick { max-width: 300px; margin-bottom: 16px; }
 
-/* Slider grid — used inside settings fieldsets */
+/* Slider grid - used inside settings fieldsets */
 .slider-grid { display: grid; gap: 8px; }
 .sld { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; }
 .sld input[type=range] { grid-column: 1 / -1; width: 100%; margin-top: 2px; }
@@ -417,7 +417,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
   background: #fff; border: 1px solid var(--line); border-radius: 8px; }
 .gfa-cap { margin: 4px 0 0; }
 
-/* Conservatism presets — one inline row of chips + a single description line */
+/* Conservatism presets - one inline row of chips + a single description line */
 #conservatism { display: flex; flex-direction: column; gap: 8px; }
 .preset-row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; }
 .preset { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 8px 12px;

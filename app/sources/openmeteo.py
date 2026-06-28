@@ -35,7 +35,7 @@ PRESSURE_CLOUD_LEVELS_FT: dict[str, float] = {
 BKN_COVER_PCT = 55.0   # per-level cloud cover at/above this ≈ broken (5/8) ceiling
 CLOUD_RH_PCT = 95.0    # relative humidity at/above this = broken+ cloud likely
 
-# Surface variables. Requested defensively — Open-Meteo silently omits any a
+# Surface variables. Requested defensively - Open-Meteo silently omits any a
 # given model doesn't carry, so downstream code treats missing series as None.
 _SURFACE_VARS = [
     "windspeed_10m", "winddirection_10m", "windgusts_10m",
@@ -149,8 +149,8 @@ def derive_ceiling_ft(hourly: dict, i: int, elevation_ft: float | None) -> float
                 agl = msl_ft - elevation_ft
                 if agl > 100:  # ignore layers below the field
                     return round(agl)
-            continue  # cover present but thin here — keep scanning, skip RH
-        # No cloud-cover series for this model — fall back to saturation (RH).
+            continue  # cover present but thin here - keep scanning, skip RH
+        # No cloud-cover series for this model - fall back to saturation (RH).
         rh_arr = hourly.get(f"relative_humidity_{lvl}", [])
         rh = rh_arr[i] if i < len(rh_arr) else None
         if rh is not None and rh >= CLOUD_RH_PCT:

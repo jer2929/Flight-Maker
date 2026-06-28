@@ -30,7 +30,7 @@ def test_derive_ceiling_from_cloud_cover():
 
 
 def test_derive_ceiling_lowest_broken_layer_wins():
-    # Two broken layers — the lowest (925 hPa ~ 2500 ft) is the ceiling.
+    # Two broken layers - the lowest (925 hPa ~ 2500 ft) is the ceiling.
     hourly = {
         "cloud_cover_925hPa": [70], "cloud_cover_850hPa": [90],
     }

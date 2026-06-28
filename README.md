@@ -7,20 +7,20 @@ home base, minimums, standing factors and risk tolerance are all editable and
 travel with you as your flying evolves. It answers one question through the lens
 of a **Personal Flight Decision Card**:
 
-> **Am I good to fly — and when, over the next 24–48 h, is the best window to go?**
+> **Am I good to fly - and when, over the next 24–48 h, is the best window to go?**
 
 ### Three ways to use it
-1. **My Minimums** *(your profile, opens here)* — set your **home base** and your
+1. **My Minimums** *(your profile, opens here)* - set your **home base** and your
    personal wind / ceiling / visibility / crosswind limits (drag sliders), the
    weather hazards that force a NO-GO, your **standing factors** (e.g. single-pilot
    no-autopilot), and a **conservatism** preset. Everything is stored in your
    browser, persists between sessions, and gates the Route and Discovery results.
-2. **Route** — enter **departure + destination** (autocomplete over every Canadian
+2. **Route** - enter **departure + destination** (autocomplete over every Canadian
    aerodrome + US border fields; departure defaults to your base). You get the
    **GO / MITIGATE / NO-GO** verdict **now** for both ends, flight time + best
    cruise altitude (winds aloft), active NOTAMs/SIGMETs, and an **hour-by-hour
    24–48 h timeline** that highlights the best GO window(s).
-3. **Discovery** — "where can I go within X nm of my base right now," ranked by the card.
+3. **Discovery** - "where can I go within X nm of my base right now," ranked by the card.
 
 ### Two-trigger threat stacking (general-audience)
 The decision card stacks "major threats": some are derived automatically from the
@@ -61,7 +61,7 @@ the decision card on each hour. Where a field has both METAR and model, the
 model-vs-observed wind delta is shown as a confidence hint.
 
 ### Why not Windy?
-A Windy.com **Premium** subscription does **not** include API access — Windy's
+A Windy.com **Premium** subscription does **not** include API access - Windy's
 Point Forecast API is a separate **Professional license (~$1,000/yr)** and its
 free key returns deliberately degraded data. So Minima uses **Open-Meteo
 HRDPS** instead: free, no key, and the highest-resolution hourly model available
@@ -70,7 +70,7 @@ for southern Ontario.
 ### What "CFS coverage" means
 The full Canada Flight Supplement has no free API. "CFS coverage" here is the
 **OurAirports Canadian aerodrome list** (runways/elevation), a practical free
-proxy — not licensed CFS content. There's a seam to plug in a paid CFS feed later.
+proxy - not licensed CFS content. There's a seam to plug in a paid CFS feed later.
 
 ## How the decision card is applied
 
@@ -107,7 +107,7 @@ python scripts/refresh_airport_data.py
 `.replit` + `replit.nix` are included; the run command auto-installs deps. Import
 the repo, press **Run**, and it serves on `$PORT`.
 
-- Use a **standard Repl that sleeps when idle** — **not** Always-On / a reserved-VM
+- Use a **standard Repl that sleeps when idle** - **not** Always-On / a reserved-VM
   Deployment, which bill continuously. A sleeping Repl wakes on the next request.
 - All upstreams are free and key-less; responses are cached in-memory.
 
