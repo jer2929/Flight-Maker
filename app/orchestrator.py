@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from app.config import get_cruise_kt, get_limits, get_settings
 from app.models import (
+    Advisory,
     AirportAssessment,
     AltitudeRecommendation,
     Airport,
@@ -316,6 +317,20 @@ def _fl(ft) -> str:
     return f"FL{round(ft / 100):03d}"
 
 
+# Deep links back to the feed each advisory was fetched from, so the pilot can
+# read the source product and verify it.
+_AWC_ISIGMET_URL = "https://aviationweather.gov/api/data/isigmet?format=json"
+_CFPS_PORTAL_URL = "https://plan.navcanada.ca/"
+
+
+def _advisory(kind: str, text: str, *, from_awc: bool) -> Advisory:
+    if from_awc:
+        return Advisory(kind=kind, text=text, source="aviationweather.gov",
+                        source_url=_AWC_ISIGMET_URL)
+    return Advisory(kind=kind, text=text, source="NAV CANADA CFPS",
+                    source_url=_CFPS_PORTAL_URL)
+
+
 def _fmt_sigmet(s: dict) -> str:
     """Render a SIGMET with hazard + altitude band so its relevance is obvious."""
     haz = (s.get("hazard") or "").upper()
@@ -494,6 +509,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     isig_strs = [t for s in raw_isig
                  if s["coords"] and _coords_near_route(s["coords"], area_pts)
                  for t in (_fmt_sigmet(s),) if t]
+    awc_sigmet_set = set(isig_strs)   # provenance, for the per-advisory source link
     sigmets = list(dict.fromkeys(
         isig_strs + [t for t in await _gather_area(cfps.sigmets, area_pts) if t]
     ))
@@ -676,7 +692,9 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         altitude=alt, cruise_altitude_ft=cruise_alt,
         enroute_ceiling_ft=enroute_ceiling, enroute_visibility_sm=enroute_vis,
         cloud_at_cruise=cloud_at_cruise,
-        sigmets=sigmets[:8], airmets=airmets[:8], pireps=pireps[:8],
+        sigmets=[_advisory("SIGMET", t, from_awc=t in awc_sigmet_set) for t in sigmets[:8]],
+        airmets=[_advisory("AIRMET", t, from_awc=False) for t in airmets[:8]],
+        pireps=[_advisory("PIREP", t, from_awc=False) for t in pireps[:8]],
         timeline=timeline, best_windows=windows,
     )
 

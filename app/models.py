@@ -215,6 +215,15 @@ class BestWindow(BaseModel):
     summary: str
 
 
+class Advisory(BaseModel):
+    """An area advisory (SIGMET/AIRMET/PIREP) with its full text and a deep link
+    back to the source it was fetched from, so the pilot can read and verify it."""
+    kind: str          # SIGMET / AIRMET / PIREP
+    text: str          # full raw product text
+    source: str        # human-readable source name
+    source_url: str    # deep link to where the product came from
+
+
 class RouteAssessment(BaseModel):
     departure: AirportAssessment
     destination: AirportAssessment
@@ -232,8 +241,8 @@ class RouteAssessment(BaseModel):
     enroute_ceiling_ft: Optional[float] = None        # lowest ceiling sampled along route
     enroute_visibility_sm: Optional[float] = None
     cloud_at_cruise: bool = False                     # cloud base below planned cruise altitude
-    sigmets: list[str] = []
-    airmets: list[str] = []
-    pireps: list[str] = []
+    sigmets: list[Advisory] = []
+    airmets: list[Advisory] = []
+    pireps: list[Advisory] = []
     timeline: list[HourCondition] = []
     best_windows: list[BestWindow] = []
