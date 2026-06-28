@@ -49,6 +49,19 @@
               marker-end="url(#logo-arrow)" />
       </svg>
     </h1>
+    <div class="aircraft" id="aircraft" title="Your aircraft sets the true airspeed used for time & groundspeed">
+      <div class="aircraft-row">
+        <label class="aircraft-label" for="ac-make">Aircraft</label>
+        <select id="ac-make" class="aircraft-sel" aria-label="Aircraft manufacturer"></select>
+        <select id="ac-model" class="aircraft-sel" aria-label="Aircraft model"></select>
+      </div>
+      <div class="aircraft-row">
+        <label class="aircraft-label" for="ac-tas">TAS</label>
+        <input id="ac-tas" class="aircraft-tas" type="number" min="40" max="400" step="1"
+               inputmode="numeric" aria-label="True airspeed in knots" />
+        <span class="aircraft-unit">kt</span>
+      </div>
+    </div>
     <div class="clock" id="clock">
       <div class="clock-row">
         <span class="clock-label">Data time</span>

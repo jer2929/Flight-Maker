@@ -60,6 +60,15 @@ def test_recommend_altitude_vfr_stays_500_below_ceiling():
     assert rec.altitude_ft == 3500
 
 
+def test_recommend_altitude_vfr_none_when_ceiling_below_lowest_level():
+    # Ceiling 3000 ft: even the lowest VFR level (3500) is not ≥500 ft below the
+    # deck, so no legal VFR cruising altitude exists -> None. The orchestrator
+    # turns this None into the "ceiling too low" reason on the card.
+    levels = [WindAloft(altitude_ft=a, direction_true=270, speed_kt=20)
+              for a in (3500, 5500, 7500)]
+    assert recommend_altitude(levels, course_true=90, cruise_kt=110, ceiling_ft=3000) is None
+
+
 def test_recommend_altitude_ifr_not_gated_on_ceiling():
     # Low ceiling (4100) but the best tailwind is up at 7000. IFR ignores cloud
     # clearance, so it may pick a level above the deck; VFR would be clipped.

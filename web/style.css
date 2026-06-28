@@ -37,6 +37,28 @@ header p { margin: 4px 0 0; color: var(--muted); }
   .clock-label { font-size: .58rem; }
   .clock-val { font-size: .72rem; }
 }
+/* Aircraft / true-airspeed picker (header, between logo and clock) */
+.aircraft { display: flex; flex-direction: column; gap: 4px; }
+.aircraft-row { display: flex; align-items: center; gap: 6px; }
+.aircraft-label {
+  color: var(--muted); font-size: .72rem; text-transform: uppercase;
+  letter-spacing: .04em; min-width: 56px;
+}
+.aircraft-sel, .aircraft-tas {
+  background: #0f1419; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 6px; font-size: .82rem; font-family: inherit;
+}
+.aircraft-sel { max-width: 130px; }
+.aircraft-tas { width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.aircraft-unit { color: var(--muted); font-size: .78rem; }
+@media (max-width: 640px) {
+  .aircraft-label { min-width: 0; }
+  .aircraft-sel { max-width: 96px; font-size: .74rem; }
+}
+@media (max-width: 480px) {
+  /* Drop the airspeed picker on very narrow screens to keep the header tidy. */
+  .aircraft { display: none; }
+}
 .panel {
   margin: 16px auto; max-width: 1000px; padding: 16px 20px;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
