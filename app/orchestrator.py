@@ -9,7 +9,7 @@ import asyncio
 import re
 from datetime import datetime, timezone
 
-from app.config import get_limits, get_settings
+from app.config import get_cruise_kt, get_limits, get_settings
 from app.models import (
     AirportAssessment,
     AltitudeRecommendation,
@@ -223,7 +223,6 @@ def _assess_endpoint(
     history: list[str] | None = None, ensemble: dict | None = None,
     flight_rules: str = "vfr", ceiling_mode: str = "endpoint",
 ) -> AirportAssessment:
-    settings = get_settings()
     lat, lon = airport.lat, airport.lon
     runways = fill_headings(ap.get_runways(airport.ident), lat, lon)
     weather = _endpoint_weather(metar, taf, fc, ensemble)
@@ -258,7 +257,7 @@ def _assess_endpoint(
     links = cfs_links.airport_links(airport.ident)
     return AirportAssessment(
         airport=airport, distance_nm=round(distance_nm, 1), bearing_true=round(bearing),
-        flight_time_hr=round(flight_time_hr(distance_nm, settings.cruise_kt, gs), 2),
+        flight_time_hr=round(flight_time_hr(distance_nm, get_cruise_kt(), gs), 2),
         verdict=verdict, reasons=reasons, threat_count=n,
         threat_result_label=threat_result_label(n),
         weather=weather, best_runway=rw, best_takeoff=rw, best_landing=rw,
@@ -548,7 +547,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     gate_ceiling_pts = ([dep_a.weather.ceiling_agl_ft, dest_ceiling]
                         + [e.get("ceiling_ft") for e in enroute])
     gate_ceiling = min([c for c in gate_ceiling_pts if c is not None], default=None)
-    alt = recommend_altitude(_winds_aloft_now(dep_fc), bearing, settings.cruise_kt,
+    alt = recommend_altitude(_winds_aloft_now(dep_fc), bearing, get_cruise_kt(),
                              course_mag=bearing_mag, ceiling_ft=gate_ceiling,
                              flight_rules=flight_rules) if dep_fc else None
     if alt:
@@ -747,21 +746,36 @@ async def suggest(
     ens_by_ident = {a.ident: (ens[i] if i < len(ens) else None) for i, (a, _) in enumerate(candidates)}
 
     xw_limit = get_limits()["hard_limits"]["wind"]["crosswind_max_kt"]
+    cruise_kt = get_cruise_kt()
+    # Origin ceiling gates the cruising altitude along with each destination's, so a
+    # low deck near home lowers the suggestion for every candidate (the "enroute
+    # ceiling" — origin + destination, without an extra forecast call per candidate).
+    origin_ceiling = _point_now(origin_fc).get("ceiling_ft") if origin_fc else None
     results: list[AirportAssessment] = []
     for airport, dist in candidates:
         bearing = initial_bearing_true(origin.lat, origin.lon, airport.lat, airport.lon)
         cand_fc = fc_by_ident.get(airport.ident)
         cand_ceiling = _point_now(cand_fc).get("ceiling_ft") if cand_fc else None
+        gate_ceiling = min([c for c in (origin_ceiling, cand_ceiling) if c is not None],
+                           default=None)
         alt = recommend_altitude(
-            levels_now, bearing, settings.cruise_kt,
+            levels_now, bearing, cruise_kt,
             course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
-            ceiling_ft=cand_ceiling, flight_rules=flight_rules)
+            ceiling_ft=gate_ceiling, flight_rules=flight_rules)
         a = _assess_endpoint(
             airport, metars.get(airport.ident), tafs.get(airport.ident),
             cand_fc, notams, mode, manual_threats, dist, bearing, alt,
             ensemble=ens_by_ident.get(airport.ident), flight_rules=flight_rules,
             ceiling_mode="xc",
         )
+        # Make the cloud gate visible: if winds are known but the ceiling left no
+        # legal VFR cruising altitude (≥500 ft below the deck), say so on the card
+        # instead of silently omitting the altitude.
+        if (alt is None and flight_rules == "vfr" and levels_now
+                and gate_ceiling is not None):
+            a.reasons.append(
+                f"Ceiling too low for a VFR cruising altitude "
+                f"(clouds at {round(gate_ceiling / 100) * 100:,.0f} ft AGL)")
         rw = a.best_runway
         if into_wind and (not rw or rw.headwind_kt < 0 or rw.crosswind_kt > xw_limit):
             continue

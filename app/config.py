@@ -57,6 +57,51 @@ def get_settings() -> Settings:
 
 
 # ---------------------------------------------------------------------------
+# Per-request aircraft cruise speed (TAS).
+#
+# The default profile is the Cessna-172-class ``cruise_kt`` above. A pilot can
+# send their own aircraft's true airspeed with a request; we apply it for the
+# duration of that request only, via a context variable. Every cruise-speed read
+# in the engine goes through ``get_cruise_kt()``, so flight times and
+# groundspeeds recompute from the pilot's aircraft without touching the
+# orchestrator's call sites.
+# ---------------------------------------------------------------------------
+
+# Sane bounds for a piston/turboprop GA TAS (knots). Mirrors the API clamp.
+_CRUISE_MIN_KT = 40.0
+_CRUISE_MAX_KT = 400.0
+
+# Per-request override (set by ``cruise_override``). ``None`` = use the default.
+_cruise_override: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "cruise_override", default=None)
+
+
+def get_cruise_kt() -> float:
+    """The active cruise TAS (kt): a per-request override if set, else the
+    default ``cruise_kt`` from settings."""
+    override = _cruise_override.get()
+    return override if override is not None else get_settings().cruise_kt
+
+
+@contextmanager
+def cruise_override(tas_kt: float | None):
+    """Activate a pilot-supplied cruise TAS for the duration of the block.
+
+    Falls back to the default when ``tas_kt`` is missing or non-positive.
+    Out-of-range values are clamped to a sane GA range. Always resets, so a
+    reused context never leaks one request's airspeed into another."""
+    if not tas_kt or tas_kt <= 0:
+        yield
+        return
+    clamped = max(_CRUISE_MIN_KT, min(_CRUISE_MAX_KT, float(tas_kt)))
+    token = _cruise_override.set(clamped)
+    try:
+        yield
+    finally:
+        _cruise_override.reset(token)
+
+
+# ---------------------------------------------------------------------------
 # Decision-card limits ("personal minimums").
 #
 # ``data/limits.yaml`` is the built-in DEFAULT profile. A pilot can send their

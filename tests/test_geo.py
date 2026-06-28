@@ -31,3 +31,11 @@ def test_bearing_range():
 def test_flight_time_uses_groundspeed():
     assert math.isclose(flight_time_hr(110, 110), 1.0)
     assert math.isclose(flight_time_hr(110, 110, groundspeed_kt=55), 2.0)
+
+
+def test_flight_time_faster_cruise_is_quicker():
+    # A faster aircraft (higher TAS) covers the same distance in less time.
+    slow = flight_time_hr(170, 110)   # Cessna 172-class
+    fast = flight_time_hr(170, 170)   # Cirrus-class
+    assert fast < slow
+    assert math.isclose(fast, 1.0)

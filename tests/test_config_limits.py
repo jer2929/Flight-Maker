@@ -1,8 +1,11 @@
 """Tests for user-editable personal minimums: deep-merge, validation/clamping,
 and per-request override isolation (the chokepoint the whole app gates on)."""
 from app.config import (
+    cruise_override,
+    get_cruise_kt,
     get_default_limits,
     get_limits,
+    get_settings,
     limits_override,
     merge_limits,
 )
@@ -104,3 +107,30 @@ def test_conservatism_unknown_ignored():
     # Unknown preset name is dropped → rule unchanged, no weights written.
     assert merged["threat_stacking"]["rule"] == base["threat_stacking"]["rule"]
     assert "weights" not in merged["threat_stacking"]
+
+
+# ---- aircraft cruise TAS override -----------------------------------------
+
+def test_cruise_default_is_settings():
+    assert get_cruise_kt() == get_settings().cruise_kt
+
+
+def test_cruise_override_applies_and_reverts():
+    before = get_cruise_kt()
+    with cruise_override(170):
+        assert get_cruise_kt() == 170
+    assert get_cruise_kt() == before  # no cross-request leakage
+
+
+def test_cruise_override_clamps_out_of_range():
+    with cruise_override(9999):
+        assert get_cruise_kt() == 400  # clamped to max
+    with cruise_override(1):
+        assert get_cruise_kt() == 40   # clamped to min
+
+
+def test_cruise_override_ignores_missing_or_nonpositive():
+    default = get_settings().cruise_kt
+    for bad in (None, 0, -5):
+        with cruise_override(bad):
+            assert get_cruise_kt() == default

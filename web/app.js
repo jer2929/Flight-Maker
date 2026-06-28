@@ -128,6 +128,98 @@ function saveRecencyMin(v) {
   try { localStorage.setItem("fm_recency_min", String(v)); } catch (_) {}
 }
 
+// ---------- Aircraft profile (per-browser) ----------
+// Typical cruise true airspeed (kt) by manufacturer/model. Selecting a model
+// prefills its TAS, but the pilot can override it; only the TAS reaches the
+// backend, where it drives every time & groundspeed calculation.
+const AIRCRAFT_CATALOG = {
+  Cessna: { "152": 107, "172 Skyhawk": 110, "172RG Cutlass": 140, "182 Skylane": 145, "T182 Turbo Skylane": 156, "206 Stationair": 145, "210 Centurion": 190, "TTx (Corvalis)": 235 },
+  Cirrus: { "SR20": 155, "SR22": 170, "SR22T": 185 },
+  Piper: { "PA-28 Cherokee": 115, "PA-28 Archer": 125, "PA-28R Arrow": 137, "PA-32 Saratoga": 165, "PA-46 Malibu": 213 },
+  Diamond: { "DA20 Katana": 120, "DA40 Star": 140, "DA42 Twin Star": 170 },
+  Beechcraft: { "Sundowner": 115, "A36 Bonanza": 170, "58 Baron": 200 },
+  Mooney: { "M20J (201)": 160, "M20R Ovation": 190, "M20TN Acclaim": 237 },
+  Grumman: { "AA-1 Yankee": 120, "AA-5 Tiger": 140 },
+  Custom: {},
+};
+const AC_LS_KEY = "minima.aircraft.v1";
+let AIRCRAFT = { make: null, model: null, tas: null };
+
+function loadAircraft() {
+  let a = null;
+  try { a = JSON.parse(localStorage.getItem(AC_LS_KEY) || "null"); } catch { a = null; }
+  AIRCRAFT = {
+    make: (a && a.make) || null,
+    model: (a && a.model) || null,
+    tas: a && Number.isFinite(+a.tas) && +a.tas > 0 ? +a.tas : null,
+  };
+}
+function saveAircraft() {
+  const out = {};
+  if (AIRCRAFT.make) out.make = AIRCRAFT.make;
+  if (AIRCRAFT.model) out.model = AIRCRAFT.model;
+  if (AIRCRAFT.tas) out.tas = AIRCRAFT.tas;
+  if (Object.keys(out).length) localStorage.setItem(AC_LS_KEY, JSON.stringify(out));
+  else localStorage.removeItem(AC_LS_KEY);
+}
+// The TAS to use for requests; falls back to the server's default profile.
+function currentTas() {
+  if (AIRCRAFT.tas && AIRCRAFT.tas > 0) return AIRCRAFT.tas;
+  return CONFIG ? CONFIG.cruise_kt : null;
+}
+
+function fillModelOptions(make) {
+  const sel = $("#ac-model");
+  const names = Object.keys(AIRCRAFT_CATALOG[make] || {});
+  if (!names.length) {  // "Custom" — no preset models, TAS typed by hand
+    sel.innerHTML = `<option value="">Custom</option>`;
+    sel.disabled = true;
+  } else {
+    sel.disabled = false;
+    sel.innerHTML = names.map((n) => `<option value="${n}">${n}</option>`).join("");
+  }
+}
+
+function buildAircraftPicker() {
+  const makeSel = $("#ac-make"), modelSel = $("#ac-model"), tasInput = $("#ac-tas");
+  if (!makeSel || !modelSel || !tasInput) return;
+  makeSel.innerHTML = Object.keys(AIRCRAFT_CATALOG).map((m) => `<option value="${m}">${m}</option>`).join("");
+
+  // Restore the stored selection, defaulting to the Cessna 172 profile.
+  const make = (AIRCRAFT.make && AIRCRAFT_CATALOG[AIRCRAFT.make]) ? AIRCRAFT.make : "Cessna";
+  makeSel.value = make;
+  fillModelOptions(make);
+  const models = Object.keys(AIRCRAFT_CATALOG[make] || {});
+  const model = (AIRCRAFT.model && models.includes(AIRCRAFT.model)) ? AIRCRAFT.model : (models[0] || "");
+  modelSel.value = model;
+  const presetTas = (AIRCRAFT_CATALOG[make] || {})[model];
+  tasInput.value = Math.round(AIRCRAFT.tas || presetTas || (CONFIG ? CONFIG.cruise_kt : 110));
+  AIRCRAFT = { make, model: model || null, tas: +tasInput.value || null };
+  saveAircraft();
+
+  const syncTasFromModel = () => {
+    const m = makeSel.value, md = modelSel.value;
+    const t = (AIRCRAFT_CATALOG[m] || {})[md];
+    if (t) tasInput.value = Math.round(t);  // prefill, but stay editable
+    AIRCRAFT = { make: m, model: md || null, tas: +tasInput.value || null };
+    saveAircraft();
+  };
+  makeSel.addEventListener("change", () => {
+    fillModelOptions(makeSel.value);
+    modelSel.value = Object.keys(AIRCRAFT_CATALOG[makeSel.value] || {})[0] || "";
+    syncTasFromModel();
+  });
+  modelSel.addEventListener("change", syncTasFromModel);
+  tasInput.addEventListener("change", () => {
+    let v = Math.round(+tasInput.value);
+    if (!Number.isFinite(v) || v <= 0) v = Math.round(CONFIG ? CONFIG.cruise_kt : 110);
+    v = Math.max(40, Math.min(400, v));
+    tasInput.value = v;
+    AIRCRAFT = { make: makeSel.value, model: modelSel.value || null, tas: v };
+    saveAircraft();
+  });
+}
+
 // ---------- Init ----------
 async function init() {
   CONFIG = await fetch("/api/config").then((r) => r.json());
@@ -135,6 +227,8 @@ async function init() {
   $("#radius").max = CONFIG.max_radius_nm;
 
   loadProfile();
+  loadAircraft();
+  buildAircraftPicker();
   renderExtraThreats();
   buildConservatism();
   renderMinSliders();
@@ -253,6 +347,13 @@ function prefsParam() {
   const p = { ...(PROFILE.minimums || {}) };
   if (PROFILE.conservatism && PROFILE.conservatism !== CONFIG.default_conservatism) p.conservatism = PROFILE.conservatism;
   return Object.keys(p).length ? { prefs: JSON.stringify(p) } : {};
+}
+
+// Aircraft true airspeed sent with route/discovery requests; omitted when it
+// matches the server default so the backend keeps its own profile.
+function tasParam() {
+  const t = currentTas();
+  return t && t > 0 ? { tas: Math.round(t) } : {};
 }
 
 // Effective limits = defaults with the custom minimums merged over them.
@@ -478,7 +579,7 @@ async function runRoute() {
   const btn = $("#run-route"); btn.disabled = true; btn.textContent = "Pulling data…";
   clearRoute();
   try {
-    const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam() });
+    const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam(), ...tasParam() });
     const res = await fetch(`/api/route?${params}`);
     if (!res.ok) { $("#route-verdict").innerHTML = `<div class="empty">Unknown departure or destination.</div>`; return; }
     renderRoute(await res.json());
@@ -897,7 +998,7 @@ async function runDiscovery() {
     };
     const t = +$("#f-time").value;
     if (t > 0) p.max_time_min = t;
-    Object.assign(p, prefsParam());
+    Object.assign(p, prefsParam(), tasParam());
     const params = new URLSearchParams(p);
     const data = await fetch(`/api/suggest?${params}`).then((r) => r.json());
     $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
@@ -917,7 +1018,7 @@ function discoveryCard(a) {
       <span>💨 ${windStr(w)}</span>
       ${ceilChip(w)}
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
-      ${a.altitude ? `<span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "🟢 tailwind" : "🔴 headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
+      ${a.altitude ? `<span title="best VFR cruising altitude — kept ≥500 ft below the enroute ceiling">⬆ Best alt ${fmtFt(a.altitude.altitude_ft)}</span><span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "🟢 tailwind" : "🔴 headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
     ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
     ${runwaysBlock(a)}
