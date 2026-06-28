@@ -26,14 +26,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FM_", env_file=".env", extra="ignore")
 
     # Home base and aircraft profile
-    origin: str = "CYFD"  # Brantford Municipal, ON — default departure
+    origin: str = "CYFD"  # Brantford Municipal, ON - default departure
     cruise_kt: float = 110.0  # Cessna 172-class true airspeed
 
     # Candidate search (discovery tab)
     default_radius_nm: float = 100.0
     max_radius_nm: float = 300.0
 
-    # Caching (seconds) — keep us polite to free upstreams
+    # Caching (seconds) - keep us polite to free upstreams
     cfps_cache_ttl: int = 300
     openmeteo_cache_ttl: int = 1800
 

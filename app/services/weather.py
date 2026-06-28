@@ -13,7 +13,7 @@ from typing import Optional
 
 from metar import Metar
 
-# "P6SM" means *greater than* 6 SM — a TAF can't quantify visibility beyond
+# "P6SM" means *greater than* 6 SM - a TAF can't quantify visibility beyond
 # this, so it caps the report there. Treat the plus-prefix as unrestricted
 # visibility rather than an exact 6 SM, which would otherwise trip higher
 # personal limits (e.g. a ≥9 SM XC minimum) into a false NO-GO.
@@ -219,7 +219,7 @@ def parse_taf_segments(raw: str) -> list[dict]:
 
     ``kind`` is ``"base"`` for the main/FM/BECMG forecast (selected by latest
     start) or ``"overlay"`` for TEMPO/PROB (possible temporary worsening).
-    Returns ``[]`` if it can't parse — callers then fall back to model data.
+    Returns ``[]`` if it can't parse - callers then fall back to model data.
     """
     if not raw:
         return []

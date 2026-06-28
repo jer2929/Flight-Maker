@@ -1,8 +1,8 @@
 """Per-airport reference links.
 
-- **SkyVector** ``/airport/{ident}`` — always-on, login-free airport/runway/freq
+- **SkyVector** ``/airport/{ident}`` - always-on, login-free airport/runway/freq
   info. This is the reliable link shown for every airport.
-- **FltPlan CFS PDF** — FltPlan hosts the actual Canada Flight Supplement page per
+- **FltPlan CFS PDF** - FltPlan hosts the actual Canada Flight Supplement page per
   aerodrome, but the URL embeds an opaque per-cycle page number
   (``…/afd/Canada/22JAN2026/CYVR-2538.PDF``) and the cycle folder name isn't
   derivable. We resolve it best-effort by listing the cycle directory **once**

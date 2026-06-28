@@ -47,8 +47,8 @@ def conditions_checks(
 ) -> list[LimitCheck]:
     """Applicable wind / ceiling / visibility hard-limit rows (cross-country).
 
-    ``ceiling_mode``: "xc" (cruise — fail below the XC limit) or "endpoint"
-    (departure/destination — low ceiling is circuit territory: <1000 fails,
+    ``ceiling_mode``: "xc" (cruise - fail below the XC limit) or "endpoint"
+    (departure/destination - low ceiling is circuit territory: <1000 fails,
     1000–3000 is an advisory, otherwise pass)."""
     full_limits = get_limits()
     L = full_limits["hard_limits"]
@@ -77,7 +77,7 @@ def conditions_checks(
         "crosswind", "Crosswind", w["crosswind_max_kt"], xw,
         unit="kt", source=src, actual_suffix=xw_label,
     ))
-    # Ceiling — IFR uses ifr_minimums section; VFR uses hard_limits.
+    # Ceiling - IFR uses ifr_minimums section; VFR uses hard_limits.
     if flight_rules == "ifr":
         ifr = full_limits.get("ifr_minimums", {})
         c = ifr.get("ceiling_agl_ft", L["ceiling_agl_ft"])
@@ -88,7 +88,7 @@ def conditions_checks(
     else:
         ceil_limit = c.get("night_xc", c.get("night_xc_cloud_base", 12000)) if mode == "night" else c.get("day_xc", 4000)
     checks.append(_ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, src, ceiling_mode))
-    # Visibility — IFR uses ifr_minimums section; VFR uses hard_limits.
+    # Visibility - IFR uses ifr_minimums section; VFR uses hard_limits.
     if flight_rules == "ifr":
         ifr = full_limits.get("ifr_minimums", {})
         v = ifr.get("visibility_sm", L["visibility_sm"])
@@ -104,7 +104,7 @@ def conditions_checks(
         "visibility", vis_label, vis_limit, weather.visibility_sm,
         unit="SM", source=src,
     ))
-    # Hazardous weather flags — for IFR, widespread_ifr is expected and not a no-go.
+    # Hazardous weather flags - for IFR, widespread_ifr is expected and not a no-go.
     flags = set(L.get("weather_flags", []))
     if flight_rules == "ifr":
         flags.discard("widespread_ifr")
@@ -153,7 +153,7 @@ def _ceiling_check(limit, actual, wx_source, src, mode="xc") -> LimitCheck:
         if actual < 1000:
             return LimitCheck(actual_text=f"{val:,} ft AGL (IMC)", passed=False, **base)
         if actual < 3000:
-            return LimitCheck(actual_text=f"{val:,} ft AGL — circuit OK, verify",
+            return LimitCheck(actual_text=f"{val:,} ft AGL - circuit OK, verify",
                               passed=True, advisory=True, **base)
         return LimitCheck(actual_text=f"{val:,} ft AGL", passed=True, **base)
     return LimitCheck(actual_text=f"{val:,} ft AGL", passed=actual >= limit, **base)
@@ -182,11 +182,13 @@ def derive_threats(
     threat keys, so a malformed query string can't inflate the stack.
 
     IMC handling depends on the flight rules: under VFR, being in cloud / low vis
-    is always a threat; under IFR it is *expected*, so it only counts when the
-    pilot has opted in (``ifr_minimums.imc_as_threat``)."""
+    is NOT a stacking threat - it is already an automatic NO-GO via the ceiling and
+    visibility hard limits, so counting it again would be redundant and misleading.
+    Under IFR, IMC is *expected*, so it only counts when the pilot has opted in
+    (``ifr_minimums.imc_as_threat``)."""
     known = set(get_limits()["threat_stacking"]["major_threats"])
     threats: set[str] = {t for t in (manual_threats or []) if t in known}
-    # Single-pilot IFR without autopilot only makes sense as an IFR threat — drop
+    # Single-pilot IFR without autopilot only makes sense as an IFR threat - drop
     # it under VFR so a stale/forged query string can't surface it.
     if flight_rules != "ifr":
         threats.discard("single_pilot_ifr_no_autopilot")
@@ -203,8 +205,9 @@ def derive_threats(
     imc = (weather.ceiling_agl_ft is not None and weather.ceiling_agl_ft < 1000) or (
         weather.visibility_sm is not None and weather.visibility_sm < 3
     )
-    if imc and (flight_rules != "ifr"
-                or get_limits().get("ifr_minimums", {}).get("imc_as_threat")):
+    # VFR IMC is a hard NO-GO (ceiling/visibility limits), not a stacking threat;
+    # only IFR flights count it, and only when the pilot has opted in.
+    if imc and flight_rules == "ifr" and get_limits().get("ifr_minimums", {}).get("imc_as_threat"):
         threats.add("actual_imc")
     if is_complex_airspace:
         threats.add("unfamiliar_or_complex_airspace")
@@ -213,10 +216,11 @@ def derive_threats(
 
 def threat_check_list(present: set[str]) -> list[ThreatCheck]:
     order = get_limits()["threat_stacking"]["major_threats"]
-    # Single-pilot IFR without autopilot is an IFR-only pilot factor; only show
-    # the row when the pilot actually selected it (i.e. it's present). Otherwise
-    # it would clutter the stack as an absent row on every VFR flight.
-    hide_when_absent = {"single_pilot_ifr_no_autopilot"}
+    # These rows only make sense when actually present, so don't show them as
+    # empty rows on every flight: single-pilot IFR without autopilot is an IFR-only
+    # pilot factor, and actual IMC is a hard NO-GO under VFR (shown only for IFR
+    # opt-in when present).
+    hide_when_absent = {"single_pilot_ifr_no_autopilot", "actual_imc"}
     return [
         ThreatCheck(key=k, label=THREAT_LABELS.get(k, k.replace("_", " ").title()),
                     present=k in present)

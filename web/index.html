@@ -65,11 +65,11 @@
     <div class="clock" id="clock">
       <div class="clock-row">
         <span class="clock-label">Data time</span>
-        <span id="data-time" class="clock-val" title="Frozen at your last route/discovery assessment">—</span>
+        <span id="data-time" class="clock-val" title="Frozen at your last route/discovery assessment">-</span>
       </div>
       <div class="clock-row">
         <span class="clock-label">Current time</span>
-        <span id="current-time" class="clock-val live">—</span>
+        <span id="current-time" class="clock-val live">-</span>
       </div>
     </div>
   </header>
@@ -95,7 +95,7 @@
         </div>
       </div>
       <div class="control threats">
-        <div class="threats-label">This flight — extra threats</div>
+        <div class="threats-label">This flight - extra threats</div>
         <div id="threats-list"></div>
       </div>
     </div>
@@ -209,7 +209,7 @@
 
   <!-- My Minimums / Settings tab -->
   <section id="tab-settings" class="tab-pane">
-    <!-- Pre-flight self-assessment items configurator — first option under My Minimums -->
+    <!-- Pre-flight self-assessment items configurator - first option under My Minimums -->
     <div class="panel mm-panel">
       <h2 class="set-title">Pre-flight self-assessment items</h2>
       <p class="set-intro">Choose which fitness and external-pressure items appear in your pre-flight check above the route and discovery inputs.</p>
@@ -232,7 +232,7 @@
     <div class="panel">
       <form id="minimums-form" onsubmit="return false">
         <fieldset class="set-group">
-          <legend>Wind (kt) — maximum</legend>
+          <legend>Wind (kt) - maximum</legend>
           <div id="grp-wind" class="controls slider-grid"></div>
         </fieldset>
 
@@ -244,25 +244,25 @@
           </div>
           <div class="rule-bubble">
             <div class="rule-pane" data-rule="vfr">
-              <p class="set-hint rule-intro">Checked at both your departure and destination — the app flags whichever is worse.</p>
+              <p class="set-hint rule-intro">Checked at both your departure and destination - the app flags whichever is worse.</p>
               <fieldset class="set-group">
-                <legend>VFR ceiling (ft AGL) — minimum</legend>
+                <legend>VFR ceiling (ft AGL) - minimum</legend>
                 <div id="grp-ceiling" class="controls slider-grid"></div>
               </fieldset>
               <fieldset class="set-group">
-                <legend>VFR visibility (SM) — minimum</legend>
+                <legend>VFR visibility (SM) - minimum</legend>
                 <div id="grp-vis" class="controls slider-grid"></div>
               </fieldset>
             </div>
             <div class="rule-pane hidden" data-rule="ifr">
-              <p class="set-hint rule-intro">Checked at both your departure and destination — the app flags whichever is worse. Your personal minimums can be higher than the published takeoff/approach minimums (e.g. require 2 SM even where a ½ SM takeoff is legal).</p>
+              <p class="set-hint rule-intro">Checked at both your departure and destination - the app flags whichever is worse. Your personal minimums can be higher than the published takeoff/approach minimums (e.g. require 2 SM even where a ½ SM takeoff is legal).</p>
               <fieldset class="set-group">
-                <legend>IFR ceiling (ft AGL) — minimum</legend>
-                <p class="set-hint">A flat personal floor — set it at or above the published approach minimums (DA/MDA) you'll actually fly.</p>
+                <legend>IFR ceiling (ft AGL) - minimum</legend>
+                <p class="set-hint">A flat personal floor - set it at or above the published approach minimums (DA/MDA) you'll actually fly.</p>
                 <div id="grp-ifr-ceiling" class="controls slider-grid"></div>
               </fieldset>
               <fieldset class="set-group">
-                <legend>IFR visibility (SM) — minimum</legend>
+                <legend>IFR visibility (SM) - minimum</legend>
                 <div id="grp-ifr-vis" class="controls slider-grid"></div>
               </fieldset>
               <fieldset class="set-group imc-opt">
@@ -275,12 +275,12 @@
         </div>
 
         <fieldset class="set-group">
-          <legend>Recent experience — minimum hours in last 30 days</legend>
+          <legend>Recent experience - minimum hours in last 30 days</legend>
           <div id="grp-recency" class="controls slider-grid"></div>
         </fieldset>
 
         <fieldset class="set-group">
-          <legend>Weather — automatic NO-GO when present</legend>
+          <legend>Weather - automatic NO-GO when present</legend>
           <p class="set-hint">Unchecking a hazard removes it from the auto NO-GO list. Leave checked unless you know why.</p>
           <div id="wxflags" class="controls"></div>
         </fieldset>
@@ -304,7 +304,7 @@
        Hourly forecast = Open-Meteo <strong>HRDPS</strong> (Canada 2.5 km model). Runways = OurAirports
        (free CFS proxy). Every value is labelled <span class="src OBSERVED">Observed</span>
        <span class="src TAF">TAF</span> <span class="src HRDPS">HRDPS</span>.
-       Forecasts are not observations — <strong>always confirm with an official NAV CANADA briefing before flight.</strong></p>
+       Forecasts are not observations - <strong>always confirm with an official NAV CANADA briefing before flight.</strong></p>
   </footer>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

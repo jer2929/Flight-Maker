@@ -64,7 +64,7 @@ def _model_conditions(fc: dict, i: int) -> dict:
     hazards = [info["hazard"]] if (info and info["hazard"]) else []
     precip_mm = _at(fc, "precipitation", i)
     ceiling = openmeteo.cloud_base_to_ceiling_ft(_at(fc, "cloud_base", i))
-    if ceiling is None:  # GEM has no cloud_base — infer from saturated layers
+    if ceiling is None:  # GEM has no cloud_base - infer from saturated layers
         ceiling = openmeteo.derive_ceiling_ft(fc.get("hourly", {}), i, openmeteo.field_elevation_ft(fc))
     return {
         "wind_dir_true": _at(fc, "winddirection_10m", i),

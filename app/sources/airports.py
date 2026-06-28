@@ -16,7 +16,7 @@ from app.services.geo import haversine_nm
 
 
 def _pick(primary: Path, fallback: Path) -> Path:
-    # Always let ensure_airport_data() decide — it self-checks the dataset version
+    # Always let ensure_airport_data() decide - it self-checks the dataset version
     # and only rebuilds when missing or stale. (Previously this ran only when the
     # file was absent, so schema bumps like width_ft never took effect on Replit.)
     try:
@@ -47,7 +47,7 @@ def load_airports() -> dict[str, Airport]:
             lon = _to_float(row.get("longitude_deg"))
             if not ident or lat is None or lon is None:
                 continue
-            # US airports dropped for now — Canada-only (covers stale datasets too).
+            # US airports dropped for now - Canada-only (covers stale datasets too).
             if ident.startswith("K") or ident.startswith("US-"):
                 continue
             # Skip closed/heliport/seaplane bases for fixed-wing VFR suggestions
@@ -109,11 +109,11 @@ def access_note(ident: str) -> str | None:
     """
     u = ident.upper()
     if "-" in u:
-        return "Private / uncharted — verify PPR"
+        return "Private / uncharted - verify PPR"
     if u.startswith(("CY", "CZ", "K", "P")):
         return None
     if u.startswith("C") and len(u) == 4:
-        return "Registered/private — verify PPR"
+        return "Registered/private - verify PPR"
     return None
 
 

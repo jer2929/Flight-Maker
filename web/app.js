@@ -55,7 +55,7 @@ const EXTERNAL_PRESSURE_ITEMS = [
   { id: "ep_wishful",   label: '"It will improve" wishful thinking' },
   { id: "ep_pride",     label: "Pride / reluctance to cancel" },
 ];
-// ON by default — matches the original card exactly
+// ON by default - matches the original card exactly
 const MM_DEFAULTS = new Set([
   "pf_illness","pf_meds","pf_alcohol","pf_fatigue","pf_stress","pf_hydration",
   "ep_schedule","ep_peers","ep_training","ep_pax",
@@ -77,11 +77,11 @@ const THREAT_MITIGATIONS = {
   },
   moderate_turbulence_or_shear: {
     label: "Turbulence / wind shear",
-    items: ["Expect airspeed changes — stay alert", "Avoid terrain rotor areas", "Slow toward manoeuvring speed"],
+    items: ["Expect airspeed changes - stay alert", "Avoid terrain rotor areas", "Slow toward manoeuvring speed"],
   },
   icing_potential: {
     label: "Icing risk",
-    items: ["Know the freezing level", "Identify warm and cold layers", "Exit immediately — usually descend"],
+    items: ["Know the freezing level", "Identify warm and cold layers", "Exit immediately - usually descend"],
   },
 };
 
@@ -171,7 +171,7 @@ function currentTas() {
 function fillModelOptions(make) {
   const sel = $("#ac-model");
   const names = Object.keys(AIRCRAFT_CATALOG[make] || {});
-  if (!names.length) {  // "Custom" — no preset models, TAS typed by hand
+  if (!names.length) {  // "Custom" - no preset models, TAS typed by hand
     sel.innerHTML = `<option value="">Custom</option>`;
     sel.disabled = true;
   } else {
@@ -238,7 +238,7 @@ async function init() {
   renderMinimums();
   renderMyMinimumsSettings();
   // Preflight self-assessment is a standing pre-check shown above the route/discovery
-  // inputs — render it up front so it's done before any weather is pulled.
+  // inputs - render it up front so it's done before any weather is pulled.
   renderSelfAssessment("route-self-check");
   renderSelfAssessment("discovery-self-check");
   $("#dep").value = baseIdent();
@@ -263,7 +263,7 @@ function startClock() {
   tick();
   setInterval(tick, 1000);
 }
-// Freeze the "Data time" to now — call when a fresh assessment's data arrives.
+// Freeze the "Data time" to now - call when a fresh assessment's data arrives.
 function stampDataTime() {
   const el = $("#data-time");
   if (el) el.textContent = fmtZulu(new Date());
@@ -331,7 +331,7 @@ function switchTab(name) {
   $("#tab-discovery").classList.toggle("hidden", name !== "discovery");
   $("#tab-settings").classList.toggle("hidden", name !== "settings");
   // The per-flight controls (time of day, flight rules, extra threats) are
-  // meaningless on the My Minimums tab — hide them there.
+  // meaningless on the My Minimums tab - hide them there.
   $("#flight-controls").classList.toggle("hidden", name === "settings");
 }
 
@@ -410,7 +410,7 @@ function gfaFrameLabel(f, i) {
   return `#${i + 1}`;
 }
 function gfaFallback() {
-  return `<div class="panel gfa-panel"><h3>GFA — graphical area forecast</h3>
+  return `<div class="panel gfa-panel"><h3>GFA - graphical area forecast</h3>
     <p class="hint">Charts couldn't be loaded right now.
     <a href="https://plan.navcanada.ca/" target="_blank" rel="noopener">Open the GFA on NAV CANADA ↗</a></p></div>`;
 }
@@ -418,7 +418,7 @@ function gfaFallback() {
 async function loadGfa(dep, dest) {
   const host = $("#route-gfa");
   if (!host) return;
-  host.innerHTML = `<div class="panel gfa-panel"><h3>GFA — graphical area forecast <span class="hint">loading…</span></h3></div>`;
+  host.innerHTML = `<div class="panel gfa-panel"><h3>GFA - graphical area forecast <span class="hint">loading…</span></h3></div>`;
   try {
     const params = new URLSearchParams({ dep, ...(dest ? { dest } : {}) });
     const data = await fetch(`/api/gfa?${params}`).then((r) => r.json());
@@ -446,7 +446,7 @@ function drawGfa() {
     : "";
   host.innerHTML = `<div class="panel gfa-panel">
     <div class="gfa-head">
-      <h3>GFA — graphical area forecast${GFA.region ? ` <span class="hint">${escapeHtml(GFA.region)}</span>` : ""}</h3>
+      <h3>GFA - graphical area forecast${GFA.region ? ` <span class="hint">${escapeHtml(GFA.region)}</span>` : ""}</h3>
       <div class="gfa-tabs">${tabs}</div>
     </div>
     ${frameBtns}
@@ -454,7 +454,7 @@ function drawGfa() {
       <img class="gfa-img" src="${fr.url || ""}" alt="GFA ${GFA.sub}" loading="lazy"
            onerror="this.closest('.gfa-panel').querySelector('.gfa-err').hidden=false" />
     </a>
-    <p class="hint gfa-err" hidden>Chart image didn't load — <a href="https://plan.navcanada.ca/" target="_blank" rel="noopener">view on NAV CANADA ↗</a></p>
+    <p class="hint gfa-err" hidden>Chart image didn't load - <a href="https://plan.navcanada.ca/" target="_blank" rel="noopener">view on NAV CANADA ↗</a></p>
     <p class="hint gfa-cap">${fr.validity ? "Valid " + escapeHtml(String(fr.validity)) + " · " : ""}Source: NAV CANADA CFPS · tap chart to enlarge</p>
   </div>`;
   host.querySelectorAll(".gfa-tab").forEach((b) => b.addEventListener("click", () => { GFA.sub = b.dataset.sub; GFA.frame = 0; drawGfa(); }));
@@ -518,7 +518,7 @@ async function loadRadar(r) {
     <div class="radar-controls">
       <button id="radar-play" class="radar-play" title="Play / pause">▶</button>
       <input type="range" id="radar-slider" min="0" max="0" value="0" />
-      <span id="radar-time" class="radar-time hint">—</span>
+      <span id="radar-time" class="radar-time hint">-</span>
     </div>
   </div>`;
   destroyRadar();
@@ -614,7 +614,7 @@ function renderCircuits(r) {
   const n = r.threat_checks.filter((t) => t.present).length;
   const label = r.threat_result_label || stackWord(n);
   $("#route-checklist").innerHTML = `<div class="panel checklist">
-    <div class="cl-group"><h3>Hard limits — conditions <span class="hint">(circuit minimums)</span></h3>${cond.map(rowCheck).join("")}</div>
+    <div class="cl-group"><h3>Hard limits - conditions <span class="hint">(circuit minimums)</span></h3>${cond.map(rowCheck).join("")}</div>
     <div class="cl-group"><h3>Weather</h3>${wx.map(rowCheck).join("")}</div>
     <div class="cl-group"><h3>Two-trigger threat stack <span class="badge ${cls(labelVerdict(label))}">${n} present → ${label}</span></h3>${r.threat_checks.map(rowThreat).join("")}</div>
   </div>`;
@@ -623,7 +623,7 @@ function renderCircuits(r) {
 }
 
 function clearRoute() {
-  // route-self-check is a standing pre-check rendered on load — never cleared here,
+  // route-self-check is a standing pre-check rendered on load - never cleared here,
   // so the pilot's ticked items survive a route assessment.
   if (typeof destroyRadar === "function") destroyRadar();  // tear down any live Leaflet map
   ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-gfa", "route-radar", "route-endpoints", "route-windows", "route-timeline"]
@@ -652,8 +652,8 @@ function renderRoute(r) {
   loadRadar(r);
 
   if (r.best_windows.length) {
-    $("#route-windows").innerHTML = `<div class="timeline-wrap"><h3>Best windows (next ${CONFIG.timeline_hours} h) — wind, ceiling &amp; visibility</h3>` +
-      r.best_windows.map((w) => `<div class="window-card">🟢 <strong>${fmtRange(w.start, w.end)}</strong> — ${w.summary}</div>`).join("") + `</div>`;
+    $("#route-windows").innerHTML = `<div class="timeline-wrap"><h3>Best windows (next ${CONFIG.timeline_hours} h) - wind, ceiling &amp; visibility</h3>` +
+      r.best_windows.map((w) => `<div class="window-card">🟢 <strong>${fmtRange(w.start, w.end)}</strong> - ${w.summary}</div>`).join("") + `</div>`;
   } else {
     $("#route-windows").innerHTML = `<div class="timeline-wrap"><div class="empty">No clearly favourable window in the next ${CONFIG.timeline_hours} h.</div></div>`;
   }
@@ -666,7 +666,7 @@ function checklist(r) {
   const n = r.threat_checks.filter((t) => t.present).length;
   const label = r.threat_result_label || stackWord(n);
   return `<div class="panel checklist">
-    <div class="cl-group"><h3>Hard limits — conditions <span class="hint">(worst point on the route)</span></h3>${cond.map(rowCheck).join("")}</div>
+    <div class="cl-group"><h3>Hard limits - conditions <span class="hint">(worst point on the route)</span></h3>${cond.map(rowCheck).join("")}</div>
     <div class="cl-group"><h3>Weather <span class="hint">(SIGMET/AIRMET/PIREP + model; ⚠ = review GFA)</span></h3>${wx.map(rowCheck).join("")}</div>
     <div class="cl-group"><h3>Two-trigger threat stack <span class="badge ${cls(labelVerdict(label))}">${n} present → ${label}</span></h3>${r.threat_checks.map(rowThreat).join("")}</div>
   </div>`;
@@ -680,7 +680,7 @@ function rowCheck(c) {
   const state = !c.applicable ? "na" : c.advisory ? "advisory" : c.passed ? "pass" : "fail";
   const mark = { pass: "✓", fail: "✗", advisory: "⚠", na: "–" }[state];
   const loc = c.location ? ` <span class="loc">@ ${c.location}</span>` : "";
-  const src = c.source && c.source !== "—" ? ` <span class="src-mini">${c.source}</span>` : "";
+  const src = c.source && c.source !== "-" ? ` <span class="src-mini">${c.source}</span>` : "";
   return `<div class="chk ${state}">
     <span class="mark">${mark}</span>
     <span class="lbl">${c.label}</span>
@@ -688,13 +688,13 @@ function rowCheck(c) {
     <span class="lim">${c.limit_text}</span></div>`;
 }
 function rowThreat(t) {
-  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${t.label}</span><span class="act">${t.present ? "present" : "—"}</span><span class="lim"></span></div>`;
+  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${t.label}</span><span class="act">${t.present ? "present" : "-"}</span><span class="lim"></span></div>`;
 }
 
 // ---------- Wind-vs-runway diagram ----------
 // A small NORTH-UP graphic: the runway is drawn at its real compass orientation
 // (RWY 09 lies along the 9-/3-o'clock axis, "N" marks the top) with two component
-// arrows — green headwind down the runway axis and a crosswind across it — so a
+// arrows - green headwind down the runway axis and a crosswind across it - so a
 // pilot can read runway orientation, where the wind is coming from, and whether the
 // crosswind is from the left or right at a glance. Frontend-only: every value comes
 // from the API. Component magnitudes reuse the backend headwind_kt/crosswind_kt so
@@ -759,7 +759,7 @@ function windRunwaySvg(rwy, w, opts = {}) {
     const head = Math.round(rwy.headwind_kt);   // negative = tailwind
     const xw = Math.round(rwy.crosswind_kt);
     // Component arrows grow with strength but keep a generous floor so a light
-    // wind still draws a full, legible arrow (not a tiny stub) — the corner
+    // wind still draws a full, legible arrow (not a tiny stub) - the corner
     // number carries the exact value.
     const pxPerKt = S.maxArrow / 18;
     const arm = (kt) => Math.min(Math.max(Math.abs(kt) * pxPerKt, S.maxArrow * 0.82), S.maxArrow);
@@ -786,7 +786,7 @@ function windRunwaySvg(rwy, w, opts = {}) {
 
     // The three numbers (head / cross / total wind) are parked in the diagram's
     // diagonal corners, which sit clear of the on-axis runway idents and of each
-    // other — so labels never overlap, whatever the wind angle. Head and cross
+    // other - so labels never overlap, whatever the wind angle. Head and cross
     // take opposite corners; the wind speed takes whichever of the two remaining
     // corners is nearer the arrow's tail.
     const Rlbl = S.Lr + S.font * 1.1;
@@ -869,7 +869,7 @@ function trendsBlock(a) {
   return `<details class="trends" open><summary>Trends from recent METARs (${t.length})</summary>${t.map((x) => `<div class="trend">${x}</div>`).join("")}</details>`;
 }
 function nearbyBlock(n) {
-  return `<div class="nearby"><span class="nlabel">Nearest reporting station</span> <strong>${n.ident}</strong>${n.name ? " · " + n.name : ""} — ${n.distance_nm} NM ${n.direction} of here
+  return `<div class="nearby"><span class="nlabel">Nearest reporting station</span> <strong>${n.ident}</strong>${n.name ? " · " + n.name : ""} - ${n.distance_nm} NM ${n.direction} of here
     ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}${ageChip(n.metar)}</div>` : ""}${n.taf ? `<div class="raw">TAF ${escapeHtml(n.taf)}</div>` : ""}
     ${trendsBlock(n)}${metarHistoryList(n.metar_history)}</div>`;
 }
@@ -879,7 +879,7 @@ function advisoriesBlock(r) {
   (r.airmets || []).forEach((t) => items.push(["AIRMET", t]));
   (r.pireps || []).forEach((t) => items.push(["PIREP", t]));
   if (!items.length) return `<div class="panel adv-none">No active SIGMET/AIRMET/PIREP on the route.</div>`;
-  return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(check the altitudes — many apply only to higher levels)</span></summary>${items.map(([k, t]) => `<div class="adv"><span class="adv-k">${k}</span> ${escapeHtml(t)}</div>`).join("")}</details>`;
+  return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(check the altitudes - many apply only to higher levels)</span></summary>${items.map(([k, t]) => `<div class="adv"><span class="adv-k">${k}</span> ${escapeHtml(t)}</div>`).join("")}</details>`;
 }
 function metarHistory(a) {
   return metarHistoryList(a.metar_history);
@@ -1024,7 +1024,7 @@ function discoveryCard(a) {
       <span>💨 ${windStr(w)}</span>
       ${ceilChip(w)}
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
-      ${a.altitude ? `<span title="best VFR cruising altitude — kept ≥500 ft below the enroute ceiling">⬆ Best alt ${fmtFt(a.altitude.altitude_ft)}</span><span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "🟢 tailwind" : "🔴 headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
+      ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below the enroute ceiling and scaled to leg distance">⬆ Best alt ${fmtFt(a.altitude.altitude_ft)}</span><span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "🟢 tailwind" : "🔴 headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
     ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
     ${runwaysBlock(a)}
@@ -1089,7 +1089,7 @@ function buildConservatism() {
 }
 
 // On touch devices the value only moves when the pilot grabs the thumb and drags
-// it — a tap/touch anywhere on the bare bar does nothing. preventDefault() on
+// it - a tap/touch anywhere on the bare bar does nothing. preventDefault() on
 // pointerdown does NOT stop a native range from jumping to the tap, so instead we
 // decide on pointerdown whether the touch landed on the thumb, and if it didn't,
 // revert the value on the resulting `input` event (same task → no visible jump)
@@ -1136,13 +1136,13 @@ function renderMinSliders() {
   for (const f of MIN_FIELDS) {
     const el = $("#" + f.id);
     if (el) {
-      makeDragOnly(el); // before the readout listener — see note on makeDragOnly
+      makeDragOnly(el); // before the readout listener - see note on makeDragOnly
       el.addEventListener("input", (e) => ($("#" + f.id + "-out").textContent = `${e.target.value} ${f.unit}`));
     }
   }
 }
 
-// Recent experience slider in the settings form (local only — not sent to backend).
+// Recent experience slider in the settings form (local only - not sent to backend).
 function renderRecencySlider() {
   const container = $("#grp-recency");
   if (!container) return;
@@ -1153,7 +1153,7 @@ function renderRecencySlider() {
     <input type="range" id="set-recency" min="1" max="20" step="1" value="${v}" />
   </div>`;
   const recencyEl = document.getElementById("set-recency");
-  makeDragOnly(recencyEl); // before the readout listener — see note on makeDragOnly
+  makeDragOnly(recencyEl); // before the readout listener - see note on makeDragOnly
   recencyEl.addEventListener("input", (e) => {
     const val = +e.target.value;
     document.getElementById("set-recency-out").textContent = `${val} hr`;
@@ -1216,7 +1216,7 @@ function saveMinimums() {
   fillProfileForm();
   renderMinimums();
   $("#dep").value = baseIdent();
-  flashStatus("Saved — every flight is now gated by your profile.");
+  flashStatus("Saved - every flight is now gated by your profile.");
 }
 
 function resetMinimums() {
@@ -1278,8 +1278,8 @@ function renderMyMinimumsSettings() {
       `<label><input type="checkbox" class="mm-toggle" value="${id}"${enabledMM.has(id) ? " checked" : ""} /> ${label}</label>`
     ).join("")}</fieldset>`;
   body.innerHTML =
-    makeField(PILOT_FITNESS_ITEMS, "Pilot fitness — included in self-assessment if checked") +
-    makeField(EXTERNAL_PRESSURE_ITEMS, "External pressures — included in self-assessment if checked");
+    makeField(PILOT_FITNESS_ITEMS, "Pilot fitness - included in self-assessment if checked") +
+    makeField(EXTERNAL_PRESSURE_ITEMS, "External pressures - included in self-assessment if checked");
   body.querySelectorAll(".mm-toggle").forEach((cb) => {
     cb.addEventListener("change", () => {
       if (cb.checked) enabledMM.add(cb.value); else enabledMM.delete(cb.value);
@@ -1304,13 +1304,13 @@ function renderSelfAssessment(containerId) {
   ).join("");
   const recencyGate = `<label><input type="checkbox" class="gate" data-banner="${bannerId}" /> Fewer than ${recMin} hours flown in last 30 days</label>`;
   container.innerHTML = `<div class="panel self-check-inline">
-    <h3>Preflight self-assessment <span class="hint">(personal hard limits — check before pulling weather)</span></h3>
+    <h3>Preflight self-assessment <span class="hint">(personal hard limits - check before pulling weather)</span></h3>
     <div class="checks-grid">
-      ${activePF.length ? `<fieldset><legend>Pilot fitness — do not fly if any apply</legend>${gates(activePF)}${recencyGate}</fieldset>` : ""}
-      ${activeEP.length ? `<fieldset><legend>External pressure — pause &amp; reassess</legend>${gates(activeEP)}</fieldset>` : ""}
+      ${activePF.length ? `<fieldset><legend>Pilot fitness - do not fly if any apply</legend>${gates(activePF)}${recencyGate}</fieldset>` : ""}
+      ${activeEP.length ? `<fieldset><legend>External pressure - pause &amp; reassess</legend>${gates(activeEP)}</fieldset>` : ""}
     </div>
     <div id="${bannerId}" class="banner hidden">
-      ⚠️ One or more personal factors checked — <strong>PAUSE and reassess.</strong>
+      ⚠️ One or more personal factors checked - <strong>PAUSE and reassess.</strong>
       Would you be comfortable explaining this decision to your instructor?
     </div>
   </div>`;
@@ -1322,12 +1322,12 @@ function renderSelfAssessment(containerId) {
   });
 }
 
-// Mitigation reference block — shown when verdict is MITIGATE.
+// Mitigation reference block - shown when verdict is MITIGATE.
 function mitigationBlock(threatChecks) {
   const active = (threatChecks || []).filter((t) => t.present && THREAT_MITIGATIONS[t.key]);
   if (!active.length) return "";
   return `<div class="panel mit-block">
-    <h3>Threat mitigation reference <span class="hint">(from your decision card — 1 threat present)</span></h3>
+    <h3>Threat mitigation reference</h3>
     <div class="mit-grid">${active.map(({ key }) => {
       const m = THREAT_MITIGATIONS[key];
       return `<div class="mit-section">
@@ -1343,13 +1343,13 @@ const cls = (v) => String(v).replace("-", "");
 function dirM(magVal, trueVal) {
   if (magVal != null) return `${String(Math.round(magVal)).padStart(3, "0")}°M`;
   if (trueVal != null) return `${String(Math.round(trueVal)).padStart(3, "0")}°T`;
-  return "—";
+  return "-";
 }
 function gustStr(w) {
   return (w.gust_kt != null && w.wind_kt != null && w.gust_kt > w.wind_kt) ? "G" + Math.round(w.gust_kt) : "";
 }
 function windStr(w) {
-  if (w.wind_kt == null) return "—";
+  if (w.wind_kt == null) return "-";
   return `${windDir(w.wind_dir_mag, w.wind_dir_true)}/${Math.round(w.wind_kt)}${gustStr(w)} kt${blendChip(w)}`;
 }
 function blendChip(w) {
@@ -1361,10 +1361,10 @@ function round10(d) { if (d == null) return null; let r = Math.round(d / 10) * 1
 function windDir(magVal, trueVal) {
   if (magVal != null) return `${String(round10(magVal)).padStart(3, "0")}°M`;
   if (trueVal != null) return `${String(round10(trueVal)).padStart(3, "0")}°T`;
-  return "—";
+  return "-";
 }
-const fmtFt = (ft) => (ft == null ? "—" : `${Math.round(ft).toLocaleString()} ft`);
-const fmtCeil = (ft) => (ft == null ? "—" : `${(Math.round(ft / 100) * 100).toLocaleString()} ft`);
+const fmtFt = (ft) => (ft == null ? "-" : `${Math.round(ft).toLocaleString()} ft`);
+const fmtCeil = (ft) => (ft == null ? "-" : `${(Math.round(ft / 100) * 100).toLocaleString()} ft`);
 function ceilChip(w) {
   if (w.ceiling_agl_ft != null) return `<span>☁ ${fmtCeil(w.ceiling_agl_ft)}</span>`;
   if (w.source === "Observed") return `<span>☁ no ceiling</span>`;
@@ -1404,12 +1404,12 @@ function dimsText(c) {
 }
 const dims = (rw) => (rw && rw.length_ft ? ` · ${dimsText(rw)}` : "");
 function fmtHrMin(hr) {
-  if (hr == null) return "—";
+  if (hr == null) return "-";
   const total = Math.round(hr * 60), h = Math.floor(total / 60), m = total % 60;
   return h ? `${h} h ${m} min` : `${m} min`;
 }
 function srcChip(source) {
-  if (!source || source === "—") return `<span class="src">—</span>`;
+  if (!source || source === "-") return `<span class="src">-</span>`;
   const k = { Observed: "OBSERVED", TAF: "TAF", HRDPS: "HRDPS" }[source] || "";
   return `<span class="src ${k}">${source}</span>`;
 }

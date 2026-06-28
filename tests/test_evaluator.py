@@ -8,9 +8,11 @@ def test_decision_returns_structured_checks():
     verdict, checks, threats, n = decision(wx, None, "day", False)
     keys = {c.key for c in checks}
     assert {"wind", "gust_spread", "crosswind", "ceiling", "visibility", "hazards"} <= keys
-    # 8 of 9 major threats shown — single-pilot IFR is hidden on VFR (not selected).
-    assert len(threats) == 8
+    # 7 of 9 major threats shown - single-pilot IFR and actual IMC are hidden when
+    # absent (the latter is a hard NO-GO under VFR, not a stacking threat).
+    assert len(threats) == 7
     assert not any(t.key == "single_pilot_ifr_no_autopilot" for t in threats)
+    assert not any(t.key == "actual_imc" for t in threats)
     assert verdict == Verdict.GO
 
 
@@ -124,7 +126,7 @@ def test_two_threats_nogo():
 
 
 def test_personal_minimums_override_tightens_visibility():
-    # 8 SM passes the default 9? No — default day_xc is 9, so 8 already fails.
+    # 8 SM passes the default 9? No - default day_xc is 9, so 8 already fails.
     # Use 10 SM (passes default) and tighten the personal minimum to 12 SM.
     wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=10, ceiling_agl_ft=8000)
     base = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
@@ -194,8 +196,17 @@ def imc_wx():
     return WeatherSummary(wind_dir_true=50, wind_kt=6, visibility_sm=6, ceiling_agl_ft=600)
 
 
-def test_imc_is_threat_under_vfr():
-    assert "actual_imc" in derive_threats(imc_wx(), False, flight_rules="vfr")
+def test_imc_not_a_threat_under_vfr():
+    # Under VFR, actual IMC is not a stacking threat...
+    assert "actual_imc" not in derive_threats(imc_wx(), False, flight_rules="vfr")
+
+
+def test_imc_is_hard_nogo_under_vfr():
+    # ...it is an automatic NO-GO via the ceiling/visibility hard limits instead.
+    verdict, checks, threats, _n = decision(imc_wx(), None, "day", False, flight_rules="vfr")
+    assert verdict == Verdict.NOGO
+    assert any(c.key == "ceiling" and not c.passed for c in checks)
+    assert not any(t.key == "actual_imc" for t in threats)
 
 
 def test_imc_not_a_threat_under_ifr_by_default():

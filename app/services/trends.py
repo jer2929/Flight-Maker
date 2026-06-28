@@ -6,7 +6,7 @@ chronological order (oldest first). Output is a list of short human notes plus a
 
 Developing trends carry a ``· ~last N h`` suffix computed from the METAR
 timestamps (``time_z``), so it reflects how long the trend has actually been
-running — not just the length of the history.
+running - not just the length of the history.
 """
 from __future__ import annotations
 
@@ -103,9 +103,9 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
         sfx = _suffix(_run_h([t for t, _ in spreads], [v for _, v in spreads], rising=False)) if narrowing else ""
         if cur <= 3:
             tail = " and narrowing" if narrowing else ""
-            notes.append(f"💧 Temp/dew-point spread {cur:.0f}°C{tail} — humid, fog / low-cloud risk{sfx}")
+            notes.append(f"💧 Temp/dew-point spread {cur:.0f}°C{tail} - humid, fog / low-cloud risk{sfx}")
         elif narrowing:
-            notes.append(f"💧 Temp/dew-point spread narrowing to {cur:.0f}°C — humidity rising{sfx}")
+            notes.append(f"💧 Temp/dew-point spread narrowing to {cur:.0f}°C - humidity rising{sfx}")
 
     # Visibility trend (drop or improve)
     viss = [h.get("visibility_sm") for h in obs if h.get("visibility_sm") is not None]
@@ -132,15 +132,15 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
             d0, d1 = round(dirs[0] / 10) * 10 % 360, round(dirs[-1] / 10) * 10 % 360
             notes.append(f"🧭 Wind {verb} {d0:03d}° → {d1:03d}° ({abs(round(shift))}°){_suffix(span_h)}")
 
-    # Gusts developing / increasing (an instantaneous state — no duration suffix)
+    # Gusts developing / increasing (an instantaneous state - no duration suffix)
     gusts = [(h.get("wind_kt"), h.get("gust_kt")) for h in obs]
     had_gust = any(g is not None and w is not None and g > w for w, g in gusts[:-1])
     lw, lg = gusts[-1]
     if lg is not None and lw is not None and lg > lw:
         if not had_gust:
-            notes.append(f"💨 Gusts developing — now G{round(lg)} kt")
+            notes.append(f"💨 Gusts developing - now G{round(lg)} kt")
         else:
-            notes.append(f"💨 Gusty — G{round(lg)} kt")
+            notes.append(f"💨 Gusty - G{round(lg)} kt")
 
     # Precipitation onset / change / clearing
     precips = [h.get("precip") for h in obs]
@@ -162,8 +162,8 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
     alts = [h.get("altimeter_inhg") for h in obs if h.get("altimeter_inhg") is not None]
     if len(alts) >= 2:
         if alts[-1] <= alts[0] - 0.06:
-            notes.append(f"🔻 Pressure falling: {alts[0]:.2f} → {alts[-1]:.2f} inHg — may be deteriorating{_suffix(run_h('altimeter_inhg', rising=False))}")
+            notes.append(f"🔻 Pressure falling: {alts[0]:.2f} → {alts[-1]:.2f} inHg - may be deteriorating{_suffix(run_h('altimeter_inhg', rising=False))}")
         elif alts[-1] >= alts[0] + 0.06:
-            notes.append(f"🔺 Pressure rising: {alts[0]:.2f} → {alts[-1]:.2f} inHg — improving{_suffix(run_h('altimeter_inhg', rising=True))}")
+            notes.append(f"🔺 Pressure rising: {alts[0]:.2f} → {alts[-1]:.2f} inHg - improving{_suffix(run_h('altimeter_inhg', rising=True))}")
 
     return notes, ceiling_lowering

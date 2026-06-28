@@ -31,7 +31,7 @@ def test_override_context_isolation():
     before = get_limits()["hard_limits"]["wind"]["sustained_max_kt"]
     with limits_override({"wind": {"sustained_max_kt": 10}}):
         assert get_limits()["hard_limits"]["wind"]["sustained_max_kt"] == 10
-    # Reverts after the block — no cross-request leakage.
+    # Reverts after the block - no cross-request leakage.
     assert get_limits()["hard_limits"]["wind"]["sustained_max_kt"] == before
 
 
@@ -73,7 +73,7 @@ def test_default_object_not_mutated():
     base = get_default_limits()
     original = base["hard_limits"]["visibility_sm"]["day_xc"]
     merge_limits(base, {"visibility_sm": {"day_xc": 1}})
-    # merge_limits works on a copy — the cached default is untouched.
+    # merge_limits works on a copy - the cached default is untouched.
     assert get_default_limits()["hard_limits"]["visibility_sm"]["day_xc"] == original
 
 

@@ -24,7 +24,7 @@ async def _fetch(alpha: str, sites: list[str]) -> list[dict]:
     """Return the raw ``data`` list for an alpha product over the given sites.
 
     Large site lists are split into chunks that run **concurrently** and are
-    **fault-isolated** — one chunk failing (e.g. a single unknown ident in the
+    **fault-isolated** - one chunk failing (e.g. a single unknown ident in the
     request) no longer wipes out every site, and the round-trips overlap so
     Discovery stays fast.
     """
@@ -231,7 +231,7 @@ GFA_SUBS = ("CLDWX", "TURBC")
 
 
 def _iso_z(s):
-    """NAV CANADA validity stamps are UTC but unmarked — append Z for JS Date()."""
+    """NAV CANADA validity stamps are UTC but unmarked - append Z for JS Date()."""
     if not isinstance(s, str) or not s:
         return s
     return s if s.endswith("Z") else (s + "Z" if "T" in s else s)

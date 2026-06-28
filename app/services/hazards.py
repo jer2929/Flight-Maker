@@ -81,19 +81,19 @@ def weather_checks(
     ts_metar = ("thunderstorm" in hazards) or _has(mt or blob, r"\bTS", r"CB\b")
     ts_area = bool(area) and _has(area, r"\bTS", r"CONVECTIV", r"\bCB\b")
     conv = ts_metar or ts_area
-    conv_actual = ("thunderstorm — " + _src(ts_metar, ts_area)) if conv else "none detected"
+    conv_actual = ("thunderstorm - " + _src(ts_metar, ts_area)) if conv else "none detected"
     add("convective", "Convective SIGMET / thunderstorms", conv, conv_actual)
 
     # 2. Embedded thunderstorms
     embd = _has(blob, r"\bEMBD\b.*\b(TS|CB)\b", r"\bEMBEDDED\b")
     add("embedded_ts", "Embedded thunderstorms", embd,
-        ("EMBD TS — SIGMET/area forecast" if embd else "none detected"))
+        ("EMBD TS - SIGMET/area forecast" if embd else "none detected"))
 
     # 3. Freezing rain forecast
     fz_metar = ("freezing_rain" in hazards) or _has(mt or blob, r"\bFZRA\b", r"\bFZDZ\b")
     fz_area = bool(area) and _has(area, r"\bFZRA\b", r"FREEZING")
     fzra = fz_metar or fz_area
-    fzra_actual = ("FZRA — " + _src(fz_metar, fz_area)) if fzra else "none detected"
+    fzra_actual = ("FZRA - " + _src(fz_metar, fz_area)) if fzra else "none detected"
     add("freezing_rain", "Freezing rain", fzra, fzra_actual)
 
     # 4. Forecast icing in planned altitude band (AIRMET/SIGMET text; else advisory)
@@ -103,9 +103,9 @@ def weather_checks(
     else:
         hint = ""
         if freezing_level_ft is not None and freezing_level_ft < 8000:
-            hint = f" — freezing level ~{round(freezing_level_ft):,} ft"
+            hint = f" - freezing level ~{round(freezing_level_ft):,} ft"
         add("icing", "Forecast icing", False,
-            f"no AIRMET/SIGMET — review GFA icing chart ({gfa['region']}){hint}",
+            f"no AIRMET/SIGMET - review GFA icing chart ({gfa['region']}){hint}",
             advisory=True)
 
     # 5. Moderate turbulence below 3000 ft (AIRMET/PIREP text; else advisory)
@@ -115,7 +115,7 @@ def weather_checks(
             "AIRMET/SIGMET/PIREP turbulence on route")
     else:
         add("turbulence", "Moderate turbulence (low level)", False,
-            f"no AIRMET/PIREP — review GFA turbulence chart ({gfa['region']})",
+            f"no AIRMET/PIREP - review GFA turbulence chart ({gfa['region']})",
             advisory=True)
 
     # 6. Low-level wind shear forecast
@@ -129,7 +129,7 @@ def weather_checks(
         actual = f"{round(llj_kt)} kt at ~2000 ft" if llj_kt is not None else "no data"
         add("low_level_jet", "Low-level jet (night)", failed, actual)
     else:
-        add("low_level_jet", "Low-level jet (night)", False, "day flight — n/a",
+        add("low_level_jet", "Low-level jet (night)", False, "day flight - n/a",
             applicable=False)
 
     # 8. Rapidly lowering ceilings along route

@@ -80,3 +80,61 @@ def test_recommend_altitude_ifr_not_gated_on_ceiling():
     rec = recommend_altitude(levels, course_true=90, cruise_kt=110,
                              ceiling_ft=4100, flight_rules="ifr")
     assert rec.altitude_ft == 7000  # picked despite being above the deck
+
+
+# --- distance-proportional altitude cap (~200 ft of climb per nm) ---
+
+def _eastbound_levels():
+    # Strong tailwind high (9,500) so, uncapped, the algorithm would climb for it.
+    return [
+        WindAloft(altitude_ft=3500, direction_true=90, speed_kt=10),    # headwind low
+        WindAloft(altitude_ft=9500, direction_true=270, speed_kt=40),   # strong tailwind high
+    ]
+
+
+def test_distance_cap_short_leg_stays_low():
+    # 20 nm leg -> cap ~4,000 ft, so only 3,500 is realistic despite the high tailwind.
+    rec = recommend_altitude(_eastbound_levels(), course_true=90, cruise_kt=110,
+                             distance_nm=20)
+    assert rec.altitude_ft == 3500
+
+
+def test_distance_cap_long_leg_unlocks_high():
+    # 60 nm leg -> cap ~12,000 ft, so the high-tailwind level is allowed.
+    rec = recommend_altitude(_eastbound_levels(), course_true=90, cruise_kt=110,
+                             distance_nm=60)
+    assert rec.altitude_ft == 9500
+
+
+def test_distance_cap_floor_keeps_lowest_on_tiny_leg():
+    # 10 nm leg -> cap ~2,000 ft removes every level, but the floor keeps the
+    # lowest legal one rather than returning None.
+    rec = recommend_altitude(_eastbound_levels(), course_true=90, cruise_kt=110,
+                             distance_nm=10)
+    assert rec.altitude_ft == 3500
+
+
+def test_distance_cap_uses_height_above_field():
+    # Best tailwind is up at 7,500. From a 5,000 ft field that is only 2,500 ft of
+    # climb, so a short 15 nm leg (cap ~3,000 ft of climb) can still reach it -
+    # whereas from sea level the same leg would be capped to 3,500.
+    levels = [
+        WindAloft(altitude_ft=3500, direction_true=90, speed_kt=10),    # headwind
+        WindAloft(altitude_ft=7500, direction_true=270, speed_kt=30),   # strong tailwind
+    ]
+    high = recommend_altitude(levels, course_true=90, cruise_kt=110,
+                              distance_nm=15, field_elev_ft=5000)
+    assert high.altitude_ft == 7500
+    sea = recommend_altitude(levels, course_true=90, cruise_kt=110,
+                             distance_nm=15, field_elev_ft=0)
+    assert sea.altitude_ft == 3500
+
+
+def test_distance_cap_applies_to_ifr():
+    levels = [
+        WindAloft(altitude_ft=3000, direction_true=90, speed_kt=10),
+        WindAloft(altitude_ft=9000, direction_true=270, speed_kt=40),
+    ]
+    rec = recommend_altitude(levels, course_true=90, cruise_kt=110,
+                             distance_nm=20, flight_rules="ifr")
+    assert rec.altitude_ft == 3000  # 20 nm caps ~4,000 ft, high tailwind unreachable

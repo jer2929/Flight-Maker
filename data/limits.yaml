@@ -1,4 +1,4 @@
-# Personal Flight Decision Card — encoded limits (Jeremy / CYFD)
+# Personal Flight Decision Card - encoded limits (Jeremy / CYFD)
 # Edit these to tune the tool. All winds in knots, visibility in statute miles,
 # ceilings in feet AGL. Cross-country (XC) values are used for destination flights.
 
@@ -32,7 +32,7 @@ hard_limits:
     vfr: 1.0
     ifr: 1.5
 
-# IFR personal minimums — used when flight_rules=ifr is selected.
+# IFR personal minimums - used when flight_rules=ifr is selected.
 # These are separate from hard_limits so VFR profile sliders are unaffected.
 ifr_minimums:
   ceiling_agl_ft:
@@ -42,7 +42,7 @@ ifr_minimums:
     day_xc: 3            # flat personal visibility floor (confirm it meets published minimum)
     night_xc: 3
   # When true, widespread/hard IMC counts as a two-trigger threat even on IFR
-  # flights (for pilots who'd rather not be in sustained IMC — e.g. single-engine
+  # flights (for pilots who'd rather not be in sustained IMC - e.g. single-engine
   # or no autopilot). When false (default) IFR flights aren't penalised for IMC.
   imc_as_threat: false
 
@@ -67,10 +67,10 @@ threat_stacking:
     "2": NO-GO        # no-go solo
     "3": NO-GO
   # How each threat is sourced, for the UI:
-  #   auto       — derived automatically from the forecast each hour
-  #   mode       — set automatically by the day/night toggle
-  #   standing   — a pilot/aircraft factor saved in the profile, applied every flight
-  #   per_flight — toggled per flight (pilot-relative)
+  #   auto       - derived automatically from the forecast each hour
+  #   mode       - set automatically by the day/night toggle
+  #   standing   - a pilot/aircraft factor saved in the profile, applied every flight
+  #   per_flight - toggled per flight (pilot-relative)
   threat_kinds:
     night_operations: mode
     actual_imc: auto
@@ -82,7 +82,7 @@ threat_stacking:
     single_pilot_ifr_no_autopilot: per_flight
     unfamiliar_or_complex_airspace: per_flight
 
-# CONSERVATISM PRESETS — how readily stacked threats escalate the verdict.
+# CONSERVATISM PRESETS - how readily stacked threats escalate the verdict.
 # Each preset supplies per-threat `weights` (default 1) and the count->verdict
 # `rule`. The pilot picks one in their profile; "standard" preserves the
 # original decision card and is the default.
@@ -91,7 +91,7 @@ conservatism_presets:
   presets:
     cautious:
       label: Cautious
-      description: Stops you sooner — one serious threat can be a no-go.
+      description: Stops you sooner - one serious threat can be a no-go.
       serious_weight: 2          # actual_imc / convective / icing count double
       rule: {"0": GO, "1": MITIGATE, "2": NO-GO, "3": NO-GO}
     standard:
@@ -100,7 +100,7 @@ conservatism_presets:
       rule: {"0": GO, "1": MITIGATE, "2": NO-GO, "3": NO-GO}
     confident:
       label: Confident
-      description: More tolerant — it takes more stacked threats to stop you.
+      description: More tolerant - it takes more stacked threats to stop you.
       rule: {"0": GO, "1": GO, "2": MITIGATE, "3": NO-GO}
   # Threats treated as "serious" (double-weighted under the cautious preset).
   serious_threats:
