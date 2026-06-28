@@ -657,8 +657,11 @@ function windRunwaySvg(rwy, w, opts = {}) {
     const severe = Math.abs(delta) > XW_SEVERE_DEG;
     const head = Math.round(rwy.headwind_kt);   // negative = tailwind
     const xw = Math.round(rwy.crosswind_kt);
-    const pxPerKt = S.maxArrow / 18; // ~18 kt fills the arrow; stronger winds clamp
-    const len = (kt) => Math.min(Math.abs(kt) * pxPerKt, S.maxArrow);
+    // Component arrows grow with strength but keep a generous floor so a light
+    // wind still draws a full, legible arrow (not a tiny stub) — the corner
+    // number carries the exact value.
+    const pxPerKt = S.maxArrow / 18;
+    const arm = (kt) => Math.min(Math.max(Math.abs(kt) * pxPerKt, S.maxArrow * 0.62), S.maxArrow);
     // Aviation-style "12G18" when a gust component is present (gust > steady).
     const gustTxt = (base, gust) => gust != null ? `${base}G${Math.round(Math.abs(gust))}` : `${base}`;
 
@@ -667,15 +670,18 @@ function windRunwaySvg(rwy, w, opts = {}) {
     // a glance, then decomposed into the head/cross components below.
     const wb = (H + delta) * Math.PI / 180;        // wind FROM bearing, drawn frame
     const fvx = Math.sin(wb), fvy = -Math.cos(wb); // unit vector toward the source
+    // The total-wind arrow is the bold one; the component arrows are full length
+    // but drawn with a lighter stroke so the picture stays uncluttered.
     const Rw = S.Lr * 0.95;
-    parts.push(`<line class="wr-wind" x1="${svgNum(cx + fvx * Rw)}" y1="${svgNum(cy + fvy * Rw)}" x2="${svgNum(cx - fvx * Rw)}" y2="${svgNum(cy - fvy * Rw)}" stroke-width="${svgNum(S.comp * 0.85)}" marker-end="url(#wr-arrow-wind)"/>`);
+    const windW = S.comp * 0.95, compW = S.comp * 0.6;
+    parts.push(`<line class="wr-wind" x1="${svgNum(cx + fvx * Rw)}" y1="${svgNum(cy + fvy * Rw)}" x2="${svgNum(cx - fvx * Rw)}" y2="${svgNum(cy - fvy * Rw)}" stroke-width="${svgNum(windW)}" marker-end="url(#wr-arrow-wind)"/>`);
     // A hub at the centre makes it clear the component arrows share one origin.
     parts.push(`<circle class="wr-hub" cx="${cx}" cy="${cy}" r="${svgNum(S.comp * 0.6)}"/>`);
 
     const tail = head < 0;
     const hsign = head >= 0 ? -1 : 1;  // headwind points to the approach end (-u)
     const xsign = fromRight ? -1 : 1;  // wind from the right pushes the aircraft left
-    const hlen = len(head), xlen = len(xw);
+    const hlen = arm(head), xlen = arm(xw);
 
     // The three numbers (head / cross / total wind) are parked in the diagram's
     // diagonal corners, which sit clear of the on-axis runway idents and of each
@@ -689,9 +695,9 @@ function windRunwaySvg(rwy, w, opts = {}) {
     };
 
     // Headwind arrow (green; red for a tailwind) + its corner label.
-    if (hlen >= 3) {
+    if (Math.abs(head) >= 1) {
       const hx = cx + hsign * ux * hlen, hy = cy + hsign * uy * hlen;
-      parts.push(`<line class="wr-head${tail ? " wr-head-tail" : ""}" x1="${cx}" y1="${cy}" x2="${svgNum(hx)}" y2="${svgNum(hy)}" stroke-width="${S.comp}" marker-end="url(#${tail ? "wr-arrow-tail" : "wr-arrow-head"})"/>`);
+      parts.push(`<line class="wr-head${tail ? " wr-head-tail" : ""}" x1="${cx}" y1="${cy}" x2="${svgNum(hx)}" y2="${svgNum(hy)}" stroke-width="${svgNum(compW)}" marker-end="url(#${tail ? "wr-arrow-tail" : "wr-arrow-head"})"/>`);
     }
     if (S.labels && Math.abs(head) >= 1) {
       const [lx, ly] = corner(hsign, -xsign);
@@ -699,10 +705,10 @@ function windRunwaySvg(rwy, w, opts = {}) {
     }
 
     // Crosswind arrow (amber; red when severe) + its opposite-corner label.
-    if (xlen >= 3) {
+    if (xw >= 1) {
       const xx = cx + xsign * prx * xlen, xy = cy + xsign * pry * xlen;
       const sev = severe ? "nogo" : "mit";
-      parts.push(`<line class="wr-cross wr-sev-${sev}" x1="${cx}" y1="${cy}" x2="${svgNum(xx)}" y2="${svgNum(xy)}" stroke-width="${S.comp}" marker-end="url(#wr-arrow-cross-${sev})"/>`);
+      parts.push(`<line class="wr-cross wr-sev-${sev}" x1="${cx}" y1="${cy}" x2="${svgNum(xx)}" y2="${svgNum(xy)}" stroke-width="${svgNum(compW)}" marker-end="url(#wr-arrow-cross-${sev})"/>`);
     }
     if (S.labels && xw >= 1) {
       const [lx, ly] = corner(-hsign, xsign);
