@@ -22,10 +22,20 @@ def test_fmt_sigmet_shows_hazard_and_band():
     assert "TURB" in out and "FL240" in out and "FL400" in out
 
 
+def test_fmt_sigmet_blank_when_no_content():
+    # A SIGMET with no hazard/FIR/band/raw renders to "" so the orchestrator can
+    # filter it out instead of showing a contentless advisory.
+    s = {"hazard": "", "fir": "", "base_ft": None, "top_ft": None, "raw": "",
+         "coords": []}
+    assert _fmt_sigmet(s) == ""
+
+
 def test_coords_near_route():
     route = [(43.1, -80.3)]
     assert _coords_near_route([(43.2, -80.4)], route, max_nm=50)
     assert not _coords_near_route([(50.0, -110.0)], route, max_nm=250)
+    # No coordinates -> can't be tied to the route, so never "near".
+    assert not _coords_near_route([], route, max_nm=250)
 
 
 def test_trend_wind_veer_and_gusts():

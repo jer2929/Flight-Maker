@@ -873,13 +873,19 @@ function nearbyBlock(n) {
     ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}${ageChip(n.metar)}</div>` : ""}${n.taf ? `<div class="raw">TAF ${escapeHtml(n.taf)}</div>` : ""}
     ${trendsBlock(n)}${metarHistoryList(n.metar_history)}</div>`;
 }
+// Where a pilot can verify each advisory against the authoritative source.
+const ADV_SOURCE = {
+  SIGMET: "https://plan.navcanada.ca/",
+  AIRMET: "https://plan.navcanada.ca/",
+  PIREP: "https://plan.navcanada.ca/",
+};
 function advisoriesBlock(r) {
   const items = [];
   (r.sigmets || []).forEach((t) => items.push(["SIGMET", t]));
   (r.airmets || []).forEach((t) => items.push(["AIRMET", t]));
   (r.pireps || []).forEach((t) => items.push(["PIREP", t]));
   if (!items.length) return `<div class="panel adv-none">No active SIGMET/AIRMET/PIREP on the route.</div>`;
-  return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(check the altitudes - many apply only to higher levels)</span></summary>${items.map(([k, t]) => `<div class="adv"><span class="adv-k">${k}</span> ${escapeHtml(t)}</div>`).join("")}</details>`;
+  return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(check the altitudes - many apply only to higher levels)</span></summary>${items.map(([k, t]) => `<div class="adv"><span class="adv-k">${k}</span> ${escapeHtml(t)} <a class="adv-src" href="${ADV_SOURCE[k]}" target="_blank" rel="noopener">verify ↗</a></div>`).join("")}</details>`;
 }
 function metarHistory(a) {
   return metarHistoryList(a.metar_history);

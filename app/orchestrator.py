@@ -486,9 +486,17 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # SIGMETs: aviationweather.gov international SIGMETs (covers Canadian FIRs),
     # filtered to those whose area is near the route, unioned with CFPS.
     raw_isig = await _safe(awc.isigmets(), [])
-    isig_strs = [_fmt_sigmet(s) for s in raw_isig
-                 if (not s["coords"]) or _coords_near_route(s["coords"], area_pts)]
-    sigmets = list(dict.fromkeys(isig_strs + await _gather_area(cfps.sigmets, area_pts)))
+    # The international SIGMET feed is global, so keep only entries whose plotted
+    # area is near the route. A SIGMET with no usable coordinates can't be tied to
+    # the route - dropping it avoids phantom advisories for distant FIRs (CFPS,
+    # queried per route point below, is the local backstop). Blank renders (empty
+    # hazard/FIR/raw) are filtered so a contentless advisory never shows.
+    isig_strs = [t for s in raw_isig
+                 if s["coords"] and _coords_near_route(s["coords"], area_pts)
+                 for t in (_fmt_sigmet(s),) if t]
+    sigmets = list(dict.fromkeys(
+        isig_strs + [t for t in await _gather_area(cfps.sigmets, area_pts) if t]
+    ))
     airmets = await _gather_area(cfps.airmets, area_pts)
     pireps = await _gather_area(cfps.pireps, area_pts)
 
