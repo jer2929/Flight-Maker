@@ -219,8 +219,8 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .rwy-comp-row { display: flex; align-items: center; gap: 8px; }
 .rwy-comp-row .rwy-comp { padding: 3px 0; flex: 1 1 auto; min-width: 0; }
 .rwy-diag-sm { flex: 0 0 auto; }
-.wr { display: block; width: 138px; height: 138px; overflow: visible; }
-.wr.wr-sm { width: 96px; height: 96px; }
+.wr { display: block; width: 156px; height: 156px; overflow: visible; }
+.wr.wr-sm { width: 108px; height: 108px; }
 .wr-strip-line { stroke: var(--muted); fill: none; stroke-linecap: butt; opacity: .55; }
 .wr-center { stroke: rgba(230, 237, 243, .45); fill: none; stroke-dasharray: 2 3; }
 .wr-n { fill: var(--muted); text-anchor: middle; font-family: system-ui, sans-serif; }

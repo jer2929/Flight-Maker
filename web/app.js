@@ -612,8 +612,8 @@ function windRunwaySvg(rwy, w, opts = {}) {
     if (H == null) return "";
     const compact = !!opts.compact;
     const S = compact
-      ? { vb: 88,  Lr: 21, rw: 7,  maxArrow: 26, pad: 12, font: 9,  comp: 2.2, labels: true }
-      : { vb: 132, Lr: 31, rw: 11, maxArrow: 36, pad: 16, font: 11, comp: 3.2, labels: true };
+      ? { vb: 96,  Lr: 23, rw: 7,  maxArrow: 30, pad: 13, font: 9,  comp: 2.3, labels: true }
+      : { vb: 144, Lr: 34, rw: 12, maxArrow: 42, pad: 17, font: 12, comp: 3.4, labels: true };
     const cx = S.vb / 2, cy = S.vb / 2;
 
     // North-up unit vectors (screen y points down). Bearing th -> (sin, -cos).
@@ -661,7 +661,7 @@ function windRunwaySvg(rwy, w, opts = {}) {
     // wind still draws a full, legible arrow (not a tiny stub) — the corner
     // number carries the exact value.
     const pxPerKt = S.maxArrow / 18;
-    const arm = (kt) => Math.min(Math.max(Math.abs(kt) * pxPerKt, S.maxArrow * 0.62), S.maxArrow);
+    const arm = (kt) => Math.min(Math.max(Math.abs(kt) * pxPerKt, S.maxArrow * 0.82), S.maxArrow);
     // Aviation-style "12G18" when a gust component is present (gust > steady).
     const gustTxt = (base, gust) => gust != null ? `${base}G${Math.round(Math.abs(gust))}` : `${base}`;
 
