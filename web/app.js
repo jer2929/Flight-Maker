@@ -873,13 +873,24 @@ function nearbyBlock(n) {
     ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}${ageChip(n.metar)}</div>` : ""}${n.taf ? `<div class="raw">TAF ${escapeHtml(n.taf)}</div>` : ""}
     ${trendsBlock(n)}${metarHistoryList(n.metar_history)}</div>`;
 }
+// One advisory: a collapsed one-line teaser that expands to the full product
+// text plus a deep link back to the source feed it was fetched from.
+function advisoryItem(a) {
+  const full = (a.text || "").trim();
+  // Teaser: the hazard/header before the first colon (from _fmt_sigmet), else
+  // the first line - truncated so the summary stays one line.
+  const head = full.includes(":") ? full.slice(0, full.indexOf(":")) : full.split("\n")[0];
+  let teaser = (head || full).trim();
+  if (teaser.length > 90) teaser = teaser.slice(0, 90) + "…";
+  const link = a.source_url
+    ? `<a class="adv-src" href="${a.source_url}" target="_blank" rel="noopener">source: ${escapeHtml(a.source || "feed")} ↗</a>`
+    : "";
+  return `<details class="adv"><summary><span class="adv-k">${escapeHtml(a.kind)}</span> ${escapeHtml(teaser)}</summary><pre class="adv-text">${escapeHtml(full)}</pre>${link}</details>`;
+}
 function advisoriesBlock(r) {
-  const items = [];
-  (r.sigmets || []).forEach((t) => items.push(["SIGMET", t]));
-  (r.airmets || []).forEach((t) => items.push(["AIRMET", t]));
-  (r.pireps || []).forEach((t) => items.push(["PIREP", t]));
+  const items = [...(r.sigmets || []), ...(r.airmets || []), ...(r.pireps || [])];
   if (!items.length) return `<div class="panel adv-none">No active SIGMET/AIRMET/PIREP on the route.</div>`;
-  return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(check the altitudes - many apply only to higher levels)</span></summary>${items.map(([k, t]) => `<div class="adv"><span class="adv-k">${k}</span> ${escapeHtml(t)}</div>`).join("")}</details>`;
+  return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(tap an item for the full text - check the altitudes, many apply only to higher levels)</span></summary>${items.map(advisoryItem).join("")}</details>`;
 }
 function metarHistory(a) {
   return metarHistoryList(a.metar_history);
