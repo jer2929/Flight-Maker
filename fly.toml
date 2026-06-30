@@ -1,0 +1,32 @@
+# Fly.io configuration for Minima.
+#
+# Builds the repo's Dockerfile and runs uvicorn. Tuned to be cheap: the machine
+# auto-stops when idle (scale to zero) and auto-starts on the next request, so
+# you only pay for the seconds it's actually serving. Wake is ~1-2s.
+#
+# `app` must be globally unique on Fly. `fly launch` will offer to set it for
+# you; change it here if you pick a different name. Your public URL will be your
+# custom domain (personalminimums.com) once DNS + certs are set up — see DEPLOY.md.
+
+app = "minima"
+primary_region = "yyz"  # Toronto — closest to CYFD / southern-Ontario users
+
+[build]
+  # Uses ./Dockerfile (no config needed).
+
+[http_service]
+  internal_port = 8000      # matches the Dockerfile's uvicorn --port
+  force_https = true        # redirect http -> https (PWAs require HTTPS)
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0  # scale to zero when idle = cheapest
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200        # this app is async + I/O-bound; one small VM handles plenty
+    hard_limit = 250
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"          # headroom for the all-Canada airport dataset + caches;
+                            # drop to "256mb" to trim cost if you stay light.

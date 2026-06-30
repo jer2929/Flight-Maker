@@ -115,6 +115,16 @@ the repo, press **Run**, and it serves on `$PORT`.
 > `plan.navcanada.ca`, `api.open-meteo.com`, and (for the airport refresh)
 > `davidmegginson.github.io`.
 
+## Deploy on your own domain (installable PWA)
+
+Minima ships as an installable **Progressive Web App** (manifest + service
+worker + icons under `web/`); the service worker caches only the static shell,
+never `/api/*`, so weather data always stays live. To run it on a custom domain
+(e.g. `personalminimums.com`) over HTTPS for ~$1-3/month, see **[DEPLOY.md](DEPLOY.md)**
+— a step-by-step **Fly.io + Cloudflare** guide. The repo includes `fly.toml`, a
+`Dockerfile`, and a GitHub Action (`.github/workflows/fly-deploy.yml`) that
+auto-deploys on every push to `main`.
+
 ## Project layout
 
 ```

@@ -205,5 +205,24 @@ async def index():
     return FileResponse(WEB_DIR / "index.html")
 
 
-# Static assets (CSS/JS). Mounted last so /api/* routes win.
+@app.get("/manifest.webmanifest")
+async def manifest():
+    # Explicit route so the correct manifest MIME type is sent (StaticFiles may
+    # fall back to octet-stream for the .webmanifest extension).
+    return FileResponse(WEB_DIR / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+async def service_worker():
+    # Served from the root so the worker's scope covers the whole origin.
+    # ``no-cache`` ensures a new deploy's worker is picked up promptly rather
+    # than a stale copy lingering in the browser's HTTP cache.
+    return FileResponse(
+        WEB_DIR / "sw.js",
+        media_type="text/javascript",
+        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+    )
+
+
+# Static assets (CSS/JS/icons). Mounted last so /api/* and the routes above win.
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="static")

@@ -1421,4 +1421,15 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// ---------- PWA: register the service worker (installable + offline shell) ----------
+// The SW caches only the static shell; /api/* always hits the network so weather
+// data stays live. Safe to call unconditionally — unsupported browsers ignore it.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((err) => {
+      console.warn("Service worker registration failed:", err);
+    });
+  });
+}
+
 init();
