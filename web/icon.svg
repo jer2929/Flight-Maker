@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Minima attitude indicator">
+  <defs>
+    <radialGradient id="bezel" cx="42%" cy="34%" r="75%">
+      <stop offset="0%" stop-color="#3b434e"/>
+      <stop offset="55%" stop-color="#232830"/>
+      <stop offset="100%" stop-color="#0a0d11"/>
+    </radialGradient>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#41b2f5"/>
+      <stop offset="100%" stop-color="#2285cd"/>
+    </linearGradient>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#bd843c"/>
+      <stop offset="100%" stop-color="#6c451b"/>
+    </linearGradient>
+    <radialGradient id="vignette" cx="50%" cy="48%" r="52%">
+      <stop offset="68%" stop-color="#000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0.38"/>
+    </radialGradient>
+    <linearGradient id="glare" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="face"><circle cx="256" cy="256" r="196"/></clipPath>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2.2" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Bezel -->
+  <circle cx="256" cy="256" r="248" fill="url(#bezel)"/>
+  <circle cx="256" cy="256" r="248" fill="none" stroke="#4a525e" stroke-width="2" opacity="0.7"/>
+  <circle cx="256" cy="256" r="203" fill="none" stroke="#05070a" stroke-width="12"/>
+
+  <!-- Instrument face -->
+  <g clip-path="url(#face)">
+    <rect x="56" y="56" width="400" height="200" fill="url(#sky)"/>
+    <rect x="56" y="256" width="400" height="200" fill="url(#ground)"/>
+    <rect x="56" y="252" width="400" height="6" fill="#ffffff"/>
+
+    <!-- Pitch ladder -->
+    <g stroke="#ffffff" stroke-linecap="round" opacity="0.85">
+      <line x1="226" y1="210" x2="286" y2="210" stroke-width="4"/>
+      <line x1="238" y1="186" x2="274" y2="186" stroke-width="3"/>
+      <line x1="226" y1="302" x2="286" y2="302" stroke-width="4"/>
+      <line x1="238" y1="326" x2="274" y2="326" stroke-width="3"/>
+    </g>
+
+    <!-- Wordmark in the sky -->
+    <text x="256" y="156" text-anchor="middle"
+          font-family="'Helvetica Neue', 'Segoe UI', Arial, sans-serif"
+          font-size="52" font-weight="600" letter-spacing="1.5"
+          fill="#ffffff" filter="url(#soft)">Minima</text>
+
+    <!-- Top glass glare + edge vignette for depth -->
+    <ellipse cx="256" cy="150" rx="180" ry="120" fill="url(#glare)"/>
+    <circle cx="256" cy="256" r="196" fill="url(#vignette)"/>
+  </g>
+
+  <!-- Bank scale ticks on the bezel (major 30/60, minor 15/45) -->
+  <g stroke="#ffffff" stroke-linecap="round">
+    <g stroke-width="3">
+      <line x1="310.9" y1="51.2" x2="307.8" y2="62.8"/>
+      <line x1="201.1" y1="51.2" x2="204.2" y2="62.8"/>
+      <line x1="405.9" y1="106.1" x2="397.4" y2="114.6"/>
+      <line x1="106.1" y1="106.1" x2="114.6" y2="114.6"/>
+    </g>
+    <g stroke-width="5">
+      <line x1="362" y1="72.4" x2="354" y2="86.3"/>
+      <line x1="150" y1="72.4" x2="158" y2="86.3"/>
+      <line x1="439.6" y1="150" x2="425.7" y2="158"/>
+      <line x1="72.4" y1="150" x2="86.3" y2="158"/>
+    </g>
+  </g>
+
+  <!-- Sky pointer (fixed yellow triangle at top) -->
+  <path d="M256 64 L243 43 L269 43 Z" fill="#ffd21f" filter="url(#soft)"/>
+
+  <!-- Fixed aircraft symbol -->
+  <g fill="#ffd21f" filter="url(#soft)">
+    <rect x="148" y="250" width="68" height="12" rx="6"/>
+    <rect x="296" y="250" width="68" height="12" rx="6"/>
+    <path d="M256 246 l13 20 h-26 z"/>
+    <circle cx="256" cy="256" r="7"/>
+  </g>
+</svg>
