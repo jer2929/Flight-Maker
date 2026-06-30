@@ -184,8 +184,11 @@ the PWA coexist cleanly.
 
 ## Regenerating the app icons
 
-The PWA icons are produced by a dependency-free script:
+The icon is an SVG attitude indicator (`web/icon.svg`) — edit that to change the
+look. The PNG sizes (for iOS / Android / maskable) are rasterised from it with
+headless Chromium:
 
 ```bash
-python scripts/make_icons.py      # writes web/icon-*.png, apple-touch-icon.png, favicon-32.png
+NODE_PATH=$(npm root -g) node scripts/make_icons.cjs
+# writes web/icon-{192,512}.png, icon-maskable-512.png, apple-touch-icon.png, favicon-32.png
 ```
