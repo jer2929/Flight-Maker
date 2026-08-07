@@ -19,6 +19,13 @@ _NOTAM_NUM = re.compile(r"\b([A-Z]\d{3,4}/\d{2})\b")
 
 _SITE_CHUNK = 10  # CFPS rejects/ignores very long multi-site queries
 
+# Cap on outbound requests in flight at once. A route assessment now fetches its
+# products concurrently, and multi-site queries chunk on top of that, so without a
+# ceiling a single page load could open a few dozen sockets at NAV CANADA. Six
+# keeps the round-trips overlapping while staying a polite client of a free API.
+_MAX_INFLIGHT = 6
+_limiter = asyncio.Semaphore(_MAX_INFLIGHT)
+
 
 async def _fetch(alpha: str, sites: list[str]) -> list[dict]:
     """Return the raw ``data`` list for an alpha product over the given sites.
@@ -46,10 +53,11 @@ async def _fetch(alpha: str, sites: list[str]) -> list[dict]:
 
     settings = get_settings()
     params = [("alpha", alpha)] + [("site", s) for s in sites]
-    async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
-        resp = await client.get(settings.cfps_base, params=params)
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
+    async with _limiter:
+        async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
+            resp = await client.get(settings.cfps_base, params=params)
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
     cache.put(key, data, settings.cfps_cache_ttl)
     return data
 
@@ -194,10 +202,11 @@ async def _area_texts(alpha: str, point: tuple[float, float] | None) -> list[str
     params = [("alpha", alpha)]
     if point:
         params.append(("point", f"{point[0]},{point[1]}"))
-    async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
-        resp = await client.get(settings.cfps_base, params=params)
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
+    async with _limiter:
+        async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
+            resp = await client.get(settings.cfps_base, params=params)
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
     texts = [_text(i) for i in data]
     cache.put(key, texts, settings.cfps_cache_ttl)
     return texts

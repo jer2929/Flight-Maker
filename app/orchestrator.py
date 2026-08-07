@@ -345,11 +345,16 @@ def _fmt_sigmet(s: dict) -> str:
 
 async def _gather_area(fn, points: list[tuple[float, float]]) -> list[str]:
     """Union of an area product (SIGMET/AIRMET/PIREP) queried at several points
-    along the route, so wide advisories near (not exactly on) the line aren't missed."""
+    along the route, so wide advisories near (not exactly on) the line aren't missed.
+
+    The points are queried concurrently and merged in point order, so the result is
+    identical to querying them one at a time - just without paying for each round
+    trip in sequence."""
+    per_point = await asyncio.gather(*(_safe(fn(p), []) for p in points))
     seen: set[str] = set()
     out: list[str] = []
-    for p in points:
-        for t in await _safe(fn(p), []):
+    for texts in per_point:
+        for t in texts:
             if t and t not in seen:
                 seen.add(t)
                 out.append(t)
@@ -488,37 +493,49 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     dep_cands = _reporting_candidates(dep)
     dest_cands = _reporting_candidates(dest)
     all_sites = list(dict.fromkeys(sites + [c.ident for c in dep_cands + dest_cands]))
-    metars = await _safe(cfps.metars(all_sites), {})
-    tafs = await _safe(cfps.tafs(all_sites), {})
-    # METAR history for trends: aviationweather.gov (multi-hour) with CFPS fallback.
-    awc_hist = await _safe(awc.metar_history(sites, 6), {})
-    cfps_hist = await _safe(cfps.metar_history(sites), {})
-    metar_hist = {s: (awc_hist.get(s) or cfps_hist.get(s, [])) for s in sites}
-    notams = await _safe(cfps.notams(sites), {})
     area_pts = [(dep.lat, dep.lon),
                 ((dep.lat + dest.lat) / 2, (dep.lon + dest.lon) / 2),
                 (dest.lat, dest.lon)]
-    # SIGMETs: aviationweather.gov international SIGMETs (covers Canadian FIRs),
-    # filtered to those whose area is near the route, unioned with CFPS.
-    raw_isig = await _safe(awc.isigmets(), [])
+    days = days_for(settings.timeline_hours)
+    mids = _route_midpoints(dep, dest)
+
+    # Every product below depends only on the route geometry, never on another
+    # product, so they are fetched concurrently. This used to be a sequential await
+    # chain - roughly twenty round trips counting the per-point area queries and the
+    # enroute forecasts - which on a cold cache (i.e. every wake from scale-to-zero)
+    # cost the better part of a minute before the pilot saw a verdict. Outbound
+    # concurrency is bounded inside the CFPS client so this stays a polite client.
+    (metars, tafs, awc_hist, cfps_hist, notams, raw_isig,
+     cfps_sigmets, airmets, pireps, dep_fc, dest_fc,
+     *mid_fcs) = await asyncio.gather(
+        _safe(cfps.metars(all_sites), {}),
+        _safe(cfps.tafs(all_sites), {}),
+        # METAR history for trends: aviationweather.gov (multi-hour), CFPS fallback.
+        _safe(awc.metar_history(sites, 6), {}),
+        _safe(cfps.metar_history(sites), {}),
+        _safe(cfps.notams(sites), {}),
+        # SIGMETs: aviationweather.gov international SIGMETs (covers Canadian FIRs),
+        # filtered to those whose area is near the route, unioned with CFPS below.
+        _safe(awc.isigmets(), []),
+        _gather_area(cfps.sigmets, area_pts),
+        _gather_area(cfps.airmets, area_pts),
+        _gather_area(cfps.pireps, area_pts),
+        _safe(openmeteo.forecast(dep.lat, dep.lon, days), {}),
+        _safe(openmeteo.forecast(dest.lat, dest.lon, days), {}),
+        # Enroute sampling points, previously fetched one at a time in a loop.
+        *(_safe(openmeteo.forecast(mlat, mlon, days), {}) for mlat, mlon in mids),
+    )
+    metar_hist = {s: (awc_hist.get(s) or cfps_hist.get(s, [])) for s in sites}
     # The international SIGMET feed is global, so keep only entries whose plotted
     # area is near the route. A SIGMET with no usable coordinates can't be tied to
     # the route - dropping it avoids phantom advisories for distant FIRs (CFPS,
-    # queried per route point below, is the local backstop). Blank renders (empty
+    # queried per route point, is the local backstop). Blank renders (empty
     # hazard/FIR/raw) are filtered so a contentless advisory never shows.
     isig_strs = [t for s in raw_isig
                  if s["coords"] and _coords_near_route(s["coords"], area_pts)
                  for t in (_fmt_sigmet(s),) if t]
     awc_sigmet_set = set(isig_strs)   # provenance, for the per-advisory source link
-    sigmets = list(dict.fromkeys(
-        isig_strs + [t for t in await _gather_area(cfps.sigmets, area_pts) if t]
-    ))
-    airmets = await _gather_area(cfps.airmets, area_pts)
-    pireps = await _gather_area(cfps.pireps, area_pts)
-
-    days = days_for(settings.timeline_hours)
-    dep_fc = await _safe(openmeteo.forecast(dep.lat, dep.lon, days), {})
-    dest_fc = await _safe(openmeteo.forecast(dest.lat, dest.lon, days), {})
+    sigmets = list(dict.fromkeys(isig_strs + [t for t in cfps_sigmets if t]))
 
     distance = haversine_nm(dep.lat, dep.lon, dest.lat, dest.lon)
     bearing = initial_bearing_true(dep.lat, dep.lon, dest.lat, dest.lon)
@@ -552,9 +569,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # Sampled before dest_a so we can gate the altitude recommendation on the
     # minimum ceiling seen from departure through the enroute segment.
     enroute = []
-    mids = _route_midpoints(dep, dest)
-    for k, (mlat, mlon) in enumerate(mids, 1):
-        fc = await _safe(openmeteo.forecast(mlat, mlon, days), {})
+    for k, ((mlat, mlon), fc) in enumerate(zip(mids, mid_fcs), 1):
         pt = _point_now(fc)
         dist_along = round(distance * k / (len(mids) + 1))
         near = ap.nearest_airports(mlat, mlon, {dep.ident, dest.ident}, 35.0, 1)
@@ -581,8 +596,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
 
     dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens, flight_rules=flight_rules)
 
-    await _attach_nearby(dep_a, dep, dep_cands)
-    await _attach_nearby(dest_a, dest, dest_cands)
+    await asyncio.gather(
+        _attach_nearby(dep_a, dep, dep_cands),
+        _attach_nearby(dest_a, dest, dest_cands),
+    )
 
     ceiling_points = [dep_a.weather.ceiling_agl_ft] + [e.get("ceiling_ft") for e in enroute] + [dest_a.weather.ceiling_agl_ft]
     vis_points = [dep_a.weather.visibility_sm] + [e.get("vis_sm") for e in enroute] + [dest_a.weather.visibility_sm]
