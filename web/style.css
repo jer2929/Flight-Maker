@@ -56,8 +56,24 @@ header p { margin: 4px 0 0; color: var(--muted); }
   .aircraft-sel { max-width: 96px; font-size: .74rem; }
 }
 @media (max-width: 480px) {
-  /* Drop the airspeed picker on very narrow screens to keep the header tidy. */
-  .aircraft { display: none; }
+  /* Phones can't fit logo + picker + clock on one line, so the picker gets its
+     own full-width header row rather than being dropped - TAS drives every time
+     and groundspeed number, so it has to be reachable on a phone too. */
+  header { flex-wrap: wrap; }
+  header h1 { flex: 0 0 auto; }
+  .clock { flex: 1 1 auto; }
+  .aircraft {
+    order: 3; flex-basis: 100%;
+    flex-direction: row; flex-wrap: wrap; gap: 4px 10px;
+  }
+  /* Make/model take the slack; the TAS row keeps its natural width. If both
+     don't fit, flex-wrap drops TAS to its own line instead of clipping it. */
+  .aircraft-row:first-child { flex: 1 1 180px; min-width: 0; }
+  .aircraft-sel { flex: 1 1 0; min-width: 0; max-width: none; }
+  /* The "Aircraft" caption costs ~65px that the model names need to stay
+     readable ("T182 Turbo Skylane" clips to "T182 T" with it). The selects
+     keep their aria-labels, and the TAS field alongside names the group. */
+  .aircraft-row:first-child .aircraft-label { display: none; }
 }
 .panel {
   margin: 16px auto; max-width: 1000px; padding: 16px 20px;

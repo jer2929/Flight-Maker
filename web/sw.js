@@ -12,7 +12,7 @@
  * skipWaiting + clients.claim make a new deploy take over on the next load so
  * users never get stuck on a stale shell.
  */
-const VERSION = "minima-v1-20260630";
+const VERSION = "minima-v1-20260807";
 const SHELL_CACHE = `shell-${VERSION}`;
 
 const SHELL = [
