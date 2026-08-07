@@ -1,0 +1,14 @@
+# Keep the build context small so remote builds upload fast.
+.git
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.env
+tests
+requirements-dev.txt
+DEPLOY.md
+README.md

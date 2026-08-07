@@ -1,6 +1,6 @@
 """Application configuration.
 
-All values are overridable via environment variables (handy on Replit) and the
+All values are overridable via environment variables and the
 decision-card limits live in ``data/limits.yaml`` so they can be tuned without
 touching code.
 """

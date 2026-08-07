@@ -94,22 +94,14 @@ pytest -q                              # offline logic tests (live tests auto-sk
 
 ## Airport data
 
-The full **all-Canada + US-border** dataset is **auto-bootstrapped** from
-OurAirports on first launch where the network is open (e.g. Replit). Until then a
-bundled seed of ~28 common ON/QC/border fields is used. To (re)build it manually:
+The full **all-Canada + US-border** dataset is baked into the Docker image at
+build time, and is **auto-bootstrapped** from OurAirports on first launch
+anywhere the network is open. Until then a bundled seed of ~28 common ON/QC/border
+fields is used. To (re)build it manually:
 
 ```bash
 python scripts/refresh_airport_data.py
 ```
-
-## Deploy on Replit (zero ongoing cost)
-
-`.replit` + `replit.nix` are included; the run command auto-installs deps. Import
-the repo, press **Run**, and it serves on `$PORT`.
-
-- Use a **standard Repl that sleeps when idle** - **not** Always-On / a reserved-VM
-  Deployment, which bill continuously. A sleeping Repl wakes on the next request.
-- All upstreams are free and key-less; responses are cached in-memory.
 
 > If hosting inside a sandbox with an egress allowlist, allow
 > `plan.navcanada.ca`, `api.open-meteo.com`, and (for the airport refresh)

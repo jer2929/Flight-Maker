@@ -2,13 +2,21 @@
 # Merging a PR into main = deploying. No manual step.
 #
 # Requires one repo secret: FLY_API_TOKEN
-#   Settings → Secrets and variables → Actions → New repository secret
-#   Value from:  fly tokens create deploy -x 999999h   (see DEPLOY.md)
+#   Settings -> Secrets and variables -> Actions -> New repository secret
+#   Create the token in the browser at https://fly.io/user/personal_access_tokens
+#   (or with `fly tokens create deploy -x 999999h` if you have flyctl). See DEPLOY.md.
+#
+# The "create app" step below means the very first deploy needs no local flyctl:
+# this workflow provisions the Fly app itself, then deploys to it.
 name: Deploy to Fly.io
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:   # lets you re-run a deploy by hand from the Actions tab
+
+env:
+  FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
 jobs:
   deploy:
@@ -18,6 +26,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Create the Fly app if it doesn't exist yet
+        run: |
+          APP=$(sed -n 's/^app *= *"\(.*\)"/\1/p' fly.toml | head -1)
+          echo "Fly app: $APP"
+          if flyctl apps list | grep -qw "$APP"; then
+            echo "App already exists - skipping creation."
+          elif flyctl apps create "$APP" --org personal; then
+            echo "Created app $APP."
+          else
+            echo "::error::Could not create Fly app '$APP'. The name may already be"
+            echo "::error::taken by someone else on Fly (names are global). Pick a new"
+            echo "::error::name in fly.toml and push again."
+            exit 1
+          fi
+
+      - name: Deploy
+        run: flyctl deploy --remote-only
