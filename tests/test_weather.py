@@ -17,6 +17,23 @@ def test_parse_metar_gust_and_ceiling():
     assert p["ceiling_agl_ft"] == 1200
 
 
+def test_parse_metar_cloud_layers():
+    raw = "METAR CYOW 071900Z 24004KT 15SM BKN031 BKN230 28/21 A3007 RMK CU6CI1 SLP184"
+    p = parse_metar(raw)
+    # Full stack, lowest first - the ceiling alone can't tell a new deck
+    # forming underneath from an existing one descending.
+    assert p["cloud_layers"] == [
+        {"cover": "BKN", "height_ft": 3100.0},
+        {"cover": "BKN", "height_ft": 23000.0},
+    ]
+    assert p["ceiling_agl_ft"] == 3100
+
+
+def test_cloud_layers_ignore_remarks_and_trend_groups():
+    p = parse_metar("CYYZ 171800Z 05012KT 6SM FEW040 20/12 A2998 TEMPO BKN010 RMK CU2")
+    assert p["cloud_layers"] == [{"cover": "FEW", "height_ft": 4000.0}]
+
+
 def test_detect_thunderstorm():
     assert "thunderstorm" in detect_hazards("CYYZ 171800Z 27015KT 4SM TSRA BKN030CB")
 
