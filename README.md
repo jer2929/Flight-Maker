@@ -94,22 +94,14 @@ pytest -q                              # offline logic tests (live tests auto-sk
 
 ## Airport data
 
-The full **all-Canada + US-border** dataset is **auto-bootstrapped** from
-OurAirports on first launch where the network is open (e.g. Replit). Until then a
-bundled seed of ~28 common ON/QC/border fields is used. To (re)build it manually:
+The full **all-Canada + US-border** dataset is baked into the Docker image at
+build time, and is **auto-bootstrapped** from OurAirports on first launch
+anywhere the network is open. Until then a bundled seed of ~28 common ON/QC/border
+fields is used. To (re)build it manually:
 
 ```bash
 python scripts/refresh_airport_data.py
 ```
-
-## Deploy on Replit (zero ongoing cost)
-
-`.replit` + `replit.nix` are included; the run command auto-installs deps. Import
-the repo, press **Run**, and it serves on `$PORT`.
-
-- Use a **standard Repl that sleeps when idle** - **not** Always-On / a reserved-VM
-  Deployment, which bill continuously. A sleeping Repl wakes on the next request.
-- All upstreams are free and key-less; responses are cached in-memory.
 
 > If hosting inside a sandbox with an egress allowlist, allow
 > `plan.navcanada.ca`, `api.open-meteo.com`, and (for the airport refresh)
@@ -119,9 +111,9 @@ the repo, press **Run**, and it serves on `$PORT`.
 
 Minima ships as an installable **Progressive Web App** (manifest + service
 worker + icons under `web/`); the service worker caches only the static shell,
-never `/api/*`, so weather data always stays live. To run it on a custom domain
-(e.g. `personalminimums.com`) over HTTPS for ~$1-3/month, see **[DEPLOY.md](DEPLOY.md)**
-— a step-by-step **Fly.io + Cloudflare** guide. The repo includes `fly.toml`, a
+never `/api/*`, so weather data always stays live. It's hosted on **Fly.io** at
+`minima-wx.fly.dev` for ~$1-3/month, with an optional custom domain — see
+**[DEPLOY.md](DEPLOY.md)** for the step-by-step guide. The repo includes `fly.toml`, a
 `Dockerfile`, and a GitHub Action (`.github/workflows/fly-deploy.yml`) that
 auto-deploys on every push to `main`.
 

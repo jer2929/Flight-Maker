@@ -4,7 +4,7 @@ Scope: every Canadian aerodrome (the free practical proxy for "has a CFS entry")
 plus US airports within ~100 nm of the Canadian border (cross-border trips).
 
 Usable two ways:
-  * CLI (run where the network is open, e.g. Replit):
+  * CLI (run anywhere the network is open; also run at Docker build time):
         python scripts/refresh_airport_data.py
   * Imported: ``ensure_airport_data()`` is called lazily on first app load and
     populates the dataset if it's missing and the network is reachable. Falls
@@ -85,7 +85,7 @@ def _dataset_current() -> bool:
 def ensure_airport_data() -> bool:
     """Populate/refresh the dataset if missing or stale and the network is
     reachable. Rebuilds when the schema/scope version changes (e.g. added runway
-    width, dropped US) so cached Replit copies update automatically.
+    width, dropped US) so cached copies update automatically.
 
     Returns True if the full dataset is present, False to fall back to the seed.
     """

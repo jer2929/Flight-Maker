@@ -18,7 +18,7 @@ from app.services.geo import haversine_nm
 def _pick(primary: Path, fallback: Path) -> Path:
     # Always let ensure_airport_data() decide - it self-checks the dataset version
     # and only rebuilds when missing or stale. (Previously this ran only when the
-    # file was absent, so schema bumps like width_ft never took effect on Replit.)
+    # file was absent, so schema bumps like width_ft never took effect in hosting.)
     try:
         from scripts.refresh_airport_data import ensure_airport_data
         ensure_airport_data()
