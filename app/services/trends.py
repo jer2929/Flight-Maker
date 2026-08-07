@@ -7,6 +7,11 @@ chronological order (oldest first). Output is a list of short human notes plus a
 Developing trends carry a ``· ~last N h`` suffix computed from the METAR
 timestamps (``time_z``), so it reflects how long the trend has actually been
 running - not just the length of the history.
+
+Ceilings are compared layer by layer: a ceiling height only trends against an
+earlier one when both describe the same physical deck, so a deck forming
+underneath an unchanged high layer is reported as a new deck rather than as a
+20,000 ft descent.
 """
 from __future__ import annotations
 
@@ -65,6 +70,126 @@ def _run_h(times: list[datetime | None], vals: list[float], rising: bool) -> int
     return max(1, hours) if hours >= 1 else None
 
 
+def _span_h(t0: datetime | None, t1: datetime | None) -> int | None:
+    """Whole hours between two observations (None if either stamp is missing)."""
+    if t0 is None or t1 is None:
+        return None
+    hours = round((t1 - t0).total_seconds() / 3600)
+    return hours if hours >= 1 else None
+
+
+# Two heights describe the same deck if they are within this much of each other;
+# METAR reports layers in hundreds of feet, so a deck that drifts a couple of
+# hundred feet between reports is still the same deck.
+LAYER_MATCH_FT = 500.0
+
+
+def _layer_heights(h: dict) -> list[float] | None:
+    """Heights of every layer in a report, or None when the observation carries
+    no layer detail (older cached history, hand-built dicts) and we have to fall
+    back to comparing bare ceiling heights."""
+    layers = h.get("cloud_layers")
+    if layers is None:
+        return None
+    return [lyr["height_ft"] for lyr in layers if lyr.get("height_ft") is not None]
+
+
+def _reported_no_ceiling(h: dict) -> bool:
+    """True only when the report positively shows a ceiling-free sky. A missing
+    ``ceiling_agl_ft`` on its own is ambiguous (it can also mean the report
+    didn't parse), so require layer detail without a BKN/OVC/VV in it."""
+    layers = h.get("cloud_layers")
+    return layers is not None and not any(
+        lyr.get("cover") in ("BKN", "OVC", "VV") for lyr in layers)
+
+
+def _same_deck(prev: dict, cur: dict) -> bool:
+    """True when ``cur``'s ceiling is plausibly ``prev``'s ceiling layer having
+    moved, rather than a *different* deck taking over as the ceiling.
+
+    A layer that is still reported at its old height in the newer METAR plainly
+    did not move - something else became the ceiling. That is the
+    ``BKN230`` → ``BKN031 BKN230`` case: a new deck formed at 3,100 ft under an
+    unchanged 23,000 ft layer, so calling it a 23,000 → 3,100 ft descent would
+    invent a 20,000 ft drop that never happened. The mirror case (a low deck
+    dissipating to reveal a high layer that was there all along) is not a lift.
+    """
+    p, c = prev.get("ceiling_agl_ft"), cur.get("ceiling_agl_ft")
+    if p is None or c is None:
+        return False
+    if c < p:  # candidate lowering - is the old ceiling layer still up there?
+        others = _layer_heights(cur)
+        return others is None or not any(
+            abs(x - p) <= LAYER_MATCH_FT and x > c + LAYER_MATCH_FT for x in others)
+    if c > p:  # candidate lifting - was the new ceiling layer already up there?
+        others = _layer_heights(prev)
+        return others is None or not any(
+            abs(x - c) <= LAYER_MATCH_FT and x > p + LAYER_MATCH_FT for x in others)
+    return True
+
+
+def _ceiling_trend(obs: list[dict], times: list[datetime | None]) -> tuple[list[str], bool]:
+    """Ceiling notes for the *current* deck only, plus the lowering flag.
+
+    The history is cut at the most recent deck change, so the reported
+    ``A → B`` is always one layer moving. The change itself - a deck forming
+    below, or a lower deck clearing out - gets its own note instead of being
+    folded into a height comparison."""
+    notes: list[str] = []
+    lowering = False
+    idx = [i for i, h in enumerate(obs) if h.get("ceiling_agl_ft") is not None]
+    if not idx:
+        return notes, lowering
+    if _reported_no_ceiling(obs[-1]):
+        # Nothing to trend: the sky is ceiling-free now, so an earlier deck is
+        # gone. Report that rather than quoting its stale height as "current".
+        gone = obs[idx[-1]]["ceiling_agl_ft"]
+        if gone <= 6000:
+            notes.append(f"🌤 Ceiling cleared: was {_ft(gone)}{_suffix(_span_h(times[idx[-1]], times[-1]))}")
+        return notes, False
+
+    # Walk back from the latest report while each step stays on the same deck.
+    # A report with no ceiling at all in between also ends the stretch.
+    first = idx[-1]
+    for k in range(len(idx) - 1, 0, -1):
+        older, newer = idx[k - 1], idx[k]
+        if newer - older > 1 or not _same_deck(obs[older], obs[newer]):
+            break
+        first = older
+
+    seg = [i for i in idx if i >= first]
+    vals = [obs[i]["ceiling_agl_ft"] for i in seg]
+    stamps = [times[i] for i in seg]
+    c0, c1 = vals[0], vals[-1]
+
+    if len(seg) >= 2:
+        if c1 < c0 - 800 and c1 <= 6000:
+            notes.append(f"📉 Ceilings lowering: {_ft(c0)} → {_ft(c1)}{_suffix(_run_h(stamps, vals, rising=False))}")
+            lowering = True
+        elif c1 > c0 + 800:
+            notes.append(f"📈 Ceilings lifting: {_ft(c0)} → {_ft(c1)}{_suffix(_run_h(stamps, vals, rising=True))}")
+
+    # What the current deck replaced, if the history reaches back that far. This
+    # happened before the trend above, so it leads the notes; it names the
+    # current ceiling only when no trend note already carries the numbers.
+    deck: list[str] = []
+    if first > 0:
+        prev = obs[first - 1]
+        was = prev.get("ceiling_agl_ft")
+        sfx = _suffix(_span_h(times[first], times[idx[-1]]))
+        now = "" if notes else f": ceiling {_ft(c1)},"
+        if was is not None and was > c0 and c1 <= 6000:
+            deck.append(f"🌥 New lower deck{now} below the {_ft(was)} layer{sfx}")
+            lowering = lowering or c1 <= 5000
+        elif was is not None and was < c0:
+            deck.append(f"🌤 Lower deck cleared: ceiling now {_ft(c1)} (was {_ft(was)}){sfx}")
+        elif was is None and _reported_no_ceiling(prev) and c1 <= 6000:
+            deck.append(f"🌥 Ceiling formed where there was none{sfx}" if notes
+                        else f"🌥 Ceiling formed: {_ft(c1)}{sfx}")
+            lowering = lowering or c1 <= 5000
+    return deck + notes, lowering
+
+
 def analyze(history: list[dict]) -> tuple[list[str], bool]:
     notes: list[str] = []
     ceiling_lowering = False
@@ -82,15 +207,9 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
             return None
         return _run_h([t for t, _ in pairs], [v for _, v in pairs], rising)
 
-    # Ceiling trend
-    ceils = [(i, h.get("ceiling_agl_ft")) for i, h in enumerate(obs) if h.get("ceiling_agl_ft") is not None]
-    if len(ceils) >= 2:
-        c0, c1 = ceils[0][1], ceils[-1][1]
-        if c1 < c0 - 800 and c1 <= 6000:
-            notes.append(f"📉 Ceilings lowering: {_ft(c0)} → {_ft(c1)}{_suffix(run_h('ceiling_agl_ft', rising=False))}")
-            ceiling_lowering = True
-        elif c1 > c0 + 800:
-            notes.append(f"📈 Ceilings lifting: {_ft(c0)} → {_ft(c1)}{_suffix(run_h('ceiling_agl_ft', rising=True))}")
+    # Ceiling trend (layer-aware: only ever compares one deck against itself)
+    cnotes, ceiling_lowering = _ceiling_trend(obs, times)
+    notes.extend(cnotes)
 
     # Temperature / dew-point spread (humidity → fog & low cloud)
     spreads = [

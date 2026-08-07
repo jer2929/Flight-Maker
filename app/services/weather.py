@@ -43,16 +43,38 @@ def _ceiling_from_sky(sky) -> Optional[float]:
     return ceil
 
 
+_CLOUD_GROUP = re.compile(r"\b(FEW|SCT|BKN|OVC|VV)(\d{3})(?:CB|TCU)?\b")
+
+
+def cloud_layers(text: str) -> list[dict]:
+    """Every reported cloud layer (cover + height ft AGL), lowest first.
+
+    The full stack - not just the ceiling - is what tells a *new deck forming
+    underneath* apart from an existing deck descending, which the trend logic
+    needs so it never compares the heights of two different layers.
+
+    Remarks are dropped first: Canadian reports encode layer amounts there
+    (``RMK CU6CI1``), and trend groups describe a forecast, not the observation.
+    """
+    body = re.split(r"\bRMK\b", (text or "").upper(), maxsplit=1)[0]
+    body = re.split(r"\b(?:TEMPO|BECMG|NOSIG)\b", body, maxsplit=1)[0]
+    layers = [{"cover": m.group(1), "height_ft": float(int(m.group(2)) * 100)}
+              for m in _CLOUD_GROUP.finditer(body)]
+    return sorted(layers, key=lambda lyr: lyr["height_ft"])
+
+
 def parse_metar(raw: str) -> dict:
     """Return a dict of parsed METAR fields; tolerant of parse failures."""
     out: dict = {
         "wind_dir_true": None, "wind_kt": None, "gust_kt": None,
         "visibility_sm": None, "ceiling_agl_ft": None, "hazards": [], "precip": None,
         "temp_c": None, "dewpoint_c": None, "altimeter_inhg": None, "time_z": None,
+        "cloud_layers": [],
     }
     if not raw:
         return out
     text = raw.strip()
+    out["cloud_layers"] = cloud_layers(text)
     tm = re.search(r"\b(\d{6})Z\b", text)
     out["time_z"] = tm.group(1) + "Z" if tm else None
     try:
