@@ -431,36 +431,44 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     else:
         c_block = L["ceiling_agl_ft"]
     ceil_limit = c_block.get("night_xc", c_block.get("night_xc_cloud_base", 12000)) if mode == "night" else c_block.get("day_xc", 4000)
-    enroute_ceils = [(lbl, ce, src) for lbl, _w, _g, ce, _v, src in pts[1:-1] if ce is not None]
-    if enroute_ceils:
-        lbl, val, src = min(enroute_ceils, key=lambda t: t[1])
-        checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, enroute)",
+    circuit_limit = c_block.get("night_circuit", 3000) if mode == "night" else c_block.get("day_circuit", 2000)
+    # The XC ceiling minimum applies to the whole route, ends included - a deck
+    # below it over the departure field is as much a no-go as one at midpoint,
+    # so this row is the worst ceiling anywhere on the route, not just enroute.
+    route_ceils = [(lbl, ce, src) for lbl, _w, _g, ce, _v, src in pts if ce is not None]
+    if route_ceils:
+        lbl, val, src = min(route_ceils, key=lambda t: t[1])
+        checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, route)",
                                  limit_text=f"≥ {ceil_limit:,} ft AGL",
                                  actual_text=f"{round(val / 100) * 100:,} ft AGL",
                                  passed=val >= ceil_limit, location=lbl, source=src))
     else:
-        # The model sampled the route but found no broken+ layer → clear (unlimited),
-        # which is a pass. "no data" only when there were no enroute points at all.
+        # The route was sampled but no broken+ layer was found → clear (unlimited),
+        # which is a pass. "no data" only when there were no points at all.
         sampled = any(e for e in enroute)
-        checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, enroute)",
+        checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, route)",
                                  limit_text=f"≥ {ceil_limit:,} ft AGL",
                                  actual_text="no ceiling (clear)" if sampled else "no data",
                                  passed=True, source="HRDPS" if sampled else None))
 
-    # Departure/destination ceiling - advisory only (circuit territory).
+    # Departure/destination ceiling against the *circuit* minimum. The XC row above
+    # already fails anything below the XC minimum; this row says whether the end in
+    # question is even circuit-capable, so "circuits only" reads differently from
+    # "below every personal minimum".
     for lbl, _w, _g, ce, _v, src in (pts[0], pts[-1]):
-        if ce is None:
+        if ce is None or ce >= ceil_limit:
             continue
         cv = round(ce / 100) * 100
-        if ce < 1000:
+        if ce < circuit_limit:
+            note = "IMC" if ce < 1000 else "below circuit minimum"
             checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
-                                     limit_text="≥ 1,000 ft (circuit)",
-                                     actual_text=f"{cv:,} ft AGL (IMC)", passed=False,
+                                     limit_text=f"≥ {circuit_limit:,} ft AGL (circuit)",
+                                     actual_text=f"{cv:,} ft AGL - {note}", passed=False,
                                      location=lbl, source=src))
-        elif ce < 3000:
+        else:
             checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
-                                     limit_text="circuit",
-                                     actual_text=f"{cv:,} ft AGL - circuit OK, verify",
+                                     limit_text=f"≥ {circuit_limit:,} ft AGL (circuit)",
+                                     actual_text=f"{cv:,} ft AGL - circuits only",
                                      passed=True, advisory=True, location=lbl, source=src))
 
     # Visibility - IFR uses ifr_minimums section; VFR uses hard_limits.

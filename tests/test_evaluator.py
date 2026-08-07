@@ -89,15 +89,39 @@ def test_observed_no_layer_is_unlimited_ceiling():
     assert "no ceiling" in checks["ceiling"].actual_text
 
 
-def test_endpoint_mode_low_ceiling_is_advisory_not_nogo():
-    # A 2,500 ft ceiling at departure/destination is circuit territory, not NO-GO.
+def test_endpoint_mode_applies_the_xc_personal_minimum():
+    # A 2,500 ft ceiling at the departure/destination of a cross-country is below
+    # the 4,000 ft day-XC minimum, so it fails - it is circuit-capable, which the
+    # row says, but that does not make the cross-country a GO.
     wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15, ceiling_agl_ft=2500)
     checks = {c.key: c for c in conditions_checks(wx, good_runway(), "day", ceiling_mode="endpoint")}
-    assert checks["ceiling"].passed is True
-    assert checks["ceiling"].advisory is True
-    # In XC mode the same ceiling fails (below the 4,000 ft cruise limit).
+    assert checks["ceiling"].passed is False
+    assert "4,000 ft" in checks["ceiling"].limit_text
+    assert "circuit OK" in checks["ceiling"].actual_text
+    # In XC mode the same ceiling fails too (below the 4,000 ft cruise limit).
     xc = {c.key: c for c in conditions_checks(wx, good_runway(), "day", ceiling_mode="xc")}
     assert xc["ceiling"].passed is False
+
+
+def test_endpoint_below_circuit_minimum_is_nogo():
+    # BKN019 at the departure field: below the 2,000 ft day-circuit minimum and the
+    # 4,000 ft day-XC minimum, so every mode is a NO-GO, and the endpoint row says
+    # the ceiling is not even circuit-capable.
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15,
+                        ceiling_agl_ft=1900, source=Source.OBSERVED)
+    for mode in ("endpoint", "circuit", "xc"):
+        v, _c, _t, _n = decision(wx, good_runway(), "day", False, ceiling_mode=mode)
+        assert v == Verdict.NOGO, mode
+    checks = {c.key: c for c in conditions_checks(wx, good_runway(), "day", ceiling_mode="endpoint")}
+    assert checks["ceiling"].passed is False
+    assert "below circuit minimum" in checks["ceiling"].actual_text
+
+
+def test_endpoint_ceiling_above_xc_minimum_passes():
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15, ceiling_agl_ft=6000)
+    checks = {c.key: c for c in conditions_checks(wx, good_runway(), "day", ceiling_mode="endpoint")}
+    assert checks["ceiling"].passed is True
+    assert checks["ceiling"].advisory is False
 
 
 def test_threat_rule_mapping():
