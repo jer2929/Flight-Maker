@@ -160,6 +160,20 @@ keeps idle cost near zero. The thing that bends before your bill at higher usage
 is the free upstreams' rate limits — lengthen cache TTLs via the `FM_` env vars
 (see `app/config.py`) if needed.
 
+**Two things hold the cost down, and both matter:**
+
+1. **One machine, not two.** flyctl provisions 2 machines by default for high
+   availability, which doubles the awake cost. The deploy workflow runs
+   `flyctl scale count 1` after every deploy to keep it at one.
+2. **A hard spend limit.** Everything above is an *estimate* — the only real cap
+   is the one you set. In the Fly dashboard: **Billing → Spend limit**. Set it and
+   Fly stops the app rather than billing past it.
+
+If you'd rather trade headroom for a lower ceiling, drop `memory` in `fly.toml`
+from `"512mb"` to `"256mb"` — that halves the worst case (a machine that somehow
+never sleeps) from ~$4/mo to ~$2/mo. 512 MB is the safer default for cache
+headroom; 256 MB should still be comfortable for this app.
+
 ---
 
 ## Local development is unchanged

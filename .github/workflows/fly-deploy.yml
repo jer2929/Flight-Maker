@@ -44,3 +44,9 @@ jobs:
 
       - name: Deploy
         run: flyctl deploy --remote-only
+
+      # flyctl provisions 2 machines by default for high availability. This is a
+      # personal-scale app on a tight budget, and both machines bill per second
+      # while awake, so pin the count to 1. Idempotent - a no-op once it's 1.
+      - name: Pin to a single machine (cost control)
+        run: flyctl scale count 1 --yes
