@@ -111,9 +111,9 @@ python scripts/refresh_airport_data.py
 
 Minima ships as an installable **Progressive Web App** (manifest + service
 worker + icons under `web/`); the service worker caches only the static shell,
-never `/api/*`, so weather data always stays live. To run it on a custom domain
-(e.g. `personalminimums.com`) over HTTPS for ~$1-3/month, see **[DEPLOY.md](DEPLOY.md)**
-— a step-by-step **Fly.io + Cloudflare** guide. The repo includes `fly.toml`, a
+never `/api/*`, so weather data always stays live. It's hosted on **Fly.io** at
+`minima-wx.fly.dev` for ~$1-3/month, with an optional custom domain — see
+**[DEPLOY.md](DEPLOY.md)** for the step-by-step guide. The repo includes `fly.toml`, a
 `Dockerfile`, and a GitHub Action (`.github/workflows/fly-deploy.yml`) that
 auto-deploys on every push to `main`.
 

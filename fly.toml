@@ -4,11 +4,12 @@
 # auto-stops when idle (scale to zero) and auto-starts on the next request, so
 # you only pay for the seconds it's actually serving. Wake is ~1-2s.
 #
-# `app` must be globally unique on Fly. `fly launch` will offer to set it for
-# you; change it here if you pick a different name. Your public URL will be your
-# custom domain (personalminimums.com) once DNS + certs are set up — see DEPLOY.md.
+# `app` must be globally unique across all of Fly, which is why this isn't just
+# "minima". The deploy workflow creates the app under this name on first run.
+# Serves at https://minima-wx.fly.dev; point a custom domain at it later by
+# following the "Custom domain" section of DEPLOY.md.
 
-app = "minima"
+app = "minima-wx"
 primary_region = "yyz"  # Toronto — closest to CYFD / southern-Ontario users
 
 [build]
