@@ -90,17 +90,32 @@ def _sky_history(skies, step_min=60):
             for t, s in zip(ts, skies)]
 
 
-def test_new_deck_below_an_unchanged_layer_is_not_a_descent():
-    # CYOW: BKN230 all afternoon, then a cumulus deck builds underneath it. The
-    # 23,000 ft layer never moved, so there is no 23,000 → 3,100 ft drop.
-    hist = _sky_history(["BKN230", "BKN230", "FEW033 BKN230",
-                         "BKN036 BKN230", "BKN039 BKN230", "BKN031 BKN230"])
+def test_existing_layer_filling_in_is_not_a_descent():
+    # CYOW: BKN230 all afternoon while a cumulus layer below it goes FEW033 →
+    # BKN036 → BKN039 → BKN031 → BKN035. Neither layer fell 20,000 ft: the low
+    # one was there the whole time and simply thickened into a ceiling.
+    hist = _sky_history(["BKN230", "FEW033 BKN230", "BKN036 BKN230",
+                         "BKN039 BKN230", "BKN031 BKN230", "BKN035 BKN230"])
     notes, lowering = analyze(hist)
     assert not any("23,000 ft →" in n for n in notes)
-    deck = next(n for n in notes if "New lower deck" in n)
-    assert "3,100 ft" in deck and "23,000 ft" in deck
-    assert "~last 2 h" in deck  # since the deck appeared, not the full history
-    assert lowering is True  # a fresh deck at 3,100 ft is still deteriorating
+    deck = next(n for n in notes if "layer thickened" in n)
+    assert "3,300 ft layer thickened FEW → BKN: ceiling now 3,500 ft" in deck
+    assert "~last 3 h" in deck  # since it became the ceiling, not the whole history
+    assert lowering is False  # steady around 3,500 ft for hours is not "lowering"
+
+
+def test_deck_building_under_a_wobbling_high_layer_is_not_a_descent():
+    # CYXU: BKN110/OVC130 aloft, then TCU builds to BKN024 under it and the deck
+    # wanders 2,400 → 1,500 → 1,900 → 2,400. The high layer being re-estimated
+    # (OVC150, BKN130) must not read as 14,000 ft of ceiling collapsing.
+    hist = _sky_history(["SCT055 BKN140", "FEW005 SCT045 OVC140", "FEW008 BKN120 BKN230",
+                         "FEW009 SCT055 BKN110 OVC130", "FEW013 BKN024TCU OVC150",
+                         "BKN015 OVC120", "BKN019 BKN130 OVC220", "BKN024 BKN130 BKN260"])
+    notes, lowering = analyze(hist)
+    assert not any("lowering" in n or "lifting" in n for n in notes)
+    deck = next(n for n in notes if "New deck" in n)
+    assert "New deck below the 15,000 ft layer: ceiling 2,400 ft" in deck
+    assert lowering is False
 
 
 def test_one_deck_lowering_under_a_high_layer_still_trends():
@@ -132,19 +147,29 @@ def test_lone_deck_lifting_still_trends():
 
 
 def test_ceiling_forming_out_of_a_clear_sky():
-    hist = _sky_history(["SKC", "FEW050", "OVC025"])
+    hist = _sky_history(["SKC", "SKC", "OVC025"])
     notes, lowering = analyze(hist)
     assert any("Ceiling formed: 2,500 ft" in n for n in notes)
-    assert lowering is True
+    assert lowering is True  # it arrived this hour - a developing deterioration
 
 
 def test_deck_change_then_lowering_reads_in_order():
     hist = _sky_history(["BKN230", "BKN045 BKN230", "BKN030 BKN230", "OVC012 BKN230"])
     notes, lowering = analyze(hist)
     ceil = [n for n in notes if "deck" in n or "Ceilings" in n]
-    assert "New lower deck below the 23,000 ft layer" in ceil[0]
+    assert "New deck below the 23,000 ft layer: ceiling 1,200 ft" in ceil[0]
     assert "Ceilings lowering: 4,500 ft → 1,200 ft" in ceil[1]
     assert lowering is True
+
+
+def test_settled_low_ceiling_does_not_keep_flagging_lowering():
+    # The deck took over four hours ago and has not moved since: still a low
+    # ceiling (the hard limits catch that), but no longer a developing trend.
+    hist = _sky_history(["BKN230", "BKN030 BKN230", "BKN030 BKN230",
+                         "BKN030 BKN230", "BKN030 BKN230"])
+    notes, lowering = analyze(hist)
+    assert any("New deck" in n and "~last 3 h" in n for n in notes)
+    assert lowering is False
 
 
 def test_ceiling_gone_is_not_trended_from_a_stale_height():
