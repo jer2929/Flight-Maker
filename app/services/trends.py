@@ -8,13 +8,15 @@ Developing trends carry a ``· ~last N h`` suffix computed from the METAR
 timestamps (``time_z``), so it reflects how long the trend has actually been
 running - not just the length of the history.
 
-Ceilings are compared layer by layer: a ceiling height only trends against an
-earlier one when both describe the same physical deck, so a deck forming
-underneath an unchanged high layer is reported as a new deck rather than as a
-20,000 ft descent.
+Ceilings are tracked layer by layer: the cloud layers of consecutive reports are
+paired up by height, and a ceiling height only ever trends against the same
+physical layer. When a *different* layer becomes the ceiling - one building
+underneath, or an existing thin layer filling in to broken - that is reported as
+what it is instead of as a height change that never happened.
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta, timezone
 
 
@@ -78,63 +80,130 @@ def _span_h(t0: datetime | None, t1: datetime | None) -> int | None:
     return hours if hours >= 1 else None
 
 
-# Two heights describe the same deck if they are within this much of each other;
-# METAR reports layers in hundreds of feet, so a deck that drifts a couple of
-# hundred feet between reports is still the same deck.
-LAYER_MATCH_FT = 500.0
+CEILING_COVERS = ("BKN", "OVC", "VV")
+
+# A layer keeps its identity from one report to the next while its height stays
+# within this ratio (or a few hundred feet) of where it was. Decks drift, and the
+# higher they sit the more coarsely they are estimated - BKN110 one hour and
+# OVC150 the next is one layer wobbling, not two different layers.
+LAYER_RATIO = 2.0
+LAYER_SLACK_FT = 1000.0
+# Cost added when pairing a thin layer with a solid one. A FEW/SCT layer filling
+# in to BKN is a bigger change than a deck drifting a few hundred feet, so a
+# nearby *solid* layer wins the pairing: CYXU's BKN024 → BKN015 is the same deck
+# descending, even though the FEW013 underneath it sat closer to 1,500 ft.
+COVER_CHANGE_COST = 0.5
+# Once the ceiling drops to a different, lower layer, it counts as a developing
+# deterioration for this long - after that it is simply the ceiling.
+FRESH_SWITCH_H = 2
 
 
-def _layer_heights(h: dict) -> list[float] | None:
-    """Heights of every layer in a report, or None when the observation carries
-    no layer detail (older cached history, hand-built dicts) and we have to fall
-    back to comparing bare ceiling heights."""
+def _layers(h: dict) -> list[dict] | None:
+    """The report's cloud layers, lowest first, or None when the observation
+    carries no layer detail (older cached history, hand-built dicts) and we have
+    to fall back to comparing bare ceiling heights."""
     layers = h.get("cloud_layers")
     if layers is None:
         return None
-    return [lyr["height_ft"] for lyr in layers if lyr.get("height_ft") is not None]
+    return [lyr for lyr in layers if lyr.get("height_ft") is not None]
+
+
+def _solid(lyr: dict) -> bool:
+    """Whether a layer is thick enough to be a ceiling."""
+    return lyr.get("cover") in CEILING_COVERS
 
 
 def _reported_no_ceiling(h: dict) -> bool:
     """True only when the report positively shows a ceiling-free sky. A missing
     ``ceiling_agl_ft`` on its own is ambiguous (it can also mean the report
     didn't parse), so require layer detail without a BKN/OVC/VV in it."""
-    layers = h.get("cloud_layers")
-    return layers is not None and not any(
-        lyr.get("cover") in ("BKN", "OVC", "VV") for lyr in layers)
+    layers = _layers(h)
+    return layers is not None and not any(_solid(lyr) for lyr in layers)
 
 
-def _same_deck(prev: dict, cur: dict) -> bool:
-    """True when ``cur``'s ceiling is plausibly ``prev``'s ceiling layer having
-    moved, rather than a *different* deck taking over as the ceiling.
+def _ceiling_index(layers: list[dict]) -> int | None:
+    """Position of the ceiling layer (lowest BKN/OVC/VV) in a report's layers."""
+    return next((i for i, lyr in enumerate(layers) if _solid(lyr)), None)
 
-    A layer that is still reported at its old height in the newer METAR plainly
-    did not move - something else became the ceiling. That is the
-    ``BKN230`` → ``BKN031 BKN230`` case: a new deck formed at 3,100 ft under an
-    unchanged 23,000 ft layer, so calling it a 23,000 → 3,100 ft descent would
-    invent a 20,000 ft drop that never happened. The mirror case (a low deck
-    dissipating to reveal a high layer that was there all along) is not a lift.
+
+def _could_be_one_layer(a: float, b: float) -> bool:
+    lo, hi = min(a, b), max(a, b)
+    return hi - lo <= LAYER_SLACK_FT or hi / max(lo, 100.0) <= LAYER_RATIO
+
+
+def _match_layers(prev: list[dict], cur: list[dict]) -> dict[int, int]:
+    """Pair up the layers of two consecutive reports one-to-one, cheapest pair
+    first - cost being how far the layer moved, plus a penalty for changing
+    between thin and solid. Whatever is left unpaired formed or dissipated."""
+    candidates = []
+    for i, a in enumerate(prev):
+        for j, b in enumerate(cur):
+            ha, hb = a["height_ft"], b["height_ft"]
+            if not _could_be_one_layer(ha, hb):
+                continue
+            cost = abs(math.log(max(ha, 100.0) / max(hb, 100.0)))
+            if _solid(a) != _solid(b):
+                cost += COVER_CHANGE_COST
+            candidates.append((cost, i, j))
+    pairs: dict[int, int] = {}
+    taken: set[int] = set()
+    for _, i, j in sorted(candidates):
+        if i not in pairs and j not in taken:
+            pairs[i] = j
+            taken.add(j)
+    return pairs
+
+
+def _deck_step(prev: dict, cur: dict) -> dict | None:
+    """How the ceiling got from ``prev`` to ``cur``.
+
+    ``None`` means one layer moved, so the two heights are comparable. Anything
+    else means a *different* layer became the ceiling, and the two heights
+    describe different clouds:
+
+    * ``filled`` - the layer that is now the ceiling was already up there,
+      thinner (CYOW: FEW033 the hour before it became BKN036).
+    * ``new`` - a deck took over from below that wasn't the ceiling before
+      (CYXU: BKN024TCU building under BKN110/OVC150).
+    * ``formed`` - the sky had no ceiling at all.
     """
-    p, c = prev.get("ceiling_agl_ft"), cur.get("ceiling_agl_ft")
-    if p is None or c is None:
-        return False
-    if c < p:  # candidate lowering - is the old ceiling layer still up there?
-        others = _layer_heights(cur)
-        return others is None or not any(
-            abs(x - p) <= LAYER_MATCH_FT and x > c + LAYER_MATCH_FT for x in others)
-    if c > p:  # candidate lifting - was the new ceiling layer already up there?
-        others = _layer_heights(prev)
-        return others is None or not any(
-            abs(x - c) <= LAYER_MATCH_FT and x > p + LAYER_MATCH_FT for x in others)
-    return True
+    pl, cl = _layers(prev), _layers(cur)
+    if pl is None or cl is None:
+        return None  # no layer detail - fall back to comparing bare heights
+    ci = _ceiling_index(cl)
+    if ci is None:
+        return None
+    pi = _ceiling_index(pl)
+    pairs = _match_layers(pl, cl)
+    if pi is not None and pairs.get(pi) == ci:
+        return None  # the ceiling layer itself moved
+    origin = next((i for i, j in pairs.items() if j == ci), None)
+    if (pi is not None and origin is None and pairs.get(pi) is None
+            and not any(lyr["height_ft"] < pl[pi]["height_ft"] for lyr in pl)):
+        # The old ceiling was the lowest cloud in the sky and is no longer
+        # reported, and nothing else can account for the new one: there is no
+        # competing candidate, so read it as that deck having moved.
+        return None
+    step = {"to_cover": cl[ci].get("cover"),
+            "above": next((lyr["height_ft"] for lyr in cl[ci + 1:]
+                           if lyr["height_ft"] > cl[ci]["height_ft"] + LAYER_SLACK_FT), None)}
+    if origin is not None:  # the new ceiling was already reported, thinner
+        step |= {"kind": "filled", "cover": pl[origin].get("cover"),
+                 "height": pl[origin]["height_ft"]}
+    elif pi is None:
+        step |= {"kind": "formed"}
+    else:
+        step |= {"kind": "new"}
+    return step
 
 
 def _ceiling_trend(obs: list[dict], times: list[datetime | None]) -> tuple[list[str], bool]:
-    """Ceiling notes for the *current* deck only, plus the lowering flag.
+    """Ceiling notes plus the lowering flag.
 
-    The history is cut at the most recent deck change, so the reported
-    ``A → B`` is always one layer moving. The change itself - a deck forming
-    below, or a lower deck clearing out - gets its own note instead of being
-    folded into a height comparison."""
+    The history is cut at the point where the ceiling last changed layers, so a
+    reported ``A → B`` is always one layer moving. The change of layer itself
+    gets a note describing what happened rather than a height comparison across
+    two different clouds."""
     notes: list[str] = []
     lowering = False
     idx = [i for i, h in enumerate(obs) if h.get("ceiling_agl_ft") is not None]
@@ -148,19 +217,22 @@ def _ceiling_trend(obs: list[dict], times: list[datetime | None]) -> tuple[list[
             notes.append(f"🌤 Ceiling cleared: was {_ft(gone)}{_suffix(_span_h(times[idx[-1]], times[-1]))}")
         return notes, False
 
-    # Walk back from the latest report while each step stays on the same deck.
-    # A report with no ceiling at all in between also ends the stretch.
-    first = idx[-1]
-    for k in range(len(idx) - 1, 0, -1):
-        older, newer = idx[k - 1], idx[k]
-        if newer - older > 1 or not _same_deck(obs[older], obs[newer]):
-            break
-        first = older
+    # Walk back from the newest ceiling while each step stays on the same layer.
+    last = idx[-1]
+    first, change = last, None
+    for i in range(last, 0, -1):
+        step = _deck_step(obs[i - 1], obs[i])
+        if step is None and obs[i - 1].get("ceiling_agl_ft") is not None:
+            first = i - 1
+            continue
+        change = (obs[i - 1], step)
+        break
 
-    seg = [i for i in idx if i >= first]
+    seg = [i for i in idx if first <= i <= last]
     vals = [obs[i]["ceiling_agl_ft"] for i in seg]
     stamps = [times[i] for i in seg]
     c0, c1 = vals[0], vals[-1]
+    since = _span_h(times[first], times[last])  # how long this layer has been the ceiling
 
     if len(seg) >= 2:
         if c1 < c0 - 800 and c1 <= 6000:
@@ -169,24 +241,28 @@ def _ceiling_trend(obs: list[dict], times: list[datetime | None]) -> tuple[list[
         elif c1 > c0 + 800:
             notes.append(f"📈 Ceilings lifting: {_ft(c0)} → {_ft(c1)}{_suffix(_run_h(stamps, vals, rising=True))}")
 
-    # What the current deck replaced, if the history reaches back that far. This
-    # happened before the trend above, so it leads the notes; it names the
-    # current ceiling only when no trend note already carries the numbers.
+    # What the current ceiling layer took over from. This happened before the
+    # trend above, so it leads the notes.
     deck: list[str] = []
-    if first > 0:
-        prev = obs[first - 1]
+    if change:
+        prev, step = change
         was = prev.get("ceiling_agl_ft")
-        sfx = _suffix(_span_h(times[first], times[idx[-1]]))
-        now = "" if notes else f": ceiling {_ft(c1)},"
-        if was is not None and was > c0 and c1 <= 6000:
-            deck.append(f"🌥 New lower deck{now} below the {_ft(was)} layer{sfx}")
-            lowering = lowering or c1 <= 5000
-        elif was is not None and was < c0:
+        sfx = _suffix(since)
+        if was is not None and was < c0:
             deck.append(f"🌤 Lower deck cleared: ceiling now {_ft(c1)} (was {_ft(was)}){sfx}")
-        elif was is None and _reported_no_ceiling(prev) and c1 <= 6000:
-            deck.append(f"🌥 Ceiling formed where there was none{sfx}" if notes
-                        else f"🌥 Ceiling formed: {_ft(c1)}{sfx}")
-            lowering = lowering or c1 <= 5000
+        elif step and c1 <= 6000:
+            above = step.get("above")
+            under = f" below the {_ft(above)} layer" if above else ""
+            if step["kind"] == "filled":
+                deck.append(f"🌥 {_ft(step['height'])} layer thickened {step['cover']} → "
+                            f"{step['to_cover']}: ceiling now {_ft(c1)}{sfx}")
+            elif step["kind"] == "new":
+                deck.append(f"🌥 New deck{under}: ceiling {_ft(c1)}{sfx}")
+            else:
+                deck.append(f"🌥 Ceiling formed: {_ft(c1)}{sfx}")
+            # A ceiling that has only just dropped to a lower layer is still a
+            # developing deterioration; one that settled hours ago is not.
+            lowering = lowering or (c1 <= 5000 and (since is None or since <= FRESH_SWITCH_H))
     return deck + notes, lowering
 
 
