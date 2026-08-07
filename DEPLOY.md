@@ -33,10 +33,25 @@ per-second-of-running; see the cost table below.
 Go to **https://fly.io/user/personal_access_tokens** → **Create token**.
 Copy the whole string (it starts with `FlyV1 ...`).
 
-> A personal access token is used because the very first deploy has to *create*
+> A broadly-scoped token is used because the very first deploy has to *create*
 > the app, which an app-scoped deploy token can't do. Once the app exists you can
 > swap in a narrower token from the app's **Tokens** tab, or via
-> `fly tokens create deploy -x 999999h` if you later install flyctl.
+> `fly tokens create deploy -x 999999h` if you have flyctl.
+
+> **If the Tokens page refuses to create one** — "Access Tokens cannot be created
+> for your account because an organization you are a member of requires Single
+> Sign On (SSO)" — the restriction applies to your whole account, including your
+> Personal org, and there is no browser workaround. Create an org-scoped token
+> from a terminal instead (you do **not** need the repo checked out locally — the
+> GitHub Action does the build):
+>
+> ```powershell
+> iwr https://fly.io/install.ps1 -useb | iex   # Windows; macOS/Linux: curl -L https://fly.io/install.sh | sh
+> fly auth login                               # opens a browser; SSO works here
+> fly tokens org personal                      # `fly orgs list` if that slug is wrong
+> ```
+>
+> The resulting org-scoped token can create apps, which the first deploy requires.
 
 ### 3. Add it to GitHub
 
