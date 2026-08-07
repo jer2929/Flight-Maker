@@ -47,9 +47,10 @@ def conditions_checks(
 ) -> list[LimitCheck]:
     """Applicable wind / ceiling / visibility hard-limit rows (cross-country).
 
-    ``ceiling_mode``: "xc" (cruise - fail below the XC limit) or "endpoint"
-    (departure/destination - low ceiling is circuit territory: <1000 fails,
-    1000–3000 is an advisory, otherwise pass)."""
+    ``ceiling_mode``: "xc" (cruise - fail below the XC limit), "circuit" (fail
+    below the circuit limit), or "endpoint" (departure/destination of a
+    cross-country - the XC limit still applies, and the row additionally says
+    whether the ceiling is even circuit-capable)."""
     full_limits = get_limits()
     L = full_limits["hard_limits"]
     w = L["wind"]
@@ -83,11 +84,11 @@ def conditions_checks(
         c = ifr.get("ceiling_agl_ft", L["ceiling_agl_ft"])
     else:
         c = L["ceiling_agl_ft"]
-    if ceiling_mode == "circuit":
-        ceil_limit = c.get("night_circuit", 3000) if mode == "night" else c.get("day_circuit", 2000)
-    else:
-        ceil_limit = c.get("night_xc", c.get("night_xc_cloud_base", 12000)) if mode == "night" else c.get("day_xc", 4000)
-    checks.append(_ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, src, ceiling_mode))
+    circuit_limit = c.get("night_circuit", 3000) if mode == "night" else c.get("day_circuit", 2000)
+    xc_limit = c.get("night_xc", c.get("night_xc_cloud_base", 12000)) if mode == "night" else c.get("day_xc", 4000)
+    ceil_limit = circuit_limit if ceiling_mode == "circuit" else xc_limit
+    checks.append(_ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, src,
+                                 ceiling_mode, circuit_limit=circuit_limit))
     # Visibility - IFR uses ifr_minimums section; VFR uses hard_limits.
     if flight_rules == "ifr":
         ifr = full_limits.get("ifr_minimums", {})
@@ -132,13 +133,15 @@ def _num_check(key, label, limit, actual, unit, source=None, actual_suffix="") -
     )
 
 
-def _ceiling_check(limit, actual, wx_source, src, mode="xc") -> LimitCheck:
+def _ceiling_check(limit, actual, wx_source, src, mode="xc", circuit_limit=None) -> LimitCheck:
     """Ceiling row, rounded to 100 ft. An observed report with no BKN/OVC layer is
-    an unlimited ceiling (pass). In ``endpoint`` mode a low ceiling is circuit
-    territory: <1000 fails, 1000–3000 is an advisory, otherwise pass.
-    In ``circuit`` mode the personal circuit minimum is a hard limit."""
+    an unlimited ceiling (pass). The personal minimum is a hard limit in every
+    mode: the circuit minimum in ``circuit`` mode, the XC minimum in ``xc`` and
+    ``endpoint`` mode. ``endpoint`` (departure/destination of a cross-country)
+    additionally says whether the ceiling is even circuit-capable, so a failing
+    row distinguishes "circuits only" from "below every personal minimum"."""
     if mode == "endpoint":
-        label, limit_text = "Ceiling (departure/dest)", "≥ 1,000 ft (circuit)"
+        label, limit_text = "Ceiling (departure/dest)", f"≥ {limit:,} ft AGL (XC)"
     elif mode == "circuit":
         label, limit_text = "Ceiling (circuits)", f"≥ {limit:,} ft AGL"
     else:
@@ -149,13 +152,13 @@ def _ceiling_check(limit, actual, wx_source, src, mode="xc") -> LimitCheck:
             return LimitCheck(actual_text="no ceiling (clear/SCT)", passed=True, **base)
         return LimitCheck(actual_text="no data", passed=True, **base)
     val = round(actual / 100) * 100
-    if mode == "endpoint":
+    if mode == "endpoint" and actual < limit:
+        cl = circuit_limit if circuit_limit is not None else limit
+        note = ("below circuit minimum" if actual < cl else
+                "circuit OK, below XC minimum")
         if actual < 1000:
-            return LimitCheck(actual_text=f"{val:,} ft AGL (IMC)", passed=False, **base)
-        if actual < 3000:
-            return LimitCheck(actual_text=f"{val:,} ft AGL - circuit OK, verify",
-                              passed=True, advisory=True, **base)
-        return LimitCheck(actual_text=f"{val:,} ft AGL", passed=True, **base)
+            note = "IMC"
+        return LimitCheck(actual_text=f"{val:,} ft AGL - {note}", passed=False, **base)
     return LimitCheck(actual_text=f"{val:,} ft AGL", passed=actual >= limit, **base)
 
 
