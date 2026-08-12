@@ -2,7 +2,12 @@
 date resolution succeeds regardless of when the suite runs."""
 from datetime import datetime, timezone
 
-from app.services.weather import conditions_at, parse_taf_segments
+from app.services.weather import (
+    base_intervals,
+    conditions_at,
+    hazards_in_window,
+    parse_taf_segments,
+)
 
 NOW = datetime.now(timezone.utc)
 D = NOW.day
@@ -66,3 +71,51 @@ def test_outside_validity_returns_none():
 def test_unparseable_returns_empty():
     assert parse_taf_segments("not a taf") == []
     assert parse_taf_segments("") == []
+
+
+def test_segments_carry_label_and_raw_text():
+    segs = parse_taf_segments(TAF)
+    assert [s["label"] for s in segs] == ["MAIN", "FM", "TEMPO"]
+    assert all(s["text"] for s in segs)
+    assert "TSRA" in next(s for s in segs if s["label"] == "TEMPO")["text"]
+
+
+def test_base_intervals_clip_to_the_next_base():
+    # parse_taf_segments stores every base as start -> main_end, relying on
+    # "latest start wins" for point queries. For an interval query that is
+    # wrong: unclipped, MAIN would look like it runs the full 12-24Z period and
+    # overlap a window the FM group actually governs.
+    raw = [s for s in parse_taf_segments(TAF) if s["label"] == "MAIN"][0]
+    assert raw["end"].hour == 0          # main_end, i.e. 24:00Z
+
+    clipped = base_intervals(parse_taf_segments(TAF))
+    main = next(s for s in clipped if s["label"] == "MAIN")
+    fm = next(s for s in clipped if s["label"] == "FM")
+    assert main["end"] == fm["start"]    # MAIN now ends when FM takes over
+    assert main["end"].hour == 18
+
+
+def test_base_intervals_leave_overlays_alone():
+    clipped = base_intervals(parse_taf_segments(TAF))
+    tempo = next(s for s in clipped if s["label"] == "TEMPO")
+    assert tempo["start"].hour == 20 and tempo["end"].hour == 23
+
+
+def test_hazards_in_window_scopes_to_the_flight():
+    segs = parse_taf_segments(TAF)
+    # A midday flight: the TSRA is forecast 20-23Z and must NOT be reported as
+    # present - this is the bug that made a next-day storm a NO-GO today.
+    inside, outside = hazards_in_window(segs, _q(13), _q(15))
+    assert inside == set()
+    assert [s["label"] for s in outside] == ["TEMPO"]
+
+    # An evening flight through the same TSRA: it must be reported.
+    inside, outside = hazards_in_window(segs, _q(19), _q(22))
+    assert inside == {"thunderstorm"}
+    assert outside == []
+
+
+def test_hazard_window_counts_a_straddling_overlay():
+    # A window ending just as the TEMPO begins still overlaps it.
+    inside, _ = hazards_in_window(parse_taf_segments(TAF), _q(18), _q(20))
+    assert inside == {"thunderstorm"}

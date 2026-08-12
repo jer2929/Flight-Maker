@@ -147,6 +147,42 @@ def _endpoint_hour(fc: dict, taf_segs: list[dict], i: int, dt_utc: datetime) -> 
     return merged, True
 
 
+endpoint_hour = _endpoint_hour  # public alias for reuse by the orchestrator
+
+
+def endpoint_hour_sourced(fc: dict, taf_segs: list[dict], i: int,
+                          dt_utc: datetime) -> tuple[dict, dict]:
+    """``_endpoint_hour`` plus a per-field provenance map.
+
+    The merge itself is not repeated here - provenance is read back off the TAF
+    conditions, so there is exactly one implementation of "TAF beats model" in
+    the codebase. Fields the TAF didn't speak to fall through to the model.
+
+    ``build_timeline`` deliberately keeps calling ``_endpoint_hour`` directly:
+    it discards the map, and calling this wrapper 48x would double the
+    ``conditions_at`` work for nothing.
+    """
+    merged, taf_used = _endpoint_hour(fc, taf_segs, i, dt_utc)
+    src = {k: Source.MODEL for k in
+           ("wind", "gust", "ceiling", "visibility", "hazards")}
+    if not taf_used:
+        return merged, src
+    taf = wx.conditions_at(taf_segs, dt_utc) or {}
+    # TAF wins outright on ceiling/visibility when it supplied one.
+    if taf.get("ceiling_agl_ft") is not None:
+        src["ceiling"] = Source.TAF
+    if taf.get("visibility_sm") is not None:
+        src["visibility"] = Source.TAF
+    # Wind/gust are worst-of, so the TAF only "drove" the value when it won.
+    if taf.get("wind_kt") is not None and merged.get("wind_kt") == taf["wind_kt"]:
+        src["wind"] = Source.TAF
+    if taf.get("gust_kt") is not None and merged.get("gust_kt") == taf["gust_kt"]:
+        src["gust"] = Source.TAF
+    if taf.get("hazards"):
+        src["hazards"] = Source.TAF
+    return merged, src
+
+
 def _start_index(times: list[str], offset: int) -> int:
     """First hour at or after 'now' (local), so windows never look backward."""
     now_local = datetime.now(timezone.utc).timestamp() + offset

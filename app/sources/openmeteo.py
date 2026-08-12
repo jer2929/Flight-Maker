@@ -44,6 +44,12 @@ _SURFACE_VARS = [
 ]
 
 
+# Surface wind only - for the en-route corridor, where the cards show wind and
+# nothing else. Twenty points x the full variable list is a very long URL and a
+# large response for data that would be discarded.
+WIND_ONLY_VARS = ["windspeed_10m", "winddirection_10m", "windgusts_10m"]
+
+
 def _hourly_vars() -> list[str]:
     vars_ = list(_SURFACE_VARS)
     for lvl in PRESSURE_LEVELS_FT:
@@ -80,25 +86,31 @@ async def forecast(lat: float, lon: float, days: int = 2) -> dict:
     return data
 
 
-async def forecast_many(points: list[tuple[float, float]], days: int = 2) -> list[dict]:
+async def forecast_many(points: list[tuple[float, float]], days: int = 2,
+                        hourly: list[str] | None = None) -> list[dict]:
     """HRDPS forecast for many points in a single request (discovery scan).
 
     Open-Meteo accepts comma-separated latitude/longitude and returns a list of
     forecast objects in the same order. Falls back to an empty dict per point on
     failure so callers degrade gracefully.
+
+    ``hourly`` narrows the requested variables (see ``WIND_ONLY_VARS``); it is
+    part of the cache key, so a narrow response can never satisfy a later
+    full-variable lookup.
     """
     if not points:
         return []
     settings = get_settings()
+    vars_ = hourly or _hourly_vars()
     lats = ",".join(f"{p[0]:.4f}" for p in points)
     lons = ",".join(f"{p[1]:.4f}" for p in points)
-    key = f"hrdps_many:{hash((lats, lons, days))}"
+    key = f"hrdps_many:{hash((lats, lons, days, tuple(vars_)))}"
     cached = cache.get(key)
     if cached is not None:
         return cached
     params = {
         "latitude": lats, "longitude": lons, "forecast_days": days,
-        "models": settings.openmeteo_model, "hourly": ",".join(_hourly_vars()),
+        "models": settings.openmeteo_model, "hourly": ",".join(vars_),
         "windspeed_unit": "kn", "timezone": "auto",
     }
     async with httpx.AsyncClient(timeout=settings.request_timeout) as client:

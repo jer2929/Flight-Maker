@@ -1,4 +1,15 @@
-from app.services.weather import detect_hazards, detect_precip, parse_metar, parse_taf
+from datetime import datetime, timezone
+
+import pytest
+
+from app.services.weather import (
+    UNRESTRICTED_VIS_SM,
+    conditions_at,
+    detect_hazards,
+    detect_precip,
+    parse_metar,
+    parse_taf_segments,
+)
 
 
 def test_parse_basic_metar():
@@ -56,20 +67,58 @@ def test_parse_metar_includes_precip():
     assert p["precip"] == "snow"
 
 
-def test_parse_taf_worstcase():
-    raw = ("CYFD 171740Z 1718/1818 27010KT P6SM SCT040 "
-           "TEMPO 1720/1724 30022G32KT 3SM SHRA BKN025 "
-           "FM180200 28008KT P6SM FEW050")
-    p = parse_taf(raw)
-    assert p["max_wind_kt"] == 22
-    assert p["max_gust_kt"] == 32
-    assert p["min_ceiling_agl_ft"] == 2500
-    assert p["min_visibility_sm"] == 3
+_TAF = ("CYFD 171740Z 1718/1818 27010KT P6SM SCT040 "
+        "TEMPO 1720/1724 30022G32KT 3SM SHRA BKN025 "
+        "FM180200 28008KT P6SM FEW050")
+
+
+def _at(day, hour):
+    """Query time inside the TAF above, resolved near its issue date."""
+    ref = datetime.now(timezone.utc)
+    return datetime(ref.year, ref.month, day, hour, tzinfo=timezone.utc)
+
+
+def test_taf_worstcase_inside_tempo_window():
+    # The worst wind/vis/ceiling in this TAF all live in the TEMPO group, and
+    # must be reported when - and only when - the query lands inside it.
+    c = conditions_at(parse_taf_segments(_TAF), _at(17, 22))
+    assert c["wind_kt"] == 22
+    assert c["gust_kt"] == 32
+    assert c["ceiling_agl_ft"] == 2500
+    assert c["visibility_sm"] == 3
+
+
+def test_taf_worstcase_not_applied_outside_tempo_window():
+    # Same TAF, an hour before the TEMPO starts: the base group governs. This is
+    # the whole point of time-segmentation - a worst-case scan of the raw text
+    # would fail a flight here for weather forecast three hours later.
+    c = conditions_at(parse_taf_segments(_TAF), _at(17, 19))
+    assert c["wind_kt"] == 10
+    assert c["gust_kt"] is None
+    assert c["ceiling_agl_ft"] is None
+    assert c["visibility_sm"] == UNRESTRICTED_VIS_SM
 
 
 def test_p6sm_is_unrestricted():
     # "P6SM" means *greater than* 6 SM, so it must not be read as exactly 6 and
     # trip a higher visibility minimum (e.g. a ≥9 SM XC limit).
     raw = "CYFD 171740Z 1718/1818 27010KT P6SM SCT040"
-    p = parse_taf(raw)
-    assert p["min_visibility_sm"] == 10
+    c = conditions_at(parse_taf_segments(raw), _at(17, 20))
+    assert c["visibility_sm"] == 10
+
+
+@pytest.mark.parametrize("token, expected", [
+    ("TSRA", ["thunderstorm"]),
+    ("VCTS", ["thunderstorm"]),
+    ("+TSGR", ["thunderstorm"]),
+    ("BKN030CB", ["thunderstorm"]),      # convective cloud, no TS token
+    ("CB", ["thunderstorm"]),
+    ("BITS", []),                        # must not match TS mid-word
+    ("FZRA", ["freezing_rain"]),
+    ("WS020/27045KT", ["low_level_wind_shear"]),
+    ("WS RWY 12", ["low_level_wind_shear"]),
+])
+def test_convective_token_table(token, expected):
+    # weather.py owns the single TS/CB definition; hazards.py consumes it rather
+    # than keeping a second, subtly different regex.
+    assert detect_hazards(token) == expected

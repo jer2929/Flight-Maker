@@ -16,11 +16,37 @@ of a **Personal Flight Decision Card**:
    no-autopilot), and a **conservatism** preset. Everything is stored in your
    browser, persists between sessions, and gates the Route and Discovery results.
 2. **Route** - enter **departure + destination** (autocomplete over every Canadian
-   aerodrome + US border fields; departure defaults to your base). You get the
-   **GO / MITIGATE / NO-GO** verdict **now** for both ends, flight time + best
-   cruise altitude (winds aloft), active NOTAMs/SIGMETs, and an **hour-by-hour
-   24–48 h timeline** that highlights the best GO window(s).
-3. **Discovery** - "where can I go within X nm of my base right now," ranked by the card.
+   aerodrome + US border fields; departure defaults to your base) and an **ETD in
+   Zulu**. You get the **GO / MITIGATE / NO-GO** verdict *for the window you're
+   actually flying* - departure assessed at your ETD, destination at your ETA -
+   plus flight time + best cruise altitude (winds aloft), the **en-route
+   aerodromes** within 5 nm of your track, active NOTAMs/SIGMETs, and an
+   **hour-by-hour 24–48 h timeline** that highlights the best GO window(s).
+3. **Discovery** - "where can I go within X nm of my base," ranked by the card.
+   It takes an ETD too: each candidate is assessed at *its own* ETA, so a 20 nm
+   hop and a 200 nm leg from the same departure time are judged on the weather
+   each will actually meet.
+
+### Departure time (ETD)
+Leaving the ETD on **Now** keeps the classic behaviour: the METAR anchors the
+verdict, because an observation is the best statement about the next half hour.
+Pick a *future* ETD and the endpoints switch to the forecast for that time, with
+the **TAF taking precedence over HRDPS** on ceiling, visibility and hazards, and
+the worse of the two taken on wind. Every value stays labelled with where it came
+from, per field.
+
+This is also what stops a thunderstorm forecast for tomorrow evening from
+grounding a flight at noon today: hazards are read from the **TAF segments that
+overlap your ETD→ETA window** (±30 min for taxi and approach), not grepped out of
+the whole forecast. A storm outside your window still appears - as an advisory
+row naming the period it applies to - it just no longer drives the verdict.
+
+### En-route aerodromes
+A collapsed-by-default list of every aerodrome within **5 nm of the straight
+route**, in the order you'd fly over them, with runway, surface, length and the
+modelled wind **at your overfly time**. Grass and private strips are included on
+purpose: these are precautionary-landing options, not destinations. This section
+is situational awareness only and never affects your verdict.
 
 ### Two-trigger threat stacking (general-audience)
 The decision card stacks "major threats": some are derived automatically from the
@@ -60,6 +86,16 @@ The timeline combines both endpoints conservatively (worse of the two) and runs
 the decision card on each hour. Where a field has both METAR and model, the
 model-vs-observed wind delta is shown as a confidence hint.
 
+On the airport cards the TAF is split into its **FM/BECMG/TEMPO periods**, with
+the period covering your ETD (departure) or ETA (destination) highlighted green
+and the rest dimmed - so "what does the forecast say for my flight" is one glance
+rather than a paragraph of parsing. The raw TAF is kept underneath to cross-check
+against.
+
+> **Known gap:** SIGMET/AIRMET/PIREP are still applied whenever they're active,
+> without scoping to their own validity times. They're typically ≤6 h products,
+> so the window is much narrower than a 30 h TAF's, but it's the next thing to fix.
+
 ### Why not Windy?
 A Windy.com **Premium** subscription does **not** include API access - Windy's
 Point Forecast API is a separate **Professional license (~$1,000/yr)** and its
@@ -78,7 +114,8 @@ The card (`data/limits.yaml`, fully editable) drives everything:
 
 - **Hard limits** → any breach = **NO-GO** with the specific reason: wind > 20 kt,
   gust spread > 10 kt, crosswind > 9 kt, XC ceiling < 4000 ft AGL (day) /
-  cloud base < 12000 ft (night), XC visibility < 9 SM, and hazard flags.
+  cloud base < 12000 ft (night), XC visibility < 9 SM, and hazard flags. All of
+  it is evaluated for your ETD→ETA window, not for "right now".
 - **Two-trigger threat stacking** → 0 = GO, 1 = MITIGATE, 2+ = NO-GO. Some threats
   are derived from the weather; others (night ops, fatigue, etc.) you tick in the UI.
 - **Pilot fitness / external pressure / "explain it to your instructor"** → a

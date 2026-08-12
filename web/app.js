@@ -242,6 +242,7 @@ async function init() {
   renderSelfAssessment("route-self-check");
   renderSelfAssessment("discovery-self-check");
   $("#dep").value = baseIdent();
+  buildEtdOptions();
   wire();
   // Apply the initially-active tab so the per-flight controls start hidden on
   // the default My Minimums tab.
@@ -272,6 +273,62 @@ function stampDataTime() {
 const baseIdent = () => PROFILE.base || CONFIG.departure;
 const labelOf = (s) => s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
+// ---------- ETD (Zulu) ----------
+// Deliberately NOT persisted to localStorage: a restored "yesterday 14:00Z"
+// would silently assess the wrong flight. It resets to "Now" every load.
+const ETD_IDS = ["#etd", "#d-etd"];
+const zPad = (x) => String(x).padStart(2, "0");
+const zHM = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : `${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z`;
+};
+
+function etdOptionList() {
+  const now = new Date();
+  const hours = CONFIG.timeline_hours || 48;
+  const out = [{
+    value: "now",
+    label: `Now (${zPad(now.getUTCHours())}${zPad(now.getUTCMinutes())}Z)`,
+  }];
+  // Whole UTC hours from the next one out to the forecast horizon.
+  const first = new Date(now);
+  first.setUTCMinutes(0, 0, 0);
+  first.setUTCHours(first.getUTCHours() + 1);
+  const today = now.getUTCDate();
+  for (let i = 0; i < hours; i++) {
+    const d = new Date(first.getTime() + i * 3600000);
+    const dayDiff = Math.round((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+      - Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), today)) / 86400000);
+    const day = dayDiff === 0 ? "Today" : dayDiff === 1 ? "Tomorrow"
+      : d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" });
+    out.push({
+      value: `${d.toISOString().slice(0, 16)}Z`,
+      label: `${day} ${zPad(d.getUTCHours())}:00Z`,
+    });
+  }
+  return out;
+}
+
+// Rebuilt on load, on tab switch and whenever the tab regains focus - a window
+// left open overnight would otherwise still be offering yesterday's hours.
+// The server clamps out-of-range values as a backstop.
+function buildEtdOptions() {
+  const opts = etdOptionList();
+  for (const id of ETD_IDS) {
+    const sel = $(id);
+    if (!sel) continue;
+    const prev = sel.value;
+    sel.innerHTML = opts.map((o) => `<option value="${o.value}">${o.label}</option>`).join("");
+    if (prev && opts.some((o) => o.value === prev)) sel.value = prev;
+  }
+}
+
+const etdParam = (id = "#etd") => {
+  const v = ($(id) || {}).value;
+  return !v || v === "now" ? {} : { etd: v };
+};
+
 // ---------- Wire ----------
 function wire() {
   // makeDragOnly first so its guard runs before the readout listener (see note there).
@@ -299,6 +356,11 @@ function wire() {
   autocomplete("dest", "dest-list");
   autocomplete("circ-aerodrome", "circ-list");
   autocomplete("set-base", "base-list");
+
+  // A backgrounded tab's ETD hours drift into the past; rebuild on return.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) buildEtdOptions();
+  });
 
   // Flight-type toggle: XC ↔ Circuits
   $$("[data-ftype]").forEach((b) => b.addEventListener("click", () => {
@@ -333,6 +395,8 @@ function switchTab(name) {
   // The per-flight controls (time of day, flight rules, extra threats) are
   // meaningless on the My Minimums tab - hide them there.
   $("#flight-controls").classList.toggle("hidden", name === "settings");
+  // Refresh the ETD hours - the list goes stale in a tab left open.
+  if (name !== "settings") buildEtdOptions();
 }
 
 // This flight's threats = per-flight toggles + night.
@@ -579,7 +643,7 @@ async function runRoute() {
   const btn = $("#run-route"); btn.disabled = true; btn.textContent = "Pulling data…";
   clearRoute();
   try {
-    const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam(), ...tasParam() });
+    const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam(), ...tasParam(), ...etdParam() });
     const res = await fetch(`/api/route?${params}`);
     if (!res.ok) { $("#route-verdict").innerHTML = `<div class="empty">Unknown departure or destination.</div>`; return; }
     renderRoute(await res.json());
@@ -595,7 +659,7 @@ async function runCircuits() {
   const btn = $("#run-route"); btn.disabled = true; btn.textContent = "Pulling data…";
   clearRoute();
   try {
-    const params = new URLSearchParams({ aerodrome, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam() });
+    const params = new URLSearchParams({ aerodrome, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam(), ...etdParam() });
     const res = await fetch(`/api/circuits?${params}`);
     if (!res.ok) { $("#route-verdict").innerHTML = `<div class="empty">Unknown aerodrome.</div>`; return; }
     renderCircuits(await res.json());
@@ -609,36 +673,35 @@ function renderCircuits(r) {
   const v = r.verdict;
   const frLabel = currentFlightRules() === "ifr" ? " · IFR" : " · VFR";
   $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.airport.ident} circuits: ${v} now${frLabel}</div>`;
-  const cond = r.limit_checks.filter((c) => c.group === "conditions");
-  const wx = r.limit_checks.filter((c) => c.group === "weather");
-  const n = r.threat_checks.filter((t) => t.present).length;
-  const label = r.threat_result_label || stackWord(n);
-  $("#route-checklist").innerHTML = `<div class="panel checklist">
-    <div class="cl-group"><h3>Hard limits - conditions <span class="hint">(circuit minimums)</span></h3>${cond.map(rowCheck).join("")}</div>
-    <div class="cl-group"><h3>Weather</h3>${wx.map(rowCheck).join("")}</div>
-    <div class="cl-group"><h3>Two-trigger threat stack <span class="badge ${cls(labelVerdict(label))}">${n} present → ${label}</span></h3>${r.threat_checks.map(rowThreat).join("")}</div>
-  </div>`;
+  $("#route-checklist").innerHTML = checklistGroups(r, "(circuit minimums)");
   $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
-  $("#route-endpoints").innerHTML = endpointCard(r, "Aerodrome");
+  const etdVal = ($("#etd") || {}).value;
+  $("#route-endpoints").innerHTML = endpointCard(
+    r, "Aerodrome", etdVal && etdVal !== "now" ? `ETD ${zHM(etdVal)}` : "");
 }
 
 function clearRoute() {
   // route-self-check is a standing pre-check rendered on load - never cleared here,
   // so the pilot's ticked items survive a route assessment.
   if (typeof destroyRadar === "function") destroyRadar();  // tear down any live Leaflet map
-  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-gfa", "route-radar", "route-endpoints", "route-windows", "route-timeline"]
+  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-gfa", "route-radar", "route-endpoints", "route-enroute", "route-windows", "route-timeline"]
     .forEach((id) => ($("#" + id).innerHTML = ""));
 }
 
 function renderRoute(r) {
   const v = r.verdict_now;
   const frLabel = currentFlightRules() === "ifr" ? " · IFR" : " · VFR";
-  $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.departure.airport.ident} → ${r.destination.airport.ident}: ${v} now${frLabel}</div>`;
+  const win = r.window;
+  const when = win && !win.is_now ? `at ${zHM(win.etd_utc)}` : "now";
+  const notes = (win && win.notes.length)
+    ? `<small>${win.notes.map(escapeHtml).join(" · ")}</small>` : "";
+  $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.departure.airport.ident} → ${r.destination.airport.ident}: ${v} ${when}${frLabel}${notes}</div>`;
   $("#route-checklist").innerHTML = checklist(r);
   $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
 
   const alt = r.altitude;
   $("#route-summary").innerHTML = `<div class="panel meta">
+      ${win ? `<span title="Conditions are assessed for this window">🕐 ETD ${zHM(win.etd_utc)} → ETA ${zHM(win.eta_utc)}${win.eta_provisional ? " (est.)" : ""}</span>` : ""}
       <span>📏 ${r.distance_nm} nm · course ${dirM(r.bearing_mag, r.bearing_true)}</span>
       <span>⏱ ${fmtHrMin(r.flight_time_hr)}</span>
       ${alt ? `<span>⬆ Best alt ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
@@ -648,7 +711,10 @@ function renderRoute(r) {
     </div>`;
 
   $("#route-summary").innerHTML += advisoriesBlock(r);
-  $("#route-endpoints").innerHTML = endpointCard(r.departure, "Departure") + endpointCard(r.destination, "Destination");
+  $("#route-endpoints").innerHTML =
+    endpointCard(r.departure, "Departure", win ? `ETD ${zHM(win.etd_utc)}` : "") +
+    endpointCard(r.destination, "Destination", win ? `ETA ${zHM(win.eta_utc)}` : "");
+  $("#route-enroute").innerHTML = enrouteBlock(r);
   loadRadar(r);
 
   if (r.best_windows.length) {
@@ -660,16 +726,52 @@ function renderRoute(r) {
   renderTimeline(r.timeline, r.best_windows);
 }
 
-function checklist(r) {
+// One checklist group. Rows that need attention (failed, or advisory) show by
+// default; passing and not-applicable rows collapse behind an expander, so the
+// page leads with what's actually wrong instead of ~24 uniform rows.
+function clGroup(title, hint, rows, opts = {}) {
+  const row = opts.row || rowCheck;
+  const needsEye = (c) => c.applicable !== false && (!c.passed || c.advisory);
+  const shown = rows.filter(needsEye);
+  const hidden = rows.filter((c) => !needsEye(c));
+  const head = `<h3>${title}${hint ? ` <span class="hint">${hint}</span>` : ""}${opts.badge || ""}</h3>`;
+  const body = shown.length
+    ? shown.map(row).join("")
+    : `<div class="cl-clean">✓ All ${hidden.length} checks pass</div>`;
+  const more = hidden.length
+    ? `<details class="cl-more"><summary>${shown.length ? `${hidden.length} checks passed` : `show the ${hidden.length} passing checks`}</summary>${hidden.map(row).join("")}</details>`
+    : "";
+  return `<div class="cl-group">${head}${body}${more}</div>`;
+}
+
+// Threat rows use "present" rather than "passed", so they get their own filter.
+function threatGroup(threats, label) {
+  const n = threats.filter((t) => t.present).length;
+  const shown = threats.filter((t) => t.present);
+  const hidden = threats.filter((t) => !t.present);
+  const badge = ` <span class="badge ${cls(labelVerdict(label))}">${n} present → ${label}</span>`;
+  const body = shown.length
+    ? shown.map(rowThreat).join("")
+    : `<div class="cl-clean">✓ None of the ${hidden.length} threats present</div>`;
+  const more = hidden.length
+    ? `<details class="cl-more"><summary>${shown.length ? `${hidden.length} not present` : `show the ${hidden.length} threats checked`}</summary>${hidden.map(rowThreat).join("")}</details>`
+    : "";
+  return `<div class="cl-group"><h3>Two-trigger threat stack${badge}</h3>${body}${more}</div>`;
+}
+
+function checklistGroups(r, condHint) {
   const cond = r.limit_checks.filter((c) => c.group === "conditions");
   const wx = r.limit_checks.filter((c) => c.group === "weather");
-  const n = r.threat_checks.filter((t) => t.present).length;
-  const label = r.threat_result_label || stackWord(n);
+  const label = r.threat_result_label || stackWord(r.threat_checks.filter((t) => t.present).length);
   return `<div class="panel checklist">
-    <div class="cl-group"><h3>Hard limits - conditions <span class="hint">(worst point on the route)</span></h3>${cond.map(rowCheck).join("")}</div>
-    <div class="cl-group"><h3>Weather <span class="hint">(SIGMET/AIRMET/PIREP + model; ⚠ = review GFA)</span></h3>${wx.map(rowCheck).join("")}</div>
-    <div class="cl-group"><h3>Two-trigger threat stack <span class="badge ${cls(labelVerdict(label))}">${n} present → ${label}</span></h3>${r.threat_checks.map(rowThreat).join("")}</div>
+    ${clGroup("Hard limits - conditions", condHint, cond)}
+    ${clGroup("Weather", "(TAF + SIGMET/AIRMET/PIREP + model, scoped to your flight window)", wx)}
+    ${threatGroup(r.threat_checks, label)}
   </div>`;
+}
+
+function checklist(r) {
+  return checklistGroups(r, "(worst point on the route)");
 }
 const stackWord = (n) => ["Normal flight", "Mitigate carefully", "No-go solo", "No-go"][Math.min(n, 3)];
 // Map the backend's result label to a badge colour (verdict driven by the
@@ -684,7 +786,7 @@ function rowCheck(c) {
   return `<div class="chk ${state}">
     <span class="mark">${mark}</span>
     <span class="lbl">${c.label}</span>
-    <span class="act">${c.actual_text}${loc}${src}${c.advisory ? ` <a href="https://plan.navcanada.ca/" target="_blank" rel="noopener">GFA ↗</a>` : ""}</span>
+    <span class="act">${c.actual_text}${loc}${src}${c.advisory_link ? ` <a href="${escapeHtml(c.advisory_link)}" target="_blank" rel="noopener">${escapeHtml(c.advisory_link_label || "chart")} ↗</a>` : ""}</span>
     <span class="lim">${c.limit_text}</span></div>`;
 }
 function rowThreat(t) {
@@ -830,7 +932,7 @@ function windRunwaySvg(rwy, w, opts = {}) {
   } catch (e) { return ""; }
 }
 
-function endpointCard(a, role) {
+function endpointCard(a, role, timeLabel) {
   const w = a.weather || {};
   const issues = a.reasons || [];
   const wind = windStr(w);
@@ -858,9 +960,74 @@ function endpointCard(a, role) {
     <div class="links">${linksHtml(a)}</div>
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
     ${w.raw_metar ? `<div class="raw">METAR ${escapeHtml(w.raw_metar)}${ageChip(w.raw_metar)}</div>` : ""}
-    ${w.raw_taf ? `<div class="raw">TAF ${w.raw_taf}</div>` : ""}
+    ${tafBlock(w, timeLabel)}
     ${metarHistory(a)}
   </div>`;
+}
+
+// The TAF, split into its FM/BECMG/TEMPO periods, with the one covering this
+// end's relevant time (ETD at the departure, ETA at the destination)
+// highlighted. `in_window` is computed server-side so the browser never has to
+// reason about TAF validity arithmetic.
+function tafBlock(w, timeLabel) {
+  if (!w.raw_taf) return "";
+  const ps = w.taf_periods || [];
+  // Unparseable TAF: fall back to the raw line rather than showing nothing.
+  if (!ps.length) return `<div class="raw">TAF ${escapeHtml(w.raw_taf)}</div>`;
+  const label = timeLabel || "flight";
+  const covered = ps.some((p) => p.in_window);
+  const note = covered
+    ? `<span class="hint">green = covers your ${escapeHtml(label)}</span>`
+    : `<span class="hint">your ${escapeHtml(label)} is outside this TAF (valid ${zHM(w.taf_valid_from)}-${zHM(w.taf_valid_to)})</span>`;
+  return `<details class="taf" open><summary>TAF ${note}</summary>
+    ${ps.map(tafRow).join("")}
+    <div class="raw taf-raw">${escapeHtml(w.raw_taf)}</div></details>`;
+}
+
+function tafRow(p) {
+  // A TAF period routinely runs past midnight Z, and a bare "1800Z-1400Z" reads
+  // backwards. Mark the rollover so the range stays unambiguous.
+  const days = Math.round(
+    (Date.parse(p.end.slice(0, 10)) - Date.parse(p.start.slice(0, 10))) / 86400000);
+  const end = `${zHM(p.end)}${days > 0 ? `<sup>+${days}</sup>` : ""}`;
+  return `<div class="taf-p ${p.in_window ? "in" : "out"}${p.kind === "overlay" ? " overlay" : ""}">
+    <span class="taf-k">${escapeHtml(p.label || "")}</span>
+    <span class="taf-t">${zHM(p.start)}-${end}</span>
+    <span class="taf-x">${escapeHtml(p.text || "")}</span></div>`;
+}
+
+// Aerodromes within the route corridor - precautionary-landing options, shown
+// collapsed by default. Purely situational: none of this gates the verdict.
+function enrouteBlock(r) {
+  const list = r.enroute_airports || [];
+  const total = r.enroute_airports_total || list.length;
+  const w = r.enroute_corridor_nm ?? 5;
+  if (!list.length) {
+    return `<div class="panel adv-none">No aerodromes within ${w} nm of the route.</div>`;
+  }
+  const more = total > list.length
+    ? ` <span class="hint">(${list.length} of ${total} shown, nearest the centreline)</span>` : "";
+  return `<details class="panel enroute"><summary>En-route aerodromes within ${w} nm: ${total}${more}
+    <span class="hint">- precautionary options, grass and private included. Wind is HRDPS at your overfly time; these never affect your verdict.</span></summary>
+    ${list.map(enrouteRow).join("")}</details>`;
+}
+
+function enrouteRow(e) {
+  const rw = e.best_runway;
+  const wind = e.wind_kt != null
+    ? `${windDir(e.wind_dir_mag, e.wind_dir_true)}/${Math.round(e.wind_kt)}${e.gust_kt && e.gust_kt > e.wind_kt ? "G" + Math.round(e.gust_kt) : ""} kt`
+    : "no wind data";
+  const off = Math.abs(e.cross_track_nm).toFixed(1);
+  const where = e.side === "on course" ? "on course" : `${off} nm ${e.side}`;
+  return `<div class="er-row">
+    <div class="er-head"><strong>${escapeHtml(e.airport.ident)}</strong> ${escapeHtml(e.airport.name)}${e.access_note ? ` <span class="ppr">${escapeHtml(e.access_note)}</span>` : ""}</div>
+    <div class="er-meta">
+      <span>${Math.round(e.along_track_nm)} nm along · ${where}</span>
+      <span>${e.overfly_utc ? "🕐 " + zHM(e.overfly_utc) : ""}</span>
+      <span>💨 ${wind}</span>
+      ${rw ? `<span>🛬 RWY ${rw.runway_ident}${dimsText(rw) ? " · " + dimsText(rw) : ""} · xwind ${Math.round(rw.crosswind_kt)} kt</span>`
+           : `<span class="rwy-na">runway data unavailable</span>`}
+    </div></div>`;
 }
 
 function trendsBlock(a) {
@@ -1015,7 +1182,7 @@ async function runDiscovery() {
     };
     const t = +$("#f-time").value;
     if (t > 0) p.max_time_min = t;
-    Object.assign(p, prefsParam(), tasParam());
+    Object.assign(p, prefsParam(), tasParam(), etdParam("#d-etd"));
     const params = new URLSearchParams(p);
     const data = await fetch(`/api/suggest?${params}`).then((r) => r.json());
     $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
