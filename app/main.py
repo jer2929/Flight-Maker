@@ -23,6 +23,7 @@ from app.config import (
     get_settings,
     limits_override,
 )
+from app.services import solar
 from app.services.evaluator import THREAT_LABELS
 from app.sources import airports as ap
 
@@ -74,6 +75,7 @@ async def config():
         "default_conservatism": cp.get("default", "standard"),
         "default_limits": defaults["hard_limits"],
         "default_ifr_minimums": defaults.get("ifr_minimums", {}),
+        "default_night_as_threat": defaults.get("threat_stacking", {}).get("night_as_threat", True),
         "weather_flag_options": defaults["hard_limits"]["weather_flags"],
     }
 
@@ -105,6 +107,42 @@ def _parse_etd(raw: str | None) -> datetime | None:
     now = datetime.now(timezone.utc)
     horizon = get_settings().timeline_hours
     return max(now - timedelta(hours=1), min(when, now + timedelta(hours=horizon)))
+
+
+@app.get("/api/daynight")
+async def daynight(
+    ident: str = Query(...),
+    at: str = Query(default=None, pattern=_ETD_PATTERN),
+):
+    """Is the given time day or night at this aerodrome?
+
+    "Night" is the CARs 101.01 definition - between the end of evening civil
+    twilight and the beginning of morning civil twilight - so the UI's day/night
+    toggle can select itself from the ETD instead of defaulting to day and
+    quietly assessing a 0200Z departure against daytime minimums.
+
+    ``at`` goes through the same ``_parse_etd`` clamp the route uses, so a tab
+    left open overnight gets the toggle for the flight that would actually be
+    assessed rather than for yesterday's lapsed ETD.
+
+    Pure arithmetic against the local airports dataset: no upstream call.
+    """
+    airport = ap.get_airport(ident)
+    if airport is None:
+        return JSONResponse({"error": f"unknown aerodrome {ident}"}, status_code=404)
+    when = _parse_etd(at) or datetime.now(timezone.utc)
+    night = solar.is_night(airport.lat, airport.lon, when)
+    nxt = solar.next_transition(airport.lat, airport.lon, when)
+    return JSONResponse({
+        "ident": airport.ident,
+        "at": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "mode": "night" if night else "day",
+        "sun_elevation_deg": round(solar.sun_elevation_deg(airport.lat, airport.lon, when), 2),
+        # None during polar day/night, where there is no transition to name.
+        "next_transition": nxt[0].strftime("%Y-%m-%dT%H:%M:%SZ") if nxt else None,
+        "next_transition_to": ("night" if nxt[1] else "day") if nxt else None,
+        "basis": "civil twilight (CARs 101.01)",
+    })
 
 
 @app.get("/api/route")

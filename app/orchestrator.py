@@ -32,6 +32,7 @@ from app.models import (
 )
 from app.services import cfs_links, hazards as hz
 from app.services import magvar
+from app.services import solar
 from app.services import trends
 from app.services import timeline as tl
 from app.services import weather as wx
@@ -72,6 +73,9 @@ WINDOW_PAD_MIN = 30
 # which collapsed every sub-hour ETD onto the same answer - with the selector
 # now offering quarter-hours, that would make three of its options a lie.
 NOW_GRACE_MIN = 30
+# How far ahead an observation still earns its place on the card. Beyond this the
+# METAR, its history and the trends drawn from it are dropped - see `show_obs`.
+OBS_RELEVANT_HRS = 3
 
 ENROUTE_CORRIDOR_NM = 5.0
 ENROUTE_MAX_FIELDS = 20
@@ -419,6 +423,7 @@ def _assess_endpoint(
     when: datetime | None = None, is_now: bool = True,
     taf_segments: list[dict] | None = None,
     span: tuple[datetime, datetime] | None = None,
+    show_obs: bool = True, history_unavailable: bool = False,
 ) -> AirportAssessment:
     lat, lon = airport.lat, airport.lon
     runways = fill_headings(ap.get_runways(airport.ident), lat, lon)
@@ -438,9 +443,13 @@ def _assess_endpoint(
         weather.wind_dir_mag = _round10(weather.wind_dir_mag)
 
     trend_notes: list[str] = []
-    if history:
+    if history and show_obs:
         parsed = [wx.parse_metar(r) for r in reversed(history)]  # oldest first
         trend_notes, _low = trends.analyze(parsed)
+    if not show_obs:
+        # The forecast path still carries the raw METAR for reference; drop it so
+        # a card for a departure hours away shows no observation at all.
+        weather.raw_metar = None
 
     rw = _rw_with_mag(best_runway(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt), lat, lon)
     verdict, checks, tchecks, n = decision(
@@ -481,7 +490,9 @@ def _assess_endpoint(
         notam_count=len(site_notams), notams=site_notams,
         cfs_url=links["cfs_url"], info_url=links["info_url"], info_label=links.get("info_label"),
         access_note=ap.access_note(airport.ident), altitude=alt,
-        metar_history=(history or [])[:8], trends=trend_notes,
+        metar_history=(history or [])[:8] if show_obs else [],
+        trends=trend_notes if show_obs else [],
+        history_unavailable=history_unavailable,
     )
 
 
@@ -868,6 +879,12 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     now = datetime.now(timezone.utc)
     etd_utc = etd or now
     is_now = etd is None or etd <= now + timedelta(minutes=NOW_GRACE_MIN)
+    # An observation describes the present half hour. Once the ETD is hours out
+    # the TAF/HRDPS forecast is the only thing gating the flight, so the METAR,
+    # its history and the trends drawn from it are not just useless but actively
+    # misleading - they invite anchoring on conditions that will not exist at
+    # departure. Past this horizon they are neither fetched nor shown.
+    show_obs = etd_utc <= now + timedelta(hours=OBS_RELEVANT_HRS)
     t_prov = flight_time_hr(distance, get_cruise_kt())
     eta_prov = etd_utc + timedelta(hours=t_prov)
 
@@ -889,8 +906,12 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         _safe(cfps.metars(all_sites), {}),
         _safe(cfps.tafs(all_sites), {}),
         # METAR history for trends: aviationweather.gov (multi-hour), CFPS fallback.
-        _safe(awc.metar_history(sites, 6), {}),
-        _safe(cfps.metar_history(sites), {}),
+        # ``None`` (not {}) is the failure default, so "the service did not answer"
+        # stays distinguishable from "it answered, there is nothing there" - the
+        # card says which. Skipped entirely for a distant ETD (`show_obs`), which
+        # also takes the flakiest upstream out of the path for those requests.
+        _safe(awc.metar_history(sites, 6), None) if show_obs else _noop({}),
+        _safe(cfps.metar_history(sites), None) if show_obs else _noop({}),
         _safe(cfps.notams(sites), {}),
         # SIGMETs: aviationweather.gov international SIGMETs (covers Canadian FIRs),
         # filtered to those whose area is near the route, unioned with CFPS below.
@@ -908,6 +929,11 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # Enroute sampling points, previously fetched one at a time in a loop.
         *(_safe(openmeteo.forecast(mlat, mlon, days), {}) for mlat, mlon in mids),
     )
+    # Both upstreams failing is what used to render as an empty panel that looked
+    # exactly like "no trend to report" - the reason trends seemed to come and go
+    # between two runs of the same route. Track it so the card can say so.
+    hist_failed = show_obs and awc_hist is None and cfps_hist is None
+    awc_hist, cfps_hist = awc_hist or {}, cfps_hist or {}
     metar_hist = {s: (awc_hist.get(s) or cfps_hist.get(s, [])) for s in sites}
     # The international SIGMET feed is global, so keep only entries whose plotted
     # area is near the route. A SIGMET with no usable coordinates can't be tied to
@@ -935,7 +961,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         )
     else:
         dep_ens = dest_ens = None
-    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens, flight_rules=flight_rules, when=etd_utc, is_now=is_now, taf_segments=dep_segs, span=flight_span(etd_utc, eta_prov))
+    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens, flight_rules=flight_rules, when=etd_utc, is_now=is_now, taf_segments=dep_segs, span=flight_span(etd_utc, eta_prov), show_obs=show_obs, history_unavailable=hist_failed)
 
     # Nearest reporting station for an endpoint that has no METAR of its own.
     async def _attach_nearby(assessment, airport, cands):
@@ -946,8 +972,11 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
             if m:
                 brg = initial_bearing_true(airport.lat, airport.lon, c.lat, c.lon)
                 d = haversine_nm(airport.lat, airport.lon, c.lat, c.lon)
-                hist = (await _safe(awc.metar_history([c.ident], 6), {})).get(c.ident, []) or [m]
-                tnotes, _low = trends.analyze([wx.parse_metar(r) for r in reversed(hist)])
+                # Same observation horizon as the endpoint cards: past it, this
+                # station's METAR and trends are dropped too, leaving its TAF -
+                # the only forecast the field has - to stand on its own.
+                hist = ((await _safe(awc.metar_history([c.ident], 6), {})).get(c.ident, []) or [m]) if show_obs else []
+                tnotes = trends.analyze([wx.parse_metar(r) for r in reversed(hist)])[0] if hist else []
                 # This station's TAF is the only forecast this field has, so it
                 # gets the same period split and flight-window highlight as an
                 # endpoint that reports its own - not a raw line to parse by eye.
@@ -955,7 +984,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
                 near_segs = wx.parse_taf_segments(near_taf or "")
                 assessment.nearby_station = NearbyStation(
                     ident=c.ident, name=c.name, distance_nm=round(d),
-                    direction=compass(brg), metar=m, taf=near_taf,
+                    direction=compass(brg), metar=m if show_obs else None, taf=near_taf,
                     taf_periods=_taf_periods(near_segs, span) if near_segs else [],
                     taf_valid_from=(min(s["start"] for s in near_segs).strftime("%Y-%m-%dT%H:%M:%SZ")
                                     if near_segs else None),
@@ -1010,7 +1039,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     eta_utc = etd_utc + timedelta(hours=flight_hr)
     span = flight_span(etd_utc, eta_utc)
 
-    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens, flight_rules=flight_rules, when=eta_utc, is_now=is_now, taf_segments=dest_segs, span=span)
+    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens, flight_rules=flight_rules, when=eta_utc, is_now=is_now, taf_segments=dest_segs, span=span, show_obs=show_obs, history_unavailable=hist_failed)
 
     # The departure was assessed before the winds-aloft pass refined the ETA, so
     # its TAF was flagged against the provisional window. Re-flag it against the
@@ -1155,6 +1184,15 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         notes.append("ETA estimated from cruise TAS - no winds aloft available")
     if beyond:
         notes.append(f"ETD is beyond the {settings.timeline_hours} h forecast horizon")
+    # A day departure can still be a night arrival. Say so rather than silently
+    # overriding the day/night selection - which set of minimums to fly is the
+    # pilot's call, but they should not learn about it in the circuit.
+    if mode == "day" and solar.is_night(dest.lat, dest.lon, eta_utc):
+        dusk = solar.last_transition(dest.lat, dest.lon, eta_utc)
+        when = f" ({_zhm(dusk[0])})" if dusk and dusk[1] else ""
+        notes.append(
+            f"ETA {_zhm(eta_utc)} is after evening civil twilight at {dest.ident}"
+            f"{when} - the arrival is a night landing")
     # Both cards are now flagged against the same ETD->ETA span, so "any period
     # in window" no longer distinguishes the two ends. These notes are about
     # *validity* - whether the TAF reaches your departure / arrival instant at
@@ -1267,6 +1305,8 @@ async def suggest(
     now = datetime.now(timezone.utc)
     etd_utc = etd or now
     is_now = etd is None or etd <= now + timedelta(minutes=NOW_GRACE_MIN)
+    # Same observation horizon as the route cards - see `show_obs` there.
+    show_obs = etd_utc <= now + timedelta(hours=OBS_RELEVANT_HRS)
     # The furthest candidate sets how far past the ETD we might need to read, so
     # a +48 h ETD on a long leg still lands inside the forecast we asked for.
     max_leg_hr = flight_time_hr(max([d for _a, d in candidates], default=0.0),
@@ -1316,7 +1356,7 @@ async def suggest(
             ceiling_mode="xc",
             when=etd_utc + timedelta(hours=flight_time_hr(dist, cruise_kt,
                                                           alt.groundspeed_kt if alt else None)),
-            is_now=is_now,
+            is_now=is_now, show_obs=show_obs,
         )
         # Make the cloud gate visible: if winds are known but the ceiling left no
         # legal VFR cruising altitude (≥500 ft below the deck), say so on the card
@@ -1354,6 +1394,11 @@ async def _safe(coro, default):
         return await coro
     except Exception:
         return default
+
+
+async def _noop(value):
+    """A ready-made awaitable, to keep a skipped fetch in its `gather` slot."""
+    return value
 
 
 async def _ens_if_needed(metar, airport, days):
@@ -1396,12 +1441,15 @@ async def assess_circuits(
     # Use ensemble only when there is no METAR.
     ensemble = None if metar else ens_d
 
-    awc_hist = await _safe(awc.metar_history([aerodrome_ident], 6), {})
-    history = awc_hist.get(aerodrome_ident, [])
+    # Same observation horizon as the route cards - see `show_obs` there.
+    show_obs = etd_utc <= now + timedelta(hours=OBS_RELEVANT_HRS)
+    awc_hist = await _safe(awc.metar_history([aerodrome_ident], 6), None) if show_obs else {}
+    history = (awc_hist or {}).get(aerodrome_ident, [])
 
     return _assess_endpoint(
         airport, metar, taf, fc_d, notam_d, mode, manual_threats,
         distance_nm=0.0, bearing=0.0, alt=None,
         history=history, ensemble=ensemble, when=etd_utc, is_now=is_now,
         flight_rules=flight_rules, ceiling_mode="circuit",
+        show_obs=show_obs, history_unavailable=(show_obs and awc_hist is None),
     )

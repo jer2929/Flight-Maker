@@ -51,6 +51,13 @@ ifr_minimums:
 # preset (below) supplies both the per-threat weights and this rule; the values
 # here are the built-in default ("standard").
 threat_stacking:
+  # Whether a night flight carries "night operations" into the threat stack.
+  # Pilots differ on this - for some, night is the single biggest risk multiplier;
+  # for others, a current night-rated pilot over familiar terrain in stable VMC is
+  # just a normal flight. On by default, which is the original decision card.
+  # Independent of the day/night toggle itself: night always selects your night
+  # ceiling and visibility minimums, whatever this is set to.
+  night_as_threat: true
   major_threats:
     - night_operations
     - actual_imc

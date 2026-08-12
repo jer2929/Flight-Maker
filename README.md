@@ -50,6 +50,22 @@ silently assess the wrong flight), and if the time you picked passes while the t
 sits open the control resets to **Now** and says so rather than changing quietly
 underneath you.
 
+### The observation horizon
+An observation describes the next half hour, not the next afternoon. Once the ETD
+is **3 h or more** out, the current METAR, the METAR history and the trends drawn
+from it are dropped from the cards entirely - the forecast is the only thing
+gating that flight, and a three-hour-old ceiling invites anchoring on conditions
+that will not exist at departure. They are not merely hidden but never fetched,
+which also takes the flakiest upstream out of the request.
+
+One consequence worth knowing: inside the horizon, "lowering ceilings" can be
+raised either by the model trend *or* by what the last few METARs actually did.
+Past it, only the model trend can raise it.
+
+When the observation-history service is asked and doesn't answer, the card now
+says so. It used to render exactly the same empty space as "nothing is trending",
+which is why trends could appear on one run of a route and vanish on the next.
+
 ### The flight window
 Everything is assessed for the span you are actually airborne - **ETD→ETA, ±30 min**
 for taxi and approach - not for a single instant:
@@ -101,7 +117,8 @@ is situational awareness only and never affects your verdict.
 ### Two-trigger threat stacking (general-audience)
 The decision card stacks "major threats": some are derived automatically from the
 forecast (actual IMC, convective, icing, strong/gusty winds, turbulence/shear),
-night is set by the day/night toggle, **standing factors** come from your saved
+night is set by the day/night toggle (and is opt-out, see below), **standing
+factors** come from your saved
 profile, and **unfamiliar / complex airspace** is a per-flight toggle (it's
 pilot-relative, so it works at any airport). A **conservatism preset** sets how
 readily a stack escalates the verdict:
@@ -111,6 +128,27 @@ readily a stack escalates the verdict:
 | **Standard** *(default)* | One threat → mitigate, two → no-go (the original card). |
 | **Confident** | Tolerates one threat; two → mitigate, three → no-go. |
 | **Cautious** | A single *serious* weather threat (IMC / convective / icing) is disqualifying. |
+
+### Day or night, and whether night is a threat
+The day/night toggle **selects itself from your ETD**, using civil twilight at
+the departure aerodrome: night is the CARs 101.01 definition - from the end of
+evening civil twilight to the beginning of morning civil twilight - not sunset to
+sunrise, and not the one-hour-either-side currency window. It defaulted to Day on
+every load before, so a 0200Z departure was quietly assessed against daytime
+ceiling and visibility minimums unless you remembered to flip it. Clicking either
+button still wins; the override holds until you change the ETD or the aerodrome,
+which is a different flight.
+
+A day departure can still be a night arrival. Rather than override your choice,
+the flight window says so: *"ETA 2312Z is after evening civil twilight at CYKZ
+(2251Z) - the arrival is a night landing."*
+
+Whether night **stacks a threat** on the decision card is yours to set, in
+My Minimums → **Night operations**. It is on by default (the original card). For
+some pilots night is the single biggest risk multiplier; for others, current and
+over familiar terrain in stable VMC, it is a normal flight. Turning it off changes
+only the threat stack - night still selects your **night** ceiling and visibility
+minimums either way.
 
 > **Still using built-in defaults:** the numeric thresholds that *derive* the
 > automatic weather threats (e.g. wind ≥ 15 kt counts as "strong") are not yet

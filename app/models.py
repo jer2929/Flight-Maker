@@ -269,6 +269,11 @@ class AirportAssessment(BaseModel):
     altitude: Optional[AltitudeRecommendation] = None
     metar_history: list[str] = []   # recent raw METARs, newest first
     trends: list[str] = []          # inferred aviation trends from that history
+    # True when the observation-history service was asked and did not answer, as
+    # opposed to answering with nothing. Without this the card renders the same
+    # empty space either way, which is why trends appeared to come and go
+    # between two runs of the same route.
+    history_unavailable: bool = False
     nearby_station: Optional[NearbyStation] = None   # when this field has no METAR
 
 
