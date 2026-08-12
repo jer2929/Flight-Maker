@@ -202,6 +202,8 @@ def _validate_prefs(prefs: dict, base: dict) -> dict:
         clean["conservatism"] = cons
     if isinstance(prefs.get("imc_as_threat"), bool):
         clean["imc_as_threat"] = prefs["imc_as_threat"]
+    if isinstance(prefs.get("night_as_threat"), bool):
+        clean["night_as_threat"] = prefs["night_as_threat"]
     return clean
 
 
@@ -240,6 +242,8 @@ def merge_limits(base: dict, overrides: dict) -> dict:
         hl["weather_flags"] = clean["weather_flags"]
     if "imc_as_threat" in clean:
         out.setdefault("ifr_minimums", {})["imc_as_threat"] = clean["imc_as_threat"]
+    if "night_as_threat" in clean:
+        out["threat_stacking"]["night_as_threat"] = clean["night_as_threat"]
     if "conservatism" in clean:
         _apply_conservatism(out, clean["conservatism"])
     return out

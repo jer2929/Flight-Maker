@@ -341,3 +341,48 @@ def test_gfa_parse_handles_unexpected_shape():
     assert _gfa_parse([{"type": "image", "text": "not json"},
                        {"type": "metar", "text": "x"},
                        {"type": "image", "text": _json.dumps({"sub_product": "CLDWX"})}]) == {}
+
+
+# ---- Night operations as an opt-out threat -------------------------------
+# Night reaches derive_threats as a manual threat, set from the day/night toggle.
+# Whether it belongs in the stack at all is the pilot's call.
+
+def _night_wx():
+    return WeatherSummary(wind_dir_true=270, wind_kt=6, visibility_sm=15, ceiling_agl_ft=8000)
+
+
+def test_night_counts_as_threat_by_default():
+    present = derive_threats(_night_wx(), False, manual_threats=["night_operations"])
+    assert "night_operations" in present
+
+
+def test_night_dropped_when_opted_out():
+    with limits_override({"night_as_threat": False}):
+        present = derive_threats(_night_wx(), False, manual_threats=["night_operations"])
+        assert "night_operations" not in present
+
+
+def test_night_opt_out_lowers_the_stack_not_the_minimums():
+    """Opting out removes the threat row, but night still selects the *night*
+    ceiling and visibility limits - those are two different things."""
+    wx = _night_wx()
+    _v, _c, threats_on, n_on = decision(wx, None, "night", False,
+                                        manual_threats=["night_operations"])
+    with limits_override({"night_as_threat": False}):
+        _v, checks_off, threats_off, n_off = decision(wx, None, "night", False,
+                                                      manual_threats=["night_operations"])
+    assert n_on == n_off + 1
+    assert any(t.key == "night_operations" and t.present for t in threats_on)
+    # The row goes entirely rather than showing a permanent "absent".
+    assert not any(t.key == "night_operations" for t in threats_off)
+    # Night XC cloud base (12,000 ft) still applies, not the 4,000 ft day limit.
+    ceiling = next(c for c in checks_off if c.key == "ceiling")
+    assert "12,000" in ceiling.limit_text or "12000" in ceiling.limit_text
+
+
+def test_night_opt_out_is_not_bypassable_by_a_forged_query_string():
+    # The gate is in derive_threats, so it covers anything that could add the key.
+    with limits_override({"night_as_threat": False}):
+        present = derive_threats(_night_wx(), True,
+                                 manual_threats=["night_operations", "terrain_critical"])
+        assert present == {"terrain_critical", "unfamiliar_or_complex_airspace"}

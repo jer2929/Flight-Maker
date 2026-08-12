@@ -386,7 +386,26 @@ function wire() {
   $$(".seg-btn").forEach((b) => b.addEventListener("click", () => {
     b.closest(".seg").querySelectorAll(".seg-btn").forEach((x) => x.classList.toggle("active", x === b));
     if (b.dataset.rules !== undefined) renderExtraThreats();
+    // Picking day/night yourself overrides the civil-twilight auto-selection
+    // until the ETD or aerodrome changes.
+    if (b.dataset.mode !== undefined) {
+      MODE_MANUAL = true;
+      $("#mode-seg").classList.remove("auto");
+      const note = $("#mode-note");
+      if (note) note.textContent = "Set by you";
+    }
   }));
+
+  // A new ETD or a new departure aerodrome is a different flight, so the manual
+  // override lapses and day/night is derived again.
+  for (const id of ETD_IDS) {
+    const sel = $(id);
+    if (sel) sel.addEventListener("change", () => { MODE_MANUAL = false; refreshAutoDayNight(); });
+  }
+  for (const id of ["#dep", "#circ-aerodrome"]) {
+    const el = $(id);
+    if (el) el.addEventListener("change", () => { MODE_MANUAL = false; refreshAutoDayNight(); });
+  }
   $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
   $("#run-route").addEventListener("click", runRoute);
   $("#run-discovery").addEventListener("click", runDiscovery);
@@ -413,6 +432,9 @@ function wire() {
   $$("[data-ftype]").forEach((b) => b.addEventListener("click", () => {
     $$("[data-ftype]").forEach((x) => x.classList.toggle("active", x === b));
     applyFlightType(b.dataset.ftype);
+    // Circuits assess a different aerodrome, so re-derive day/night for it.
+    MODE_MANUAL = false;
+    refreshAutoDayNight();
   }));
 }
 
@@ -434,6 +456,61 @@ function applyFlightType(ftype) {
 const currentMode = () => ($$(".seg-btn[data-mode]").find((b) => b.classList.contains("active")) || {}).dataset?.mode || "day";
 const currentFlightRules = () => ($$(".seg-btn[data-rules]").find((b) => b.classList.contains("active")) || {}).dataset?.rules || "vfr";
 
+// ---------- Auto day/night ----------
+// The toggle used to default to Day on every load, so a 0200Z departure was
+// quietly assessed against daytime ceiling and visibility minimums unless you
+// remembered to flip it. It now selects itself from the ETD, using civil
+// twilight at the departure aerodrome (CARs 101.01: night runs from the end of
+// evening civil twilight to the beginning of morning civil twilight).
+//
+// A manual click wins and sticks - but only until the ETD or the aerodrome
+// changes, because that is a different flight and the old override says nothing
+// about it.
+let MODE_MANUAL = false;
+
+// Which aerodrome and time the current tab is actually planning from.
+function autoDayNightContext() {
+  const tab = ($$(".tab.active")[0] || {}).dataset?.tab;
+  if (tab === "discovery") return { ident: baseIdent(), etd: ($("#d-etd") || {}).value };
+  if (tab === "route") {
+    const ident = currentFlightType() === "circuits"
+      ? ($("#circ-aerodrome").value.trim() || baseIdent())
+      : ($("#dep").value.trim() || baseIdent());
+    return { ident, etd: ($("#etd") || {}).value };
+  }
+  return null;  // My Minimums - the flight controls are hidden there
+}
+
+function setMode(mode, auto) {
+  const btn = $$(".seg-btn[data-mode]").find((b) => b.dataset.mode === mode);
+  if (!btn) return;
+  btn.closest(".seg").querySelectorAll(".seg-btn")
+     .forEach((x) => x.classList.toggle("active", x === btn));
+  const seg = $("#mode-seg");
+  if (seg) seg.classList.toggle("auto", !!auto);
+}
+
+async function refreshAutoDayNight() {
+  if (MODE_MANUAL) return;
+  const ctx = autoDayNightContext();
+  if (!ctx || !ctx.ident) return;
+  const p = new URLSearchParams({ ident: ctx.ident });
+  if (ctx.etd && ctx.etd !== "now") p.set("at", ctx.etd);
+  try {
+    const r = await fetch(`/api/daynight?${p}`);
+    if (!r.ok) return;                       // unknown aerodrome mid-typing
+    const d = await r.json();
+    if (MODE_MANUAL) return;                 // clicked while the request was in flight
+    setMode(d.mode, true);
+    const note = $("#mode-note");
+    if (note) {
+      note.textContent = d.next_transition
+        ? `Auto from civil twilight · ${d.next_transition_to === "night" ? "night" : "day"} from ${zHM(d.next_transition)}`
+        : "Auto from civil twilight";
+    }
+  } catch { /* leave the toggle as it stands */ }
+}
+
 function switchTab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   $("#tab-route").classList.toggle("hidden", name !== "route");
@@ -443,14 +520,17 @@ function switchTab(name) {
   // meaningless on the My Minimums tab - hide them there.
   $("#flight-controls").classList.toggle("hidden", name === "settings");
   // Refresh the ETD hours - the list goes stale in a tab left open.
-  if (name !== "settings") buildEtdOptions();
+  if (name !== "settings") { buildEtdOptions(); refreshAutoDayNight(); }
 }
 
 // This flight's threats = per-flight toggles + night.
 function threatsParam() {
   const set = new Set();
   $$(".threat").filter((c) => c.checked).forEach((c) => set.add(c.value));
-  if (currentMode() === "night") set.add("night_operations");
+  // Night rides in as a manual threat, unless you've said night isn't one for
+  // you. The backend enforces the same rule - this keeps the on-screen threat
+  // mitigations in step with the card.
+  if (currentMode() === "night" && effectiveLimits().night_as_threat) set.add("night_operations");
   return [...set].join(",");
 }
 // Backend prefs payload: custom minimums and/or a non-default conservatism preset.
@@ -480,6 +560,8 @@ function effectiveLimits() {
     ifr_visibility_sm:  { ...(difr.visibility_sm   || {}), ...(m.ifr_visibility_sm  || {}) },
     weather_flags:   m.weather_flags || d.weather_flags,
     imc_as_threat:   (m.imc_as_threat !== undefined) ? m.imc_as_threat : !!difr.imc_as_threat,
+    night_as_threat: (m.night_as_threat !== undefined) ? m.night_as_threat
+                                                       : CONFIG.default_night_as_threat !== false,
   };
 }
 
@@ -497,7 +579,14 @@ function autocomplete(inputId, listId) {
       list.innerHTML = items.map((a) =>
         `<div class="ac-item" data-id="${a.ident}"><span class="id">${a.ident}</span> <span class="nm">${a.name}${a.municipality ? " · " + a.municipality : ""}</span></div>`).join("");
       list.classList.remove("hidden");
-      $$(`#${listId} .ac-item`).forEach((el) => el.addEventListener("click", () => { input.value = el.dataset.id; hide(); }));
+      // Setting .value in script does not fire "change", and picking an
+      // aerodrome from the list has to reach the listeners that react to it
+      // (day/night auto-selection) exactly as typing one does.
+      $$(`#${listId} .ac-item`).forEach((el) => el.addEventListener("click", () => {
+        input.value = el.dataset.id;
+        hide();
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }));
     }, 180);
   });
   input.addEventListener("blur", () => setTimeout(hide, 200));
@@ -1143,7 +1232,14 @@ function enrouteRow(e) {
 
 function trendsBlock(a) {
   const t = a.trends || [];
-  if (!t.length) return "";
+  // An empty panel used to mean both "nothing is trending" and "the observation
+  // service did not answer", so trends appeared to come and go between two runs
+  // of the same route. Say which, so an absent panel always means the former.
+  if (!t.length) {
+    return a.history_unavailable
+      ? `<div class="trends-na">⚠ Trend data unavailable - the observation history service did not respond. Your verdict is unaffected.</div>`
+      : "";
+  }
   return `<details class="trends" open><summary>Trends from recent METARs (${t.length})</summary>${t.map((x) => `<div class="trend">${x}</div>`).join("")}</details>`;
 }
 function nearbyBlock(n, timeLabel) {
@@ -1479,6 +1575,8 @@ function fillProfileForm() {
   $$(".wxflag").forEach((c) => (c.checked = active.has(c.value)));
   const imc = $("#set-imc-threat");
   if (imc) imc.checked = !!eff.imc_as_threat;
+  const night = $("#set-night-threat");
+  if (night) night.checked = !!eff.night_as_threat;
 }
 
 function readProfileForm() {
@@ -1502,6 +1600,11 @@ function readProfileForm() {
   // IMC-as-threat: only persist when it differs from the default (off).
   const imcEl = $("#set-imc-threat");
   if (imcEl && imcEl.checked !== !!difr.imc_as_threat) mins.imc_as_threat = imcEl.checked;
+
+  // Night-as-threat: same, against a default of on.
+  const nightDefault = CONFIG.default_night_as_threat !== false;
+  const nightEl = $("#set-night-threat");
+  if (nightEl && nightEl.checked !== nightDefault) mins.night_as_threat = nightEl.checked;
 
   const base = $("#set-base").value.trim().toUpperCase();
   const preset = ($$('input[name="conservatism"]').find((r) => r.checked) || {}).value || CONFIG.default_conservatism;
@@ -1565,10 +1668,13 @@ function renderMinimums() {
   const presetLabel = (CONFIG.conservatism_presets.find((p) => p.key === curPreset) || {}).label || curPreset;
   const consRow = row("Conservatism", presetLabel, "Standard", "", curPreset !== CONFIG.default_conservatism);
   const imcRow = row("IMC as threat (IFR)", eff.imc_as_threat ? "on" : "off", "off", "", !!eff.imc_as_threat);
+  const nightDefault = CONFIG.default_night_as_threat !== false;
+  const nightRow = row("Night as threat", eff.night_as_threat ? "on" : "off",
+    nightDefault ? "on" : "off", "", !!eff.night_as_threat !== nightDefault);
   $("#minimums-readout").innerHTML =
     `<div class="min-banner ${custom ? "custom" : ""}">${custom
       ? "Using your saved profile (★ = changed from default)."
-      : "Using the built-in default profile."}</div>${baseRow}${minRows}${flagsRow}${imcRow}${consRow}`;
+      : "Using the built-in default profile."}</div>${baseRow}${minRows}${flagsRow}${imcRow}${nightRow}${consRow}`;
 }
 
 // Self-assessment configurator (fitness/pressure items and recency, stored locally).

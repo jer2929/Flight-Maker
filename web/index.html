@@ -101,6 +101,8 @@
           <button type="button" class="seg-btn active" data-mode="day">Day flight</button>
           <button type="button" class="seg-btn" data-mode="night">Night flight</button>
         </div>
+        <div class="set-hint mode-note" id="mode-note"
+             title="Night is the CARs 101.01 definition: end of evening civil twilight to beginning of morning civil twilight"></div>
       </div>
       <div class="control">Flight rules
         <div class="seg" id="fr-seg">
@@ -295,6 +297,15 @@
             </div>
           </div>
         </div>
+
+        <!-- Applies under both VFR and IFR, so it sits outside the rule card. -->
+        <fieldset class="set-group night-opt">
+          <legend>Night operations</legend>
+          <label class="control checkbox"><input type="checkbox" id="set-night-threat" /> Count night operations as a threat</label>
+          <p class="set-hint">Whether a night flight stacks a threat on the decision card. Some pilots
+            treat night as their biggest risk multiplier; others, current and over familiar terrain in
+            stable VMC, don't. Night still selects your night ceiling and visibility minimums either way.</p>
+        </fieldset>
 
         <fieldset class="set-group">
           <legend>Recent experience - minimum hours in last 30 days</legend>

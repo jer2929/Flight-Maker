@@ -272,7 +272,10 @@ def derive_threats(
     is NOT a stacking threat - it is already an automatic NO-GO via the ceiling and
     visibility hard limits, so counting it again would be redundant and misleading.
     Under IFR, IMC is *expected*, so it only counts when the pilot has opted in
-    (``ifr_minimums.imc_as_threat``)."""
+    (``ifr_minimums.imc_as_threat``).
+
+    Night operations are the mirror image: counted by default, droppable via
+    ``threat_stacking.night_as_threat``."""
     known = set(get_limits()["threat_stacking"]["major_threats"])
     threats: set[str] = {t for t in (manual_threats or []) if t in known}
     # Single-pilot IFR without autopilot only makes sense as an IFR threat - drop
@@ -298,6 +301,12 @@ def derive_threats(
         threats.add("actual_imc")
     if is_complex_airspace:
         threats.add("unfamiliar_or_complex_airspace")
+    # Night reaches here as a manual threat, set from the day/night toggle. Pilots
+    # differ on whether it belongs in the stack at all, so it is opt-out - and
+    # dropping it here covers every path that could have added it. This does not
+    # touch the *mode*: night still selects night ceiling/visibility minimums.
+    if not get_limits()["threat_stacking"].get("night_as_threat", True):
+        threats.discard("night_operations")
     return threats
 
 
@@ -308,6 +317,10 @@ def threat_check_list(present: set[str]) -> list[ThreatCheck]:
     # pilot factor, and actual IMC is a hard NO-GO under VFR (shown only for IFR
     # opt-in when present).
     hide_when_absent = {"single_pilot_ifr_no_autopilot", "actual_imc"}
+    # Opted out of night as a threat: drop the row rather than show a permanent
+    # "absent" that reads as though a night flight had passed a check.
+    if not get_limits()["threat_stacking"].get("night_as_threat", True):
+        hide_when_absent = hide_when_absent | {"night_operations"}
     return [
         ThreatCheck(key=k, label=THREAT_LABELS.get(k, k.replace("_", " ").title()),
                     present=k in present)

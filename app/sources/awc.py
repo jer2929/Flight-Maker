@@ -6,6 +6,8 @@ Canadian reporting stations. Falls back gracefully when unreachable.
 """
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 
 from app.config import get_settings
@@ -13,6 +15,29 @@ from app.sources import cache
 
 _METAR_URL = "https://aviationweather.gov/api/data/metar"
 _ISIGMET_URL = "https://aviationweather.gov/api/data/isigmet"
+
+# aviationweather.gov throttles clients that don't identify themselves.
+_HEADERS = {"User-Agent": "Minima/0.2 (flight planning; personal minimums)"}
+
+
+async def _get_json(url: str, params: dict, attempts: int = 2):
+    """GET with one retry. This endpoint fails transiently often enough that a
+    single slow response used to be the difference between a card showing METAR
+    trends and showing nothing at all - with nothing to say which had happened.
+    """
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            async with httpx.AsyncClient(timeout=get_settings().request_timeout,
+                                         headers=_HEADERS) as client:
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:  # timeout, 5xx, 429, malformed JSON
+            last = exc
+            if i + 1 < attempts:
+                await asyncio.sleep(1.0)
+    raise last
 
 
 async def isigmets() -> list[dict]:
@@ -24,10 +49,7 @@ async def isigmets() -> list[dict]:
     if cached is not None:
         return cached
     try:
-        async with httpx.AsyncClient(timeout=get_settings().request_timeout) as client:
-            resp = await client.get(_ISIGMET_URL, params={"format": "json"})
-            resp.raise_for_status()
-            data = resp.json()
+        data = await _get_json(_ISIGMET_URL, {"format": "json"})
     except Exception:
         return []
     out: list[dict] = []
@@ -56,11 +78,8 @@ async def metar_history(idents: list[str], hours: int = 6) -> dict[str, list[str
     if cached is not None:
         return cached
 
-    params = {"ids": ",".join(idents), "format": "json", "hours": hours}
-    async with httpx.AsyncClient(timeout=get_settings().request_timeout) as client:
-        resp = await client.get(_METAR_URL, params=params)
-        resp.raise_for_status()
-        data = resp.json()
+    data = await _get_json(_METAR_URL,
+                           {"ids": ",".join(idents), "format": "json", "hours": hours})
 
     rows: dict[str, list[tuple[int, str]]] = {}
     for item in data if isinstance(data, list) else []:
