@@ -346,24 +346,33 @@ def is_prob(seg: dict) -> bool:
 
 
 def hazards_in_window(segments: list[dict], start: datetime,
-                      end: datetime) -> tuple[set[str], list[dict]]:
-    """Hazards forecast during ``[start, end]``, and those forecast outside it.
+                      end: datetime) -> tuple[set[str], list[dict], set[str]]:
+    """Hazards forecast during ``[start, end]``, split by how firm they are.
 
-    Returns ``(in_window_flags, out_of_window_periods)``. The second element
-    keeps the periods themselves so the caller can tell the pilot *when* a
-    hazard it chose not to gate on is expected.
+    Returns ``(firm_flags, out_of_window_periods, prob_flags)``:
+
+    * ``firm_flags``  - from base groups and TEMPO. The forecaster expects these.
+    * ``prob_flags``  - from PROB30/PROB40 only, and *not* included in the firm
+      set. A 30-40% chance of a thunderstorm is a different claim from a TEMPO
+      one, and folding them together made a PROB30 TSRA a hard NO-GO by the same
+      path as a forecast one. The caller decides what to do with these.
+    * the middle element keeps the out-of-window periods themselves, so the
+      caller can tell the pilot *when* a hazard it chose not to gate on is due.
     """
-    inside: set[str] = set()
+    firm: set[str] = set()
+    prob: set[str] = set()
     outside: list[dict] = []
     for seg in taf_periods(segments):
         haz = seg["cond"].get("hazards") or []
         if not haz:
             continue
-        if _overlaps(seg, start, end):
-            inside |= set(haz)
-        else:
+        if not _overlaps(seg, start, end):
             outside.append(seg)
-    return inside, outside
+        elif is_prob(seg):
+            prob |= set(haz)
+        else:
+            firm |= set(haz)
+    return firm, outside, prob
 
 
 def _as_utc(dt: datetime) -> datetime:

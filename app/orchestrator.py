@@ -507,23 +507,28 @@ def _window_label(etd: datetime, eta: datetime) -> str:
 def _window_hazards(dep_segs: list[dict], dest_segs: list[dict],
                     etd: datetime, eta: datetime,
                     dep_ident: str = "", dest_ident: str = "",
-                    ) -> tuple[set[str], list[dict]]:
-    """TAF hazards forecast during the flight, and those forecast outside it.
+                    ) -> tuple[set[str], list[dict], set[str]]:
+    """TAF hazards during the flight, those outside it, and the PROB-only ones.
 
     Both endpoints are scoped to the *whole* ETD->ETA window rather than
     departure-at-ETD / destination-at-ETA: a thunderstorm over the departure
     field at your ETA still matters, because that's your return field and your
     most likely alternate. Padded by WINDOW_PAD_MIN for taxi, hold and approach.
+
+    The third element is the hazards that appear *only* under a PROB30/PROB40.
+    They are kept apart so the caller can apply the pilot's own weather flags to
+    them rather than treating a 30% chance as a forecast.
     """
-    lo = etd - timedelta(minutes=WINDOW_PAD_MIN)
-    hi = eta + timedelta(minutes=WINDOW_PAD_MIN)
+    lo, hi = flight_span(etd, eta)
     inside: set[str] = set()
+    prob_only: set[str] = set()
     outside: list[dict] = []
     for segs, ident in ((dep_segs, dep_ident), (dest_segs, dest_ident)):
         if not segs:
             continue
-        ins, outs = wx.hazards_in_window(segs, lo, hi)
+        ins, outs, probs = wx.hazards_in_window(segs, lo, hi)
         inside |= ins
+        prob_only |= probs
         for s in outs:
             outside.append({
                 "ident": ident,
@@ -532,7 +537,7 @@ def _window_hazards(dep_segs: list[dict], dest_segs: list[dict],
                 "label": s.get("label", ""),
                 "when": f"{_zhm(s['start'])}-{_zhm(s['end'])}",
             })
-    return inside, outside
+    return inside, outside, prob_only - inside
 
 
 def _corridor_airports(dep: Airport, dest: Airport,
@@ -1062,10 +1067,15 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # Hazards are scoped to the flight window, from the parsed TAF segments -
     # NOT grepped out of the raw text. A TS group valid tomorrow used to fail
     # this check today and force a NO-GO on a flight that never met it.
-    window_haz, out_of_window = _window_hazards(dep_segs, dest_segs, etd_utc, eta_utc,
-                                                dep.ident, dest.ident)
+    window_haz, out_of_window, prob_haz = _window_hazards(
+        dep_segs, dest_segs, etd_utc, eta_utc, dep.ident, dest.ident)
     metar_haz = (set(wx.detect_hazards(metars.get(dep.ident) or ""))
                  | set(wx.detect_hazards(metars.get(dest.ident) or "")))
+    # The PROB groups themselves, so a row that does gate can name the one that
+    # made it gate. Deduped across the two ends.
+    prob_labels = list(dict.fromkeys(
+        lab for a in (dep_a, dest_a) if a.weather.window_forecast
+        for lab in a.weather.window_forecast.prob_labels))
     weather_checks = hz.weather_checks(
         raw_text=area_text,
         area_text=area_text,
@@ -1075,6 +1085,9 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         out_of_window=out_of_window,
         etd_is_now=is_now,
         window_label=_window_label(etd_utc, eta_utc),
+        prob_hazards=prob_haz,
+        prob_labels=prob_labels,
+        gating_flags=set(L.get("weather_flags") or []),
         night=(mode == "night"),
         llj_kt=llj_kt,
         ceiling_points=ceiling_points,
