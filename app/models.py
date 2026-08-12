@@ -86,9 +86,13 @@ class LimitCheck(BaseModel):
     passed: bool
     group: str = "conditions"   # "conditions" | "weather"
     applicable: bool = True
-    advisory: bool = False  # passed, but needs human GFA/chart review
+    advisory: bool = False  # passed, but needs human review
     source: Optional[str] = None  # where the value came from
     location: Optional[str] = None  # e.g. "CYHM (destination)"
+    # Only the rows that genuinely want a chart carry a link. Not every advisory
+    # row is a "go read the GFA" row - out-of-window hazard notices, for one.
+    advisory_link: Optional[str] = None
+    advisory_link_label: Optional[str] = None
 
 
 class ThreatCheck(BaseModel):
@@ -139,6 +143,37 @@ class AltitudeRecommendation(BaseModel):
     levels: list[WindAloft] = []
 
 
+class TafPeriod(BaseModel):
+    """One TAF group, with the window it is actually in force for.
+
+    Base groups (MAIN/FM/BECMG) have had their end clipped to the next base's
+    start, so a period describes only the time it governs - see
+    ``weather.base_intervals``.
+    """
+
+    kind: str                   # "base" | "overlay"
+    label: str                  # MAIN | FM | BECMG | TEMPO | PROB30 | PROB40
+    start: str                  # ISO8601 Z
+    end: str                    # ISO8601 Z
+    text: str                   # the raw TAF slice for this group
+    in_window: bool = False     # covers this endpoint's relevant time
+    hazards: list[str] = []
+
+
+class FlightWindow(BaseModel):
+    """The time span the assessment was run for."""
+
+    etd_utc: str
+    eta_utc: str
+    is_now: bool                    # ETD is current - the METAR anchors departure
+    flight_time_hr: float
+    eta_provisional: bool = False   # no winds aloft, so ETA is cruise-TAS only
+    beyond_model_horizon: bool = False
+    taf_covers_etd: bool = False
+    taf_covers_eta: bool = False
+    notes: list[str] = []
+
+
 class WeatherSummary(BaseModel):
     raw_metar: Optional[str] = None
     raw_taf: Optional[str] = None
@@ -154,6 +189,14 @@ class WeatherSummary(BaseModel):
     model_vs_obs_wind_kt: Optional[float] = None  # confidence hint when both exist
     wind_ensemble_n: Optional[int] = None  # # of models blended (no-METAR wind)
     wind_models: list[str] = []            # model ids that contributed
+    valid_at: Optional[str] = None         # ISO Z these values describe (None = observation)
+    # Per-value provenance. A single ``source`` is a lie in the mixed case that
+    # TAF-over-model precedence creates (TAF ceiling + model wind), so each
+    # field carries its own. Keys: wind, gust, ceiling, visibility, hazards.
+    field_sources: dict[str, Source] = {}
+    taf_periods: list[TafPeriod] = []
+    taf_valid_from: Optional[str] = None
+    taf_valid_to: Optional[str] = None
 
 
 class AirportAssessment(BaseModel):
@@ -224,6 +267,30 @@ class Advisory(BaseModel):
     source_url: str    # deep link to where the product came from
 
 
+class EnrouteAirport(BaseModel):
+    """An aerodrome inside the route corridor - a precautionary-landing option.
+
+    Wind is modelled (HRDPS) at the estimated overfly time; most of these fields
+    are small and don't report a METAR.
+    """
+
+    airport: Airport
+    along_track_nm: float           # from the departure
+    cross_track_nm: float           # signed, + = right of course
+    side: str                       # "L" | "R" | "on course"
+    overfly_utc: Optional[str] = None
+    wind_dir_true: Optional[float] = None
+    wind_dir_mag: Optional[float] = None
+    wind_kt: Optional[float] = None
+    gust_kt: Optional[float] = None
+    wind_source: Source = Source.MODEL
+    best_runway: Optional[RunwayWind] = None
+    runway_components: list[RunwayComponent] = []
+    access_note: Optional[str] = None
+    cfs_url: Optional[str] = None
+    info_url: Optional[str] = None
+
+
 class RouteAssessment(BaseModel):
     departure: AirportAssessment
     destination: AirportAssessment
@@ -246,3 +313,9 @@ class RouteAssessment(BaseModel):
     pireps: list[Advisory] = []
     timeline: list[HourCondition] = []
     best_windows: list[BestWindow] = []
+    window: Optional[FlightWindow] = None
+    # Situational awareness only - never gates the verdict (see
+    # orchestrator._corridor_airports).
+    enroute_airports: list[EnrouteAirport] = []
+    enroute_airports_total: int = 0
+    enroute_corridor_nm: float = 5.0

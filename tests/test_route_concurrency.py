@@ -69,6 +69,9 @@ def upstreams(monkeypatch):
     monkeypatch.setattr(awc, "metar_history", stub("awc.metar_history", {}))
     monkeypatch.setattr(awc, "isigmets", stub("awc.isigmets", []))
     monkeypatch.setattr(openmeteo, "forecast", stub("openmeteo.forecast", {}))
+    # The en-route corridor fetch. Without this stub the route would attempt a
+    # live request that _safe swallows - failing slowly and silently.
+    monkeypatch.setattr(openmeteo, "forecast_many", stub("openmeteo.forecast_many", []))
     monkeypatch.setattr(openmeteo, "ensemble_wind_now",
                         stub("openmeteo.ensemble_wind_now", None))
     return t
@@ -95,7 +98,8 @@ def test_route_still_requests_every_upstream(upstreams):
     made = set(upstreams.calls)
     for required in ("cfps.metars", "cfps.tafs", "cfps.notams", "cfps.metar_history",
                      "cfps.sigmets", "cfps.airmets", "cfps.pireps",
-                     "awc.metar_history", "awc.isigmets", "openmeteo.forecast"):
+                     "awc.metar_history", "awc.isigmets", "openmeteo.forecast",
+                     "openmeteo.forecast_many"):
         assert required in made, f"{required} was never requested"
 
 

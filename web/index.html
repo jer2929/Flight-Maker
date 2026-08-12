@@ -19,7 +19,7 @@
   <meta name="mobile-web-app-capable" content="yes" />
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="/style.css?v=20260706" />
+  <link rel="stylesheet" href="/style.css?v=20260812" />
 </head>
 <body>
   <!-- Shared arrowheads for the wind-vs-runway diagrams. Defined once globally so the
@@ -142,6 +142,10 @@
         <input id="circ-aerodrome" autocomplete="off" placeholder="CYFD" />
         <div class="ac-list hidden" id="circ-list"></div>
       </div>
+      <div class="ac" id="etd-row" title="Conditions are assessed for this departure time - departure at your ETD, destination at your ETA">
+        <label for="etd">ETD (Zulu)</label>
+        <select id="etd" class="etd-sel"></select>
+      </div>
       <button id="run-route" class="primary">Assess route</button>
     </div>
 
@@ -152,6 +156,7 @@
     <div id="route-gfa"></div>
     <div id="route-radar"></div>
     <div id="route-endpoints" class="results two-col"></div>
+    <div id="route-enroute"></div>
     <div id="route-windows"></div>
     <div id="route-timeline"></div>
   </section>
@@ -166,6 +171,9 @@
         <label class="control">Radius
           <input type="range" id="radius" min="20" max="300" step="10" value="100" />
           <output id="radius-out">100 nm</output>
+        </label>
+        <label class="control" title="Each candidate is assessed at its own ETA - your ETD plus the time to get there">ETD (Zulu)
+          <select id="d-etd" class="etd-sel"></select>
         </label>
         <label class="control">Surface
           <select id="f-surface">
@@ -322,6 +330,6 @@
   </footer>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/app.js?v=20260706"></script>
+  <script src="/app.js?v=20260812"></script>
 </body>
 </html>

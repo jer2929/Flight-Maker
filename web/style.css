@@ -458,3 +458,47 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .hidden { display: none !important; }
 footer { max-width: 1000px; margin: 20px auto; padding: 0 20px 30px; color: var(--muted); font-size: .8rem; }
 .empty { color: var(--muted); padding: 14px; }
+
+/* ETD picker (route inputs + discovery filters) */
+.etd-sel { width: 100%; min-width: 150px; }
+.ac .etd-sel { min-width: 170px; }
+
+/* TAF split into its forecast periods, with the one covering your ETD/ETA
+   highlighted. Opacity alone isn't an accessible differentiator, so the green
+   left border and tinted background carry the signal too. */
+details.taf { margin: 8px 0 0; font-size: .8rem; }
+details.taf summary { cursor: pointer; color: var(--accent); }
+.taf-p {
+  display: grid; grid-template-columns: 62px 104px 1fr; gap: 8px;
+  padding: 2px 6px; font-family: ui-monospace, monospace; font-size: .76rem;
+  border-left: 3px solid transparent; opacity: .45;
+}
+.taf-p.in {
+  opacity: 1; border-left-color: var(--go); background: rgba(31, 138, 76, .10);
+}
+.taf-p .taf-k { color: #8fbcff; }        /* matches the .src.TAF chip */
+.taf-p.overlay .taf-k { font-style: italic; }
+.taf-p .taf-t { color: var(--muted); }
+.taf-p .taf-x { word-break: break-word; }
+.taf-raw { margin-top: 6px; opacity: .6; }
+@media (max-width: 520px) {
+  .taf-p { grid-template-columns: 52px 92px 1fr; font-size: .72rem; }
+}
+
+/* En-route corridor aerodromes */
+details.enroute > summary { cursor: pointer; color: var(--accent); font-size: .92rem; }
+.er-row { padding: 8px 0; border-top: 1px solid var(--line); }
+.er-row:first-of-type { border-top: none; }
+.er-head { font-size: .9rem; }
+.er-meta { color: var(--muted); font-size: .82rem; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 3px; }
+
+/* Checklist: passing rows collapse so failures lead */
+.cl-more { margin-top: 4px; }
+.cl-more > summary {
+  cursor: pointer; color: var(--muted); font-size: .82rem;
+  padding: 4px 6px; list-style: none;
+}
+.cl-more > summary::-webkit-details-marker { display: none; }
+.cl-more > summary::before { content: "▸ "; }
+.cl-more[open] > summary::before { content: "▾ "; }
+.cl-clean { color: #6ee7a0; font-size: .88rem; padding: 4px 6px; }

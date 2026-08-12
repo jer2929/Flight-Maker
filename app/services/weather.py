@@ -1,9 +1,10 @@
 """Parse METAR/TAF text into the fields the decision card cares about.
 
 METAR is parsed with the ``metar`` library (with regex fallbacks for the
-quirks of Canadian reports). TAF parsing is intentionally conservative: we scan
-the whole forecast for the worst-case wind/gust, lowest visibility/ceiling, and
-any hazard keywords, which is what the hard-limit checks need.
+quirks of Canadian reports). TAFs are parsed into *time-windowed segments*
+(:func:`parse_taf_segments`) so callers can ask what the forecast says at, or
+across, a particular time - a whole-TAF worst-case scan would fail a flight at
+noon for a thunderstorm forecast at midnight.
 """
 from __future__ import annotations
 
@@ -19,13 +20,26 @@ from metar import Metar
 # personal limits (e.g. a ≥9 SM XC minimum) into a false NO-GO.
 UNRESTRICTED_VIS_SM = 10.0
 
+# Convective tokens. These are the single source of truth for "is this text
+# convective" - the route hazard checks consume them from here rather than
+# keeping a second, subtly different regex of their own.
+#
+# TS appears inside longer tokens (TSRA, TSGR, VCTS, +TSPL), so the leading
+# boundary is a negative lookbehind for a letter rather than \b - but the token
+# must still *start* with TS, so a word like "BITS" doesn't match. CB likewise
+# appears glued to a cloud group (BKN030CB) as well as standing alone.
+TS_TOKEN_RE = r"(?<![A-Z])[+-]?(?:VC)?TS[A-Z]{0,4}\b"
+CB_RE = r"\b(?:[A-Z]{3}\d{3})?CB\b"
+
 # Map raw-text weather tokens to the decision-card hazard flags.
 HAZARD_PATTERNS: dict[str, str] = {
     r"\bFZRA\b": "freezing_rain",
     r"\bFZDZ\b": "freezing_rain",
-    r"[-+]?TSRA|\bTS\b|\bTSGR\b|\bTSSN\b": "thunderstorm",
+    TS_TOKEN_RE: "thunderstorm",
+    CB_RE: "thunderstorm",
     r"\bGR\b": "thunderstorm",
-    r"\bWS\b|LLWS": "low_level_wind_shear",
+    # "WS RWY 12" (METAR), "WS020/27045KT" (TAF shear group), "LLWS".
+    r"\bWS\b|\bWS\d{3}|LLWS": "low_level_wind_shear",
     r"\bFC\b": "thunderstorm",  # funnel cloud
 }
 
@@ -143,38 +157,6 @@ def detect_precip(text: str) -> Optional[str]:
     return None
 
 
-def parse_taf(raw: str) -> dict:
-    """Conservative worst-case scan of a TAF for hard-limit checks."""
-    out: dict = {
-        "max_wind_kt": None, "max_gust_kt": None,
-        "min_visibility_sm": None, "min_ceiling_agl_ft": None, "hazards": [],
-    }
-    if not raw:
-        return out
-    text = raw.strip().upper()
-
-    for m in re.finditer(r"\b(\d{3}|VRB)(\d{2,3})(?:G(\d{2,3}))?KT\b", text):
-        spd = float(m.group(2))
-        out["max_wind_kt"] = spd if out["max_wind_kt"] is None else max(out["max_wind_kt"], spd)
-        if m.group(3):
-            g = float(m.group(3))
-            out["max_gust_kt"] = g if out["max_gust_kt"] is None else max(out["max_gust_kt"], g)
-
-    # Statute-mile visibility groups like "6SM", "1/2SM", "P6SM"
-    for m in re.finditer(r"\bP?(\d{1,2})(?:\s+(\d)/(\d))?SM\b|\b(\d)/(\d)SM\b", text):
-        vis = _vis_value(m)
-        if vis is not None:
-            out["min_visibility_sm"] = vis if out["min_visibility_sm"] is None else min(out["min_visibility_sm"], vis)
-
-    # Ceilings: lowest BKN/OVC/VV layer (height in hundreds of ft)
-    for m in re.finditer(r"\b(BKN|OVC|VV)(\d{3})(?:CB|TCU)?\b", text):
-        ceil = float(m.group(2)) * 100
-        out["min_ceiling_agl_ft"] = ceil if out["min_ceiling_agl_ft"] is None else min(out["min_ceiling_agl_ft"], ceil)
-
-    out["hazards"] = detect_hazards(text)
-    return out
-
-
 def _vis_value(m: re.Match) -> Optional[float]:
     if m.group(1):
         whole = float(m.group(1))
@@ -266,24 +248,81 @@ def parse_taf_segments(raw: str) -> list[dict]:
             win = re.search(r"\b(\d{2})(\d{2})/(\d{2})(\d{2})\b", chunk)
             if fm:
                 start = _dhm(int(fm.group(1)), int(fm.group(2)), ref)
-                segments.append({"kind": "base", "start": start, "end": main_end,
+                segments.append({"kind": "base", "label": "FM", "text": chunk,
+                                 "start": start, "end": main_end,
                                  "cond": _parse_group(chunk)})
             elif chunk.startswith("BECMG") and win:
                 start = _dhm(int(win.group(1)), int(win.group(2)), ref)
-                segments.append({"kind": "base", "start": start, "end": main_end,
+                segments.append({"kind": "base", "label": "BECMG", "text": chunk,
+                                 "start": start, "end": main_end,
                                  "cond": _parse_group(chunk)})
             elif (chunk.startswith("TEMPO") or chunk.startswith("PROB")) and win:
                 start = _dhm(int(win.group(1)), int(win.group(2)), ref)
                 end = _dhm(int(win.group(3)), int(win.group(4)), ref)
-                segments.append({"kind": "overlay", "start": start, "end": end,
+                label = "TEMPO" if chunk.startswith("TEMPO") else chunk.split()[0]
+                segments.append({"kind": "overlay", "label": label, "text": chunk,
+                                 "start": start, "end": end,
                                  "cond": _parse_group(chunk)})
             else:
                 # First chunk = the main/base forecast body.
-                segments.append({"kind": "base", "start": main_start, "end": main_end,
+                segments.append({"kind": "base", "label": "MAIN", "text": chunk,
+                                 "start": main_start, "end": main_end,
                                  "cond": _parse_group(chunk)})
         return segments
     except Exception:
         return []
+
+
+def base_intervals(segments: list[dict]) -> list[dict]:
+    """Segments with each base group's end clipped to the next base's start.
+
+    ``parse_taf_segments`` stores every FM/BECMG base as ``start -> main_end``,
+    relying on "latest applicable start wins" in :func:`conditions_at`. That is
+    right for a *point* query but wrong for an *interval* one - unclipped, every
+    base group looks like it is in force until the end of the TAF, so asking
+    "what hazards fall inside 12:00-14:00Z" would match a group that only takes
+    over at 18:00Z. Overlays (TEMPO/PROB) already carry real windows and pass
+    through untouched.
+    """
+    bases = sorted((s for s in segments if s["kind"] == "base"), key=lambda s: s["start"])
+    out: list[dict] = []
+    for i, seg in enumerate(bases):
+        end = seg["end"]
+        if i + 1 < len(bases):
+            end = min(end, bases[i + 1]["start"])
+        out.append({**seg, "end": end})
+    out.extend(s for s in segments if s["kind"] != "base")
+    return sorted(out, key=lambda s: s["start"])
+
+
+def taf_periods(segments: list[dict]) -> list[dict]:
+    """Display-ready periods: clipped bases plus overlays, in time order."""
+    return base_intervals(segments)
+
+
+def _overlaps(seg: dict, start: datetime, end: datetime) -> bool:
+    return seg["start"] <= end and seg["end"] >= start
+
+
+def hazards_in_window(segments: list[dict], start: datetime,
+                      end: datetime) -> tuple[set[str], list[dict]]:
+    """Hazards forecast during ``[start, end]``, and those forecast outside it.
+
+    Returns ``(in_window_flags, out_of_window_periods)``. The second element
+    keeps the periods themselves so the caller can tell the pilot *when* a
+    hazard it chose not to gate on is expected.
+    """
+    inside: set[str] = set()
+    outside: list[dict] = []
+    for seg in taf_periods(segments):
+        haz = seg["cond"].get("hazards") or []
+        if not haz:
+            continue
+        if _overlaps(seg, start, end):
+            inside |= set(haz)
+        else:
+            outside.append(seg)
+    return inside, outside
 
 
 def conditions_at(segments: list[dict], dt: datetime) -> Optional[dict]:

@@ -99,3 +99,53 @@ def test_ensemble_point_now_blends_models():
 def test_ensemble_point_now_none_when_no_data():
     resp = {"utc_offset_seconds": 0, "hourly": {"time": ["2026-06-19T00:00"]}}
     assert ensemble_point_now(resp, ["gem_seamless"]) is None
+
+
+def test_forecast_many_variable_subset_has_its_own_cache_key():
+    """A wind-only response must never satisfy a full-variable lookup.
+
+    ``forecast_many`` keyed only on (lats, lons, days), so the en-route
+    corridor's narrow request would otherwise be handed back to the discovery
+    scan, which needs ceiling/visibility too.
+    """
+    import asyncio
+
+    from app.sources import cache, openmeteo
+
+    cache._store.clear() if hasattr(cache, "_store") else None
+    captured = []
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, params=None):
+            captured.append(params["hourly"])
+            return _Resp([{"hourly": {"time": []}}])
+
+    import httpx
+    real = httpx.AsyncClient
+    httpx.AsyncClient = lambda *a, **k: _Client()
+    try:
+        pts = [(43.0, -80.0)]
+        asyncio.run(openmeteo.forecast_many(pts, 2, hourly=openmeteo.WIND_ONLY_VARS))
+        asyncio.run(openmeteo.forecast_many(pts, 2))
+    finally:
+        httpx.AsyncClient = real
+
+    assert len(captured) == 2, "the second call was wrongly served from cache"
+    assert captured[0] == ",".join(openmeteo.WIND_ONLY_VARS)
+    assert "cloud_base" in captured[1] and "cloud_base" not in captured[0]

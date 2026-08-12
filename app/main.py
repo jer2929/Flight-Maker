@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -81,6 +83,30 @@ async def airports_search(q: str = Query(default=""), limit: int = Query(default
     return JSONResponse([a.model_dump() for a in ap.search_airports(q, limit)])
 
 
+_ETD_PATTERN = r"^(now|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?Z)$"
+
+
+def _parse_etd(raw: str | None) -> datetime | None:
+    """Planned departure time (UTC), or None for "now".
+
+    Out-of-range values are *clamped* rather than rejected, so a browser tab
+    left open overnight still gets a sensible answer instead of a 422.
+    """
+    if not raw or raw == "now":
+        return None
+    try:
+        when = datetime.strptime(raw.replace("Z", ""), "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        try:
+            when = datetime.strptime(raw.replace("Z", ""), "%Y-%m-%dT%H:%M")
+        except ValueError:
+            return None
+    when = when.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    horizon = get_settings().timeline_hours
+    return max(now - timedelta(hours=1), min(when, now + timedelta(hours=horizon)))
+
+
 @app.get("/api/route")
 async def route(
     dep: str = Query(default=None),
@@ -90,12 +116,15 @@ async def route(
     flight_rules: str = Query(default="vfr", pattern="^(vfr|ifr)$"),
     tas: float = Query(default=None, ge=40, le=400),
     prefs: str = Query(default=None),
+    etd: str = Query(default=None, pattern=_ETD_PATTERN),
 ):
     s = get_settings()
     dep = dep or s.origin
     manual = [t for t in threats.split(",") if t]
     with limits_override(_parse_prefs(prefs)), cruise_override(tas):
-        result = await orchestrator.assess_route(dep, dest, mode, manual, flight_rules=flight_rules)
+        result = await orchestrator.assess_route(dep, dest, mode, manual,
+                                                 flight_rules=flight_rules,
+                                                 etd=_parse_etd(etd))
     if result is None:
         return JSONResponse({"error": "unknown departure or destination"}, status_code=404)
     return JSONResponse(result.model_dump())
@@ -108,12 +137,15 @@ async def circuits(
     threats: str = Query(default=""),
     flight_rules: str = Query(default="vfr", pattern="^(vfr|ifr)$"),
     prefs: str = Query(default=None),
+    etd: str = Query(default=None, pattern=_ETD_PATTERN),
 ):
     s = get_settings()
     ident = (aerodrome or s.origin).upper()
     manual = [t for t in threats.split(",") if t]
     with limits_override(_parse_prefs(prefs)):
-        result = await orchestrator.assess_circuits(ident, mode, manual, flight_rules=flight_rules)
+        result = await orchestrator.assess_circuits(ident, mode, manual,
+                                                    flight_rules=flight_rules,
+                                                    etd=_parse_etd(etd))
     if result is None:
         return JSONResponse({"error": "unknown aerodrome"}, status_code=404)
     return JSONResponse(result.model_dump())
@@ -174,6 +206,7 @@ async def suggest(
     tas: float = Query(default=None, ge=40, le=400),
     base: str = Query(default=None),
     prefs: str = Query(default=None),
+    etd: str = Query(default=None, pattern=_ETD_PATTERN),
 ):
     s = get_settings()
     radius = radius or s.default_radius_nm
@@ -183,7 +216,7 @@ async def suggest(
             radius, mode, manual, surface, min_length_ft, into_wind,
             go_only=go_only, max_time_min=max_time_min, max_crosswind=max_crosswind,
             min_width_ft=min_width_ft, sort=sort, flight_rules=flight_rules,
-            origin_ident=base or None,
+            origin_ident=base or None, etd=_parse_etd(etd),
         )
     return JSONResponse([r.model_dump() for r in results])
 

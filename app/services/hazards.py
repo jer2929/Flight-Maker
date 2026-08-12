@@ -1,10 +1,21 @@
-"""The decision card's "Weather" hard-limit section, evaluated for the whole
-route.
+"""The decision card's "Weather" hard-limit section, evaluated for the route
+over the planned flight window.
+
+This module *decides*; it does not parse. Convective / freezing-rain / LLWS
+hazards arrive as pre-parsed, time-scoped sets from the caller
+(``weather.hazards_in_window`` over the TAF segments), because the forecast
+hazards that matter are the ones valid while you're actually flying. Scanning
+raw TAF text here is what made a thunderstorm forecast for tomorrow evening a
+NO-GO for a flight at noon today.
 
 What can and can't be automated:
-  * Convective / SIGMET / AIRMET / PIREP   -> authoritative *text* products from
-    CFPS, scanned for the relevant keywords. Auto.
-  * Embedded TS, freezing rain, LLWS       -> keyword scan of METAR/TAF/SIGMET. Auto.
+  * Convective / freezing rain / LLWS      -> parsed TAF segments overlapping the
+    ETD->ETA window, plus observed METAR hazards when departing now, plus the
+    area products below. Hazards forecast *outside* the window are surfaced as
+    advisory rows so the pilot still sees them without them gating the verdict.
+  * SIGMET / AIRMET / PIREP                -> authoritative *text* products from
+    CFPS, scanned for the relevant keywords. Not yet scoped to their own
+    validity times - see the note in the orchestrator.
   * Strong low-level jet at night          -> derived from HRDPS 925 hPa (~2000 ft) wind.
   * Rapidly lowering ceilings, widespread IFR -> derived from ceilings/vis sampled
     along the route.
@@ -19,6 +30,7 @@ import re
 from typing import Optional
 
 from app.models import LimitCheck
+from app.services import weather as wx
 
 
 def gfa_links(lat: float, lon: float) -> dict[str, str]:
@@ -32,19 +44,14 @@ def gfa_links(lat: float, lon: float) -> dict[str, str]:
     }
 
 
-def _blob(*texts: Optional[str]) -> str:
-    return " ".join(t for t in texts if t).upper()
-
-
 def _has(text: str, *patterns: str) -> bool:
     return any(re.search(p, text) for p in patterns)
 
 
 def weather_checks(
     *,
-    raw_text: str,                 # combined METAR/TAF/SIGMET/AIRMET/PIREP text
+    raw_text: str,                 # area product text (SIGMET/AIRMET/PIREP)
     hazards: set[str],             # merged hazard flags across the route
-    sigmet_count: int,
     night: bool,
     llj_kt: Optional[float],       # max ~2000 ft (925 hPa) wind along route
     ceiling_points: list[Optional[float]],
@@ -53,36 +60,80 @@ def weather_checks(
     freezing_level_ft: Optional[float],
     personal_vis_sm: float,
     gfa: dict[str, str],
-    metar_taf_text: str = "",      # METAR/TAF only (for source attribution)
     area_text: str = "",           # SIGMET/AIRMET/PIREP only
+    # --- time scoping -------------------------------------------------------
+    window_hazards: set[str] = frozenset(),   # TAF hazards during ETD->ETA
+    metar_hazards: set[str] = frozenset(),    # observed now, either endpoint
+    out_of_window: list[dict] = (),           # TAF hazard periods outside it
+    etd_is_now: bool = True,
+    window_label: str = "",
 ) -> list[LimitCheck]:
     blob = raw_text.upper()
-    mt = metar_taf_text.upper()
     area = area_text.upper()
     checks: list[LimitCheck] = []
 
-    def add(key, label, failed, actual, *, advisory=False, applicable=True):
+    def add(key, label, failed, actual, *, advisory=False, applicable=True,
+            link=None, link_label=None):
         checks.append(LimitCheck(
             key=key, label=label, limit_text="none on route",
             actual_text=actual, passed=not failed, group="weather",
             advisory=advisory, applicable=applicable,
+            advisory_link=link, advisory_link_label=link_label,
         ))
 
-    def _src(metar_flag: bool, area_flag: bool) -> str:
-        srcs = []
-        if metar_flag:
-            srcs.append("METAR/TAF")
-        if area_flag:
-            srcs.append("SIGMET/AIRMET")
-        return " + ".join(srcs) or "route data"
+    # Two forms: "... TS in your 1200-1400Z window" vs "... outside your window".
+    win = f" in your {window_label} window" if window_label else " during your flight"
+    win_bare = f"your {window_label} window" if window_label else "your flight"
 
-    # 1. Convective SIGMET or thunderstorms on route. TS/CB appear inside tokens
-    # (TSRA, 030CB), so don't require a leading word boundary.
-    ts_metar = ("thunderstorm" in hazards) or _has(mt or blob, r"\bTS", r"CB\b")
-    ts_area = bool(area) and _has(area, r"\bTS", r"CONVECTIV", r"\bCB\b")
-    conv = ts_metar or ts_area
-    conv_actual = ("thunderstorm - " + _src(ts_metar, ts_area)) if conv else "none detected"
-    add("convective", "Convective SIGMET / thunderstorms", conv, conv_actual)
+    def _forecast_hazard(flag: str, key: str, label: str, name: str,
+                         area_pats: tuple[str, ...]) -> bool:
+        """One time-scoped hazard row.
+
+        The TAF contributes only through ``window_hazards`` - segments that
+        actually overlap the flight. ``hazards`` is the merged endpoint summary,
+        which the orchestrator has already evaluated *at* the flight time, so it
+        is in-window by construction and carries the model-derived hazards (e.g.
+        an HRDPS thunderstorm weathercode) that no text product mentions.
+
+        A METAR is an observation of *now*, so it gates only a now-departure;
+        for a later ETD it is reported as an advisory rather than vanishing.
+        """
+        in_taf = flag in window_hazards
+        in_endpoint = flag in hazards
+        in_metar = flag in metar_hazards
+        in_area = bool(area) and _has(area, *area_pats)
+        failed = in_taf or in_endpoint or in_area or (in_metar and etd_is_now)
+        if failed:
+            srcs = []
+            if in_taf:
+                srcs.append("TAF")
+            if in_endpoint and not in_taf:
+                srcs.append("forecast")
+            if in_metar and etd_is_now:
+                srcs.append("METAR")
+            if in_area:
+                srcs.append("SIGMET/AIRMET")
+            add(key, label, True, f"{name}{win} - " + " + ".join(srcs))
+        elif in_metar and not etd_is_now:
+            add(key, label, False,
+                f"{name} observed now - not in {win_bare}", advisory=True)
+        else:
+            add(key, label, False, "none detected")
+        return failed
+
+    # 1. Convective SIGMET or thunderstorms during the flight.
+    _forecast_hazard("thunderstorm", "convective",
+                     "Convective SIGMET / thunderstorms", "thunderstorm",
+                     (wx.TS_TOKEN_RE, r"CONVECTIV", wx.CB_RE))
+
+    # 1b. Hazards the TAF forecasts *outside* the flight window. These must not
+    # gate the verdict - that was the bug - but the pilot should still see them,
+    # so they render as advisory rows naming the period they apply to.
+    for item in list(out_of_window)[:4]:
+        names = ", ".join(h.replace("_", " ") for h in item.get("hazards", []))
+        where = f" at {item['ident']}" if item.get("ident") else ""
+        add("hazard_out_of_window", "Forecast hazard (outside window)", False,
+            f"{names}{where} {item['when']} - outside {win_bare}", advisory=True)
 
     # 2. Embedded thunderstorms
     embd = _has(blob, r"\bEMBD\b.*\b(TS|CB)\b", r"\bEMBEDDED\b")
@@ -90,11 +141,8 @@ def weather_checks(
         ("EMBD TS - SIGMET/area forecast" if embd else "none detected"))
 
     # 3. Freezing rain forecast
-    fz_metar = ("freezing_rain" in hazards) or _has(mt or blob, r"\bFZRA\b", r"\bFZDZ\b")
-    fz_area = bool(area) and _has(area, r"\bFZRA\b", r"FREEZING")
-    fzra = fz_metar or fz_area
-    fzra_actual = ("FZRA - " + _src(fz_metar, fz_area)) if fzra else "none detected"
-    add("freezing_rain", "Freezing rain", fzra, fzra_actual)
+    _forecast_hazard("freezing_rain", "freezing_rain", "Freezing rain", "FZRA",
+                     (r"\bFZRA\b", r"FREEZING"))
 
     # 4. Forecast icing in planned altitude band (AIRMET/SIGMET text; else advisory)
     icing_txt = _has(blob, r"\bICG\b", r"\bICE\b", r"ICING")
@@ -106,7 +154,7 @@ def weather_checks(
             hint = f" - freezing level ~{round(freezing_level_ft):,} ft"
         add("icing", "Forecast icing", False,
             f"no AIRMET/SIGMET - review GFA icing chart ({gfa['region']}){hint}",
-            advisory=True)
+            advisory=True, link=gfa.get("icing_turb"), link_label="GFA")
 
     # 5. Moderate turbulence below 3000 ft (AIRMET/PIREP text; else advisory)
     turb_txt = _has(blob, r"\bTURB\b", r"\bTURBC\b", r"MOD\s+TURB")
@@ -116,12 +164,11 @@ def weather_checks(
     else:
         add("turbulence", "Moderate turbulence (low level)", False,
             f"no AIRMET/PIREP - review GFA turbulence chart ({gfa['region']})",
-            advisory=True)
+            advisory=True, link=gfa.get("icing_turb"), link_label="GFA")
 
     # 6. Low-level wind shear forecast
-    llws = ("low_level_wind_shear" in hazards) or _has(blob, r"\bWS\d{3}", r"\bLLWS\b", r"WIND\s*SHEAR")
-    add("llws", "Low-level wind shear", llws,
-        "LLWS reported/forecast" if llws else "none detected")
+    _forecast_hazard("low_level_wind_shear", "llws", "Low-level wind shear", "LLWS",
+                     (r"\bWS\d{3}", r"\bLLWS\b", r"WIND\s*SHEAR"))
 
     # 7. Strong low-level jet > 40 kt near 2000 ft at night
     if night:
