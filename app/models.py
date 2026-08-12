@@ -114,6 +114,30 @@ class Notam(BaseModel):
     permanent: bool = False         # no end / PERM
 
 
+class TafPeriod(BaseModel):
+    """One TAF group, with the window it is actually in force for.
+
+    Base groups (MAIN/FM/BECMG) have had their end clipped to the next base's
+    start, so a period describes only the time it governs - see
+    ``weather.base_intervals``.
+    """
+
+    kind: str                   # "base" | "overlay"
+    label: str                  # MAIN | FM | BECMG | TEMPO | PROB30 | PROB40
+    start: str                  # ISO8601 Z
+    end: str                    # ISO8601 Z
+    text: str                   # the raw TAF slice for this group
+    # Overlaps the padded ETD->ETA window, i.e. you fly through it. Drives the
+    # green highlight on its own: if it happens during the flight it is green,
+    # whatever kind of group it is.
+    in_window: bool = False
+    # Whether it counts against your minimums. False for PROB30/PROB40 - a
+    # 30-40% chance is a planning input, not a limit - which shows as a
+    # different border colour, never as a loss of the green.
+    gates: bool = True
+    hazards: list[str] = []
+
+
 class NearbyStation(BaseModel):
     """Nearest aerodrome that actually reports a METAR/TAF, for a field that
     doesn't report its own."""
@@ -123,6 +147,12 @@ class NearbyStation(BaseModel):
     direction: str                  # e.g. "N", "SW" (from the endpoint to here)
     metar: Optional[str] = None
     taf: Optional[str] = None
+    # Split the same way the endpoint's own TAF is, so a field without a TAF of
+    # its own still shows which periods the flight passes through rather than a
+    # raw line to parse by eye.
+    taf_periods: list[TafPeriod] = []
+    taf_valid_from: Optional[str] = None
+    taf_valid_to: Optional[str] = None
     metar_history: list[str] = []
     trends: list[str] = []
 
@@ -143,21 +173,27 @@ class AltitudeRecommendation(BaseModel):
     levels: list[WindAloft] = []
 
 
-class TafPeriod(BaseModel):
-    """One TAF group, with the window it is actually in force for.
+class WindowForecast(BaseModel):
+    """Worst TAF conditions anywhere in the padded ETD->ETA window.
 
-    Base groups (MAIN/FM/BECMG) have had their end clipped to the next base's
-    start, so a period describes only the time it governs - see
-    ``weather.base_intervals``.
+    Kept separate from the headline ``WeatherSummary`` because on a "Now"
+    departure the headline is an *observation* of the current moment, while this
+    is what the forecast says you will meet later in the same flight. Both are
+    true; conflating them would either hide the TEMPO or overwrite the METAR.
     """
 
-    kind: str                   # "base" | "overlay"
-    label: str                  # MAIN | FM | BECMG | TEMPO | PROB30 | PROB40
-    start: str                  # ISO8601 Z
-    end: str                    # ISO8601 Z
-    text: str                   # the raw TAF slice for this group
-    in_window: bool = False     # covers this endpoint's relevant time
+    ceiling_agl_ft: Optional[float] = None
+    visibility_sm: Optional[float] = None
+    wind_kt: Optional[float] = None
+    gust_kt: Optional[float] = None
     hazards: list[str] = []
+    governing: list[str] = []       # e.g. ["BECMG 1800Z-2400Z", "TEMPO 1900Z-2100Z"]
+    # PROB30/PROB40 falling in the window. Reported so the pilot sees them,
+    # never merged into the values above, so they cannot fail a check alone.
+    prob_ceiling_agl_ft: Optional[float] = None
+    prob_visibility_sm: Optional[float] = None
+    prob_hazards: list[str] = []
+    prob_labels: list[str] = []     # e.g. ["PROB30 1900Z-2100Z"]
 
 
 class FlightWindow(BaseModel):
@@ -197,6 +233,12 @@ class WeatherSummary(BaseModel):
     taf_periods: list[TafPeriod] = []
     taf_valid_from: Optional[str] = None
     taf_valid_to: Optional[str] = None
+    # What the TAF says about the rest of the flight, not just this instant.
+    window_forecast: Optional["WindowForecast"] = None
+    # True when the values above already *are* the window worst-case (the future-ETD
+    # path). False when they describe one moment - a METAR observation, or the
+    # current model hour - and the window therefore needs its own check rows.
+    window_gated: bool = False
 
 
 class AirportAssessment(BaseModel):

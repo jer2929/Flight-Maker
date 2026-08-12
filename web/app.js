@@ -243,6 +243,9 @@ async function init() {
   renderSelfAssessment("discovery-self-check");
   $("#dep").value = baseIdent();
   buildEtdOptions();
+  // Quarter-hour options go stale four times as fast as the old hourly ones, so
+  // the list is refreshed on a timer rather than only on focus/tab changes.
+  setInterval(() => { if (!document.hidden) buildEtdOptions(); }, 60000);
   wire();
   // Apply the initially-active tab so the per-flight controls start hidden on
   // the default My Minimums tab.
@@ -284,43 +287,87 @@ const zHM = (iso) => {
   return isNaN(d) ? "" : `${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z`;
 };
 
-function etdOptionList() {
-  const now = new Date();
+// Quarter-hour granularity for the first few hours, because that is the
+// resolution people actually plan a departure at - the old list jumped straight
+// from "Now" to the next whole hour, so at 1424Z a flight leaving in twenty
+// minutes had no option that described it. Past FINE_HRS the weather no longer
+// moves fast enough to justify four options an hour.
+const ETD_STEP_MIN = 15;
+const ETD_FINE_HRS = 4;
+
+const etdValue = (d) => `${d.toISOString().slice(0, 16)}Z`;
+
+// "Today" / "Tomorrow" / "Thu", by UTC date difference.
+function dayPrefix(d, now) {
+  const diff = Math.round((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+    - Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Tomorrow";
+  return d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" });
+}
+
+// "Today 1445Z · +21 min" - the Zulu time to fly by, and how far off it is. The
+// offset is the true delta from now, not the nominal step: snapping to the
+// quarter hour means the first option is rarely exactly 15 minutes away.
+function etdLabel(d, now) {
+  const mins = Math.round((d - now) / 60000);
+  return `${dayPrefix(d, now)} ${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z · +${fmtHrMin(mins / 60)}`;
+}
+
+function etdOptionList(now = new Date()) {
   const hours = CONFIG.timeline_hours || 48;
   const out = [{
     value: "now",
     label: `Now (${zPad(now.getUTCHours())}${zPad(now.getUTCMinutes())}Z)`,
   }];
-  // Whole UTC hours from the next one out to the forecast horizon.
-  const first = new Date(now);
-  first.setUTCMinutes(0, 0, 0);
-  first.setUTCHours(first.getUTCHours() + 1);
-  const today = now.getUTCDate();
-  for (let i = 0; i < hours; i++) {
-    const d = new Date(first.getTime() + i * 3600000);
-    const dayDiff = Math.round((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
-      - Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), today)) / 86400000);
-    const day = dayDiff === 0 ? "Today" : dayDiff === 1 ? "Tomorrow"
-      : d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" });
-    out.push({
-      value: `${d.toISOString().slice(0, 16)}Z`,
-      label: `${day} ${zPad(d.getUTCHours())}:00Z`,
-    });
+  const horizon = now.getTime() + hours * 3600000;
+
+  // Quarter hours: step first, then snap up to the next :00/:15/:30/:45. Snapping
+  // first would offer a departure two minutes out at 1428Z, which is not a plan.
+  const step = ETD_STEP_MIN * 60000;
+  let t = Math.ceil((now.getTime() + step) / step) * step;
+  const fineEnd = now.getTime() + ETD_FINE_HRS * 3600000;
+  for (; t <= fineEnd && t <= horizon; t += step) {
+    const d = new Date(t);
+    out.push({ value: etdValue(d), label: etdLabel(d, now) });
+  }
+  // Whole hours from there to the forecast horizon.
+  const hourly = new Date(t);
+  hourly.setUTCMinutes(0, 0, 0);
+  if (hourly.getTime() < t) hourly.setUTCHours(hourly.getUTCHours() + 1);
+  for (let ms = hourly.getTime(); ms <= horizon; ms += 3600000) {
+    const d = new Date(ms);
+    out.push({ value: etdValue(d), label: etdLabel(d, now) });
   }
   return out;
 }
 
-// Rebuilt on load, on tab switch and whenever the tab regains focus - a window
-// left open overnight would otherwise still be offering yesterday's hours.
-// The server clamps out-of-range values as a backstop.
+// Rebuilt on load, on tab switch, whenever the tab regains focus and on a timer
+// - a window left open would otherwise still be offering times that have been
+// and gone. The server clamps out-of-range values as a backstop.
 function buildEtdOptions() {
-  const opts = etdOptionList();
+  const now = new Date();
+  const opts = etdOptionList(now);
   for (const id of ETD_IDS) {
     const sel = $(id);
     if (!sel) continue;
     const prev = sel.value;
-    sel.innerHTML = opts.map((o) => `<option value="${o.value}">${o.label}</option>`).join("");
-    if (prev && opts.some((o) => o.value === prev)) sel.value = prev;
+    const list = opts.slice();
+    // A selection that is still in the future but no longer on a boundary (you
+    // picked 1445Z, it is now 1446Z) must survive the rebuild. Dropping it would
+    // silently snap the control back to "Now" and assess a different flight than
+    // the one on screen - the whole reason ETD is not persisted across loads.
+    const keep = prev && prev !== "now" && !opts.some((o) => o.value === prev);
+    const stale = keep && new Date(prev) <= now;
+    if (keep && !stale) {
+      list.splice(1, 0, { value: prev, label: etdLabel(new Date(prev), now) });
+    }
+    sel.innerHTML = list.map((o) =>
+      `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join("");
+    if (prev && list.some((o) => o.value === prev)) sel.value = prev;
+    // Past its own ETD: reset, but say so rather than changing it behind you.
+    const row = sel.closest(".ac, .control") || sel.parentElement;
+    if (row) row.classList.toggle("etd-lapsed", !!stale);
   }
 }
 
@@ -677,7 +724,14 @@ function renderCircuits(r) {
   $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
   const etdVal = ($("#etd") || {}).value;
   $("#route-endpoints").innerHTML = endpointCard(
-    r, "Aerodrome", etdVal && etdVal !== "now" ? `ETD ${zHM(etdVal)}` : "");
+    r, "Aerodrome", etdVal && etdVal !== "now" ? `your ETD ${zHM(etdVal)}` : "");
+}
+
+// Both endpoint cards mark the same span, so they get the same label: the TAF
+// highlight answers "what will I fly through", not "what is it doing there at
+// one instant".
+function winLabel(win) {
+  return win ? `your flight (${zHM(win.etd_utc)}-${zHM(win.eta_utc)})` : "";
 }
 
 function clearRoute() {
@@ -712,8 +766,8 @@ function renderRoute(r) {
 
   $("#route-summary").innerHTML += advisoriesBlock(r);
   $("#route-endpoints").innerHTML =
-    endpointCard(r.departure, "Departure", win ? `ETD ${zHM(win.etd_utc)}` : "") +
-    endpointCard(r.destination, "Destination", win ? `ETA ${zHM(win.eta_utc)}` : "");
+    endpointCard(r.departure, "Departure", winLabel(win)) +
+    endpointCard(r.destination, "Destination", winLabel(win));
   $("#route-enroute").innerHTML = enrouteBlock(r);
   loadRadar(r);
 
@@ -954,7 +1008,7 @@ function endpointCard(a, role, timeLabel) {
     </div>
     ${showTakeoff && to ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(to, w)}</span><div class="rwy-lines"><div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt${gust(to.headwind_kt_gust)} · xwind ${Math.round(to.crosswind_kt)} kt${gust(to.crosswind_kt_gust)}</div></div></div>` : ""}
     ${showLanding && ld ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(ld, w)}</span><div class="rwy-lines"><div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · headwind ${Math.round(ld.headwind_kt)} kt${gust(ld.headwind_kt_gust)} · xwind ${Math.round(ld.crosswind_kt)} kt${gust(ld.crosswind_kt_gust)}</div></div></div>` : ""}
-    ${a.nearby_station ? nearbyBlock(a.nearby_station) : ""}
+    ${a.nearby_station ? nearbyBlock(a.nearby_station, timeLabel) : ""}
     ${trendsBlock(a)}
     ${runwaysBlock(a)}
     <div class="links">${linksHtml(a)}</div>
@@ -965,21 +1019,27 @@ function endpointCard(a, role, timeLabel) {
   </div>`;
 }
 
-// The TAF, split into its FM/BECMG/TEMPO periods, with the one covering this
-// end's relevant time (ETD at the departure, ETA at the destination)
-// highlighted. `in_window` is computed server-side so the browser never has to
-// reason about TAF validity arithmetic.
+// The TAF, split into its FM/BECMG/TEMPO periods, with every period the flight
+// passes through highlighted green - the same ETD->ETA window on both cards, so
+// "green" means one thing wherever you read it. `in_window` and `gates` are
+// computed server-side so the browser never reasons about TAF validity
+// arithmetic.
 function tafBlock(w, timeLabel) {
   if (!w.raw_taf) return "";
   const ps = w.taf_periods || [];
   // Unparseable TAF: fall back to the raw line rather than showing nothing.
   if (!ps.length) return `<div class="raw">TAF ${escapeHtml(w.raw_taf)}</div>`;
-  const label = timeLabel || "flight";
+  const label = timeLabel || "your flight";
   const covered = ps.some((p) => p.in_window);
-  const note = covered
-    ? `<span class="hint">green = covers your ${escapeHtml(label)}</span>`
-    : `<span class="hint">your ${escapeHtml(label)} is outside this TAF (valid ${zHM(w.taf_valid_from)}-${zHM(w.taf_valid_to)})</span>`;
-  return `<details class="taf" open><summary>TAF ${note}</summary>
+  const advisory = ps.some((p) => p.in_window && !p.gates);
+  let note;
+  if (!covered) {
+    note = `${escapeHtml(label)} is outside this TAF (valid ${zHM(w.taf_valid_from)}-${zHM(w.taf_valid_to)})`;
+  } else {
+    note = `green = happens during ${escapeHtml(label)}`;
+    if (advisory) note += " · amber edge = possible only, does not gate";
+  }
+  return `<details class="taf" open><summary>TAF <span class="hint">${note}</span></summary>
     ${ps.map(tafRow).join("")}
     <div class="raw taf-raw">${escapeHtml(w.raw_taf)}</div></details>`;
 }
@@ -990,7 +1050,16 @@ function tafRow(p) {
   const days = Math.round(
     (Date.parse(p.end.slice(0, 10)) - Date.parse(p.start.slice(0, 10))) / 86400000);
   const end = `${zHM(p.end)}${days > 0 ? `<sup>+${days}</sup>` : ""}`;
-  return `<div class="taf-p ${p.in_window ? "in" : "out"}${p.kind === "overlay" ? " overlay" : ""}">
+  // A PROB30/40 you fly through is still green - it happens during the flight -
+  // but carries an amber edge, because it is a possibility to weigh rather than
+  // a limit that fails the card on its own.
+  const cls = [
+    "taf-p",
+    p.in_window ? "in" : "out",
+    p.kind === "overlay" ? "overlay" : "",
+    p.in_window && p.gates === false ? "prob" : "",
+  ].filter(Boolean).join(" ");
+  return `<div class="${cls}">
     <span class="taf-k">${escapeHtml(p.label || "")}</span>
     <span class="taf-t">${zHM(p.start)}-${end}</span>
     <span class="taf-x">${escapeHtml(p.text || "")}</span></div>`;
@@ -1035,9 +1104,15 @@ function trendsBlock(a) {
   if (!t.length) return "";
   return `<details class="trends" open><summary>Trends from recent METARs (${t.length})</summary>${t.map((x) => `<div class="trend">${x}</div>`).join("")}</details>`;
 }
-function nearbyBlock(n) {
+function nearbyBlock(n, timeLabel) {
+  // This station's TAF is the only forecast the field has, so it gets the same
+  // period split and flight-window highlight as one that reports its own.
+  const taf = tafBlock({
+    raw_taf: n.taf, taf_periods: n.taf_periods,
+    taf_valid_from: n.taf_valid_from, taf_valid_to: n.taf_valid_to,
+  }, timeLabel);
   return `<div class="nearby"><span class="nlabel">Nearest reporting station</span> <strong>${n.ident}</strong>${n.name ? " · " + n.name : ""} - ${n.distance_nm} NM ${n.direction} of here
-    ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}${ageChip(n.metar)}</div>` : ""}${n.taf ? `<div class="raw">TAF ${escapeHtml(n.taf)}</div>` : ""}
+    ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}${ageChip(n.metar)}</div>` : ""}${taf}
     ${trendsBlock(n)}${metarHistoryList(n.metar_history)}</div>`;
 }
 // One advisory: a collapsed one-line teaser that expands to the full product

@@ -78,29 +78,10 @@ def conditions_checks(
         "crosswind", "Crosswind", w["crosswind_max_kt"], xw,
         unit="kt", source=src, actual_suffix=xw_label,
     ))
-    # Ceiling - IFR uses ifr_minimums section; VFR uses hard_limits.
-    if flight_rules == "ifr":
-        ifr = full_limits.get("ifr_minimums", {})
-        c = ifr.get("ceiling_agl_ft", L["ceiling_agl_ft"])
-    else:
-        c = L["ceiling_agl_ft"]
-    circuit_limit = c.get("night_circuit", 3000) if mode == "night" else c.get("day_circuit", 2000)
-    xc_limit = c.get("night_xc", c.get("night_xc_cloud_base", 12000)) if mode == "night" else c.get("day_xc", 4000)
-    ceil_limit = circuit_limit if ceiling_mode == "circuit" else xc_limit
+    ceil_limit, circuit_limit = _ceiling_limits(mode, ceiling_mode, flight_rules)
     checks.append(_ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, src,
                                  ceiling_mode, circuit_limit=circuit_limit))
-    # Visibility - IFR uses ifr_minimums section; VFR uses hard_limits.
-    if flight_rules == "ifr":
-        ifr = full_limits.get("ifr_minimums", {})
-        v = ifr.get("visibility_sm", L["visibility_sm"])
-    else:
-        v = L["visibility_sm"]
-    if ceiling_mode == "circuit":
-        vis_limit = v.get("night_circuit", 6) if mode == "night" else v.get("day_circuit", 5)
-        vis_label = "Visibility (circuits)"
-    else:
-        vis_limit = v.get("night_xc", 9) if mode == "night" else v.get("day_xc", 9)
-        vis_label = "Visibility (XC)"
+    vis_limit, vis_label = _visibility_limit(mode, ceiling_mode, flight_rules)
     checks.append(_min_check(
         "visibility", vis_label, vis_limit, weather.visibility_sm,
         unit="SM", source=src,
@@ -115,6 +96,91 @@ def conditions_checks(
         actual_text=(", ".join(h.replace("_", " ") for h in present) if present else "none reported"),
         passed=not present, group="weather", source=src,
     ))
+    if location:
+        for c in checks:
+            c.location = location
+    return checks
+
+
+def _ceiling_limits(mode: str, ceiling_mode: str, flight_rules: str) -> tuple[float, float]:
+    """(applicable ceiling limit, circuit limit) in ft AGL.
+
+    IFR reads the ``ifr_minimums`` section; VFR reads ``hard_limits``.
+    """
+    full_limits = get_limits()
+    if flight_rules == "ifr":
+        c = full_limits.get("ifr_minimums", {}).get(
+            "ceiling_agl_ft", full_limits["hard_limits"]["ceiling_agl_ft"])
+    else:
+        c = full_limits["hard_limits"]["ceiling_agl_ft"]
+    circuit_limit = c.get("night_circuit", 3000) if mode == "night" else c.get("day_circuit", 2000)
+    xc_limit = c.get("night_xc", c.get("night_xc_cloud_base", 12000)) if mode == "night" else c.get("day_xc", 4000)
+    return (circuit_limit if ceiling_mode == "circuit" else xc_limit), circuit_limit
+
+
+def _visibility_limit(mode: str, ceiling_mode: str, flight_rules: str) -> tuple[float, str]:
+    """(applicable visibility limit in SM, row label)."""
+    full_limits = get_limits()
+    if flight_rules == "ifr":
+        v = full_limits.get("ifr_minimums", {}).get(
+            "visibility_sm", full_limits["hard_limits"]["visibility_sm"])
+    else:
+        v = full_limits["hard_limits"]["visibility_sm"]
+    if ceiling_mode == "circuit":
+        return (v.get("night_circuit", 6) if mode == "night" else v.get("day_circuit", 5)), "Visibility (circuits)"
+    return (v.get("night_xc", 9) if mode == "night" else v.get("day_xc", 9)), "Visibility (XC)"
+
+
+def window_checks(
+    weather: WeatherSummary, mode: str, location: str | None = None,
+    ceiling_mode: str = "xc", flight_rules: str = "vfr",
+) -> list[LimitCheck]:
+    """Rows for what the TAF forecasts across the whole flight window.
+
+    Emitted only when the headline values describe a single moment - a METAR
+    observation, or the current model hour. On a future ETD the headline *is*
+    the window worst case, so these rows would restate it.
+
+    The split matters because the two are different claims: "it is 10 SM at the
+    field right now" and "a TEMPO puts you in 2 SM an hour from now" are both
+    true, and only the second one is about the flight you are about to make.
+
+    PROB30/PROB40 ride along as an ``advisory`` row - always shown, never fatal.
+    """
+    wf = weather.window_forecast
+    if wf is None:
+        return []
+    checks: list[LimitCheck] = []
+    where = f" ({', '.join(wf.governing)})" if wf.governing else ""
+
+    if not weather.window_gated:
+        ceil_limit, circuit_limit = _ceiling_limits(mode, ceiling_mode, flight_rules)
+        if wf.ceiling_agl_ft is not None:
+            c = _ceiling_check(ceil_limit, wf.ceiling_agl_ft, Source.TAF,
+                               Source.TAF.value, ceiling_mode, circuit_limit=circuit_limit)
+            c.key, c.label = "window_ceiling", f"Ceiling in flight window{where}"
+            checks.append(c)
+        vis_limit, _label = _visibility_limit(mode, ceiling_mode, flight_rules)
+        if wf.visibility_sm is not None:
+            checks.append(_min_check(
+                "window_visibility", f"Visibility in flight window{where}",
+                vis_limit, wf.visibility_sm, unit="SM", source=Source.TAF.value))
+
+    # PROB30/PROB40: reported, never gated. A 30-40% chance is a planning input,
+    # so it gets a row the pilot can see and weigh rather than a silent NO-GO.
+    if wf.prob_labels:
+        bits = []
+        if wf.prob_ceiling_agl_ft is not None:
+            bits.append(f"{round(wf.prob_ceiling_agl_ft / 100) * 100:,.0f} ft ceiling")
+        if wf.prob_visibility_sm is not None:
+            bits.append(f"{fmt_amount(wf.prob_visibility_sm, 'SM')} SM")
+        bits.extend(h.replace("_", " ") for h in wf.prob_hazards)
+        checks.append(LimitCheck(
+            key="window_prob", label=f"Possible ({', '.join(wf.prob_labels)})",
+            limit_text="advisory only",
+            actual_text=(", ".join(bits) if bits else "see TAF") + " - does not gate",
+            passed=True, advisory=True, group="weather", source=Source.TAF.value))
+
     if location:
         for c in checks:
             c.location = location
@@ -162,6 +228,19 @@ def _ceiling_check(limit, actual, wx_source, src, mode="xc", circuit_limit=None)
     return LimitCheck(actual_text=f"{val:,} ft AGL", passed=actual >= limit, **base)
 
 
+def fmt_amount(value: float, unit: str) -> str:
+    """Row value text. Low visibilities keep their fraction.
+
+    Rounding to whole units is fine for knots and feet, but visibility below a
+    few miles is exactly where the fraction carries the decision: a 1/2 SM TAF
+    rendered as "0 SM" reads as a data error, and 1 1/2 SM rendered as "2 SM"
+    silently reports better weather than the forecast gave.
+    """
+    if unit == "SM" and value < 3:
+        return f"{value:g}"
+    return f"{value:.0f}"
+
+
 def _min_check(key, label, limit, actual, unit, source=None) -> LimitCheck:
     """Min-type limit (actual must be ≥ limit)."""
     if actual is None:
@@ -169,7 +248,8 @@ def _min_check(key, label, limit, actual, unit, source=None) -> LimitCheck:
                           actual_text="no data", passed=True, source=source)
     return LimitCheck(
         key=key, label=label, limit_text=f"≥ {limit} {unit}",
-        actual_text=f"{actual:.0f} {unit}", passed=actual >= limit, source=source,
+        actual_text=f"{fmt_amount(actual, unit)} {unit}",
+        passed=actual >= limit, source=source,
     )
 
 
