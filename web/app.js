@@ -505,8 +505,37 @@ function autocomplete(inputId, listId) {
 }
 
 // ---------- GFA (graphical area forecast) ----------
-let GFA = { region: null, products: {}, sub: null, frame: 0 };
+let GFA = { region: null, products: {}, sub: null, frame: 0, etd: null };
 const GFA_LABELS = { CLDWX: "Clouds & weather", TURBC: "Icing & turbulence", GFA: "GFA" };
+
+// The panel that actually covers your ETD. GFA panels are issued 6-hourly and
+// each covers a slice, so opening on frame 0 showed the chart for *now* even
+// when the flight is at 0100Z - the pilot then had to work out which tab to
+// press. Falls back to the last panel starting at or before the ETD, since a
+// single issuance only reaches ~12 h ahead and a distant ETD runs off the end.
+function gfaFrameFor(frames, etdIso) {
+  const t = Date.parse(etdIso || "");
+  if (!frames.length || isNaN(t)) return 0;
+  for (let i = 0; i < frames.length; i++) {
+    const s = Date.parse(frames[i].validity), e = Date.parse(frames[i].valid_end);
+    if (!isNaN(s) && !isNaN(e) && t >= s && t < e) return i;
+  }
+  let best = -1, bestT = -Infinity;
+  for (let i = 0; i < frames.length; i++) {
+    const s = Date.parse(frames[i].validity);
+    if (!isNaN(s) && s <= t && s > bestT) { bestT = s; best = i; }
+  }
+  return best >= 0 ? best : 0;
+}
+
+// Whether the shown panel really covers the ETD, so the caption can say when it
+// doesn't rather than implying the chart describes the flight.
+function gfaCovers(frame, etdIso) {
+  const t = Date.parse(etdIso || "");
+  const s = Date.parse((frame || {}).validity || ""), e = Date.parse((frame || {}).valid_end || "");
+  if (isNaN(t) || isNaN(s) || isNaN(e)) return true;
+  return t >= s && t < e;
+}
 
 function gfaSubs() {
   return Object.keys(GFA.products)
@@ -526,17 +555,19 @@ function gfaFallback() {
     <a href="https://plan.navcanada.ca/" target="_blank" rel="noopener">Open the GFA on NAV CANADA ↗</a></p></div>`;
 }
 
-async function loadGfa(dep, dest) {
+async function loadGfa(dep, dest, etdIso) {
   const host = $("#route-gfa");
   if (!host) return;
   host.innerHTML = `<div class="panel gfa-panel"><h3>GFA - graphical area forecast <span class="hint">loading…</span></h3></div>`;
   try {
     const params = new URLSearchParams({ dep, ...(dest ? { dest } : {}) });
     const data = await fetch(`/api/gfa?${params}`).then((r) => r.json());
-    GFA = { region: data.region || null, products: data.products || {}, sub: null, frame: 0 };
+    GFA = { region: data.region || null, products: data.products || {},
+            sub: null, frame: 0, etd: etdIso || null };
     const subs = gfaSubs();
     if (!subs.length) { host.innerHTML = gfaFallback(); return; }
     GFA.sub = subs[0];
+    GFA.frame = gfaFrameFor(GFA.products[GFA.sub] || [], GFA.etd);
     drawGfa();
   } catch (e) {
     host.innerHTML = gfaFallback();
@@ -551,9 +582,15 @@ function drawGfa() {
   const frames = GFA.products[GFA.sub] || [];
   if (GFA.frame >= frames.length) GFA.frame = 0;
   const fr = frames[GFA.frame] || {};
+  // Which panel your ETD actually falls in, so it can be marked even when you
+  // have clicked away to another one.
+  const etdFrame = GFA.etd ? gfaFrameFor(frames, GFA.etd) : -1;
+  const etdNote = !GFA.etd ? ""
+    : gfaCovers(fr, GFA.etd) ? `Covers your ETD ${zHM(GFA.etd)} · `
+    : `⚠ Does not cover your ETD ${zHM(GFA.etd)} - latest chart stops short · `;
   const tabs = subs.map((s) => `<button class="gfa-tab ${s === GFA.sub ? "active" : ""}" data-sub="${s}">${GFA_LABELS[s] || s}</button>`).join("");
   const frameBtns = frames.length > 1
-    ? `<div class="gfa-frames">${frames.map((f, i) => `<button class="gfa-frame ${i === GFA.frame ? "active" : ""}" data-frame="${i}">${gfaFrameLabel(f, i)}</button>`).join("")}</div>`
+    ? `<div class="gfa-frames">${frames.map((f, i) => `<button class="gfa-frame ${i === GFA.frame ? "active" : ""}${i === etdFrame ? " etd" : ""}" data-frame="${i}"${i === etdFrame ? ' title="covers your ETD"' : ""}>${gfaFrameLabel(f, i)}</button>`).join("")}</div>`
     : "";
   host.innerHTML = `<div class="panel gfa-panel">
     <div class="gfa-head">
@@ -566,9 +603,13 @@ function drawGfa() {
            onerror="this.closest('.gfa-panel').querySelector('.gfa-err').hidden=false" />
     </a>
     <p class="hint gfa-err" hidden>Chart image didn't load - <a href="https://plan.navcanada.ca/" target="_blank" rel="noopener">view on NAV CANADA ↗</a></p>
-    <p class="hint gfa-cap">${fr.validity ? "Valid " + escapeHtml(String(fr.validity)) + " · " : ""}Source: NAV CANADA CFPS · tap chart to enlarge</p>
+    <p class="hint gfa-cap">${fr.validity ? "Valid " + escapeHtml(String(fr.validity)) + " · " : ""}${etdNote}Source: NAV CANADA CFPS · tap chart to enlarge</p>
   </div>`;
-  host.querySelectorAll(".gfa-tab").forEach((b) => b.addEventListener("click", () => { GFA.sub = b.dataset.sub; GFA.frame = 0; drawGfa(); }));
+  host.querySelectorAll(".gfa-tab").forEach((b) => b.addEventListener("click", () => {
+    GFA.sub = b.dataset.sub;
+    GFA.frame = gfaFrameFor(GFA.products[GFA.sub] || [], GFA.etd);
+    drawGfa();
+  }));
   host.querySelectorAll(".gfa-frame").forEach((b) => b.addEventListener("click", () => { GFA.frame = +b.dataset.frame; drawGfa(); }));
 }
 
@@ -693,9 +734,10 @@ async function runRoute() {
     const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam(), ...tasParam(), ...etdParam() });
     const res = await fetch(`/api/route?${params}`);
     if (!res.ok) { $("#route-verdict").innerHTML = `<div class="empty">Unknown departure or destination.</div>`; return; }
-    renderRoute(await res.json());
+    const data = await res.json();
+    renderRoute(data);
     stampDataTime();
-    loadGfa(dep, dest);
+    loadGfa(dep, dest, (data.window || {}).etd_utc);
   } catch (e) {
     $("#route-verdict").innerHTML = `<div class="empty">Error: ${e}</div>`;
   } finally { btn.disabled = false; btn.textContent = "Assess route"; }
@@ -1106,13 +1148,20 @@ function trendsBlock(a) {
 }
 function nearbyBlock(n, timeLabel) {
   // This station's TAF is the only forecast the field has, so it gets the same
-  // period split and flight-window highlight as one that reports its own.
+  // period split and flight-window highlight as one that reports its own - but
+  // it is NOT your field, and nothing in it gates the verdict. A TAF's ceiling,
+  // visibility and wind describe a ~5 SM radius around its own aerodrome, so at
+  // this distance they are background, not your conditions. Regional hazards
+  // reach you through the GFA/SIGMET/AIRMET instead, which are area products.
   const taf = tafBlock({
     raw_taf: n.taf, taf_periods: n.taf_periods,
     taf_valid_from: n.taf_valid_from, taf_valid_to: n.taf_valid_to,
   }, timeLabel);
+  const caveat = n.taf
+    ? `<div class="hint nearby-caveat">Reference only - ${escapeHtml(n.ident)} is ${n.distance_nm} NM away, so this forecast does not count against your limits.</div>`
+    : "";
   return `<div class="nearby"><span class="nlabel">Nearest reporting station</span> <strong>${n.ident}</strong>${n.name ? " · " + n.name : ""} - ${n.distance_nm} NM ${n.direction} of here
-    ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}${ageChip(n.metar)}</div>` : ""}${taf}
+    ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}${ageChip(n.metar)}</div>` : ""}${taf}${caveat}
     ${trendsBlock(n)}${metarHistoryList(n.metar_history)}</div>`;
 }
 // One advisory: a collapsed one-line teaser that expands to the full product
