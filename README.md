@@ -39,8 +39,11 @@ because an observation is the best statement about the next half hour - which is
 also how far the "Now" grace extends, so `+30` and beyond genuinely switch to the
 forecast rather than silently returning the same answer. Pick a *future* ETD and
 the endpoints run on the forecast, with the **TAF taking precedence over HRDPS**
-on ceiling, visibility and hazards, and the worse of the two taken on wind. Every
-value stays labelled with where it came from, per field.
+on everything it actually states - ceiling, visibility, wind and hazards. A TAF
+wind carries its gust with it, including the *absence* of one: where the TAF
+forecasts a steady 10 kt, a modelled 30 kt gust does not survive into the card.
+HRDPS fills only the gaps the TAF leaves. Every value stays labelled with where it
+came from, per field.
 
 The ETD is not remembered across reloads (a restored "yesterday 14:00Z" would
 silently assess the wrong flight), and if the time you picked passes while the tab
@@ -64,8 +67,10 @@ for taxi and approach - not for a single instant:
   says about the rest of the leg appears as its own clearly-labelled rows, naming
   the group it came from (`Ceiling in flight window (TEMPO 1900Z-2000Z)`).
 * **PROB30/PROB40** are shown but never fail the card on their own. A 30-40% chance
-  is a planning input, not a limit, so it gets an advisory row you can weigh
-  instead of a silent NO-GO.
+  is a planning input, not a limit, so it gets a row you can weigh instead of a
+  silent NO-GO - spelled out in plain words rather than TAF code:
+  `Might happen: 1800Z-2300Z (30% chance) | not counted against your limits |
+  wind 20G30 kt, 4,000 ft ceiling, 3 SM visibility, thunderstorm - plan for it`.
 
 ### En-route aerodromes
 A collapsed-by-default list of every aerodrome within **5 nm of the straight

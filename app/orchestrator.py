@@ -244,6 +244,7 @@ def _window_forecast(taf_win: dict | None) -> WindowForecast | None:
         governing=[_period_label(s) for s in taf_win.get("governing", [])],
         prob_ceiling_agl_ft=prob.get("ceiling_agl_ft"),
         prob_visibility_sm=prob.get("visibility_sm"),
+        prob_wind_kt=prob.get("wind_kt"), prob_gust_kt=prob.get("gust_kt"),
         prob_hazards=list(prob.get("hazards") or []),
         prob_labels=[_period_label(s) for s in taf_win.get("prob_periods", [])],
     )

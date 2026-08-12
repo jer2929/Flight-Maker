@@ -60,6 +60,59 @@ def test_model_supplies_what_the_taf_does_not():
     assert ws.field_sources["ceiling"] == Source.MODEL
 
 
+def test_taf_wind_beats_the_model_and_takes_its_gust_with_it():
+    # The CYOO case: the TAF forecasts a steady 22010KT, HRDPS models 14 kt
+    # gusting 30. Worst-of used to keep the model's 30 kt gust while the card's
+    # headline chip read TAF - so it showed a gust the TAF never forecast, and
+    # the 16 kt gust spread that fell out of it was a NO-GO.
+    taf = (f"CYFD {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
+           f"22010KT P6SM BKN120")
+    segs = wx.parse_taf_segments(taf)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, taf, segs, _fc(wind=14.0), BASE + timedelta(hours=2))
+    assert ws.wind_kt == 10                      # the TAF's, not the model's 14
+    assert ws.gust_kt is None                    # the TAF forecasts no gust
+    assert ws.wind_dir_true == 220
+    assert ws.field_sources["wind"] == Source.TAF
+    assert ws.field_sources["gust"] == Source.TAF
+
+
+def test_a_vrb_taf_wind_keeps_the_model_direction():
+    # VRB means the TAF declines to give a direction. Blanking it would leave the
+    # runway diagram with nothing to draw, so the model's stands.
+    taf = (f"CYFD {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
+           f"VRB03KT P6SM BKN120")
+    segs = wx.parse_taf_segments(taf)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, taf, segs, _fc(), BASE + timedelta(hours=2))
+    assert ws.wind_kt == 3
+    assert ws.wind_dir_true == 270               # from the model
+
+
+def test_the_prob_row_avoids_jargon_and_names_the_wind():
+    # "PROB30" and "does not gate" are code, not English. The row has to say when,
+    # how likely, and that it will not fail the card - in words a pilot who has
+    # never read this repo can act on. It must also carry the PROB's wind, which
+    # is the whole point of a VRB20G30KT group.
+    taf = (f"CYFD {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
+           f"22010KT P6SM SCT040 "
+           f"PROB30 {_dh(BASE + timedelta(hours=1))}/{_dh(BASE + timedelta(hours=4))} "
+           f"VRB20G30KT 3SM TSRA BKN040CB")
+    segs = wx.parse_taf_segments(taf)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, taf, segs, _fc(), BASE + timedelta(hours=2), _span(2, 3))
+    row = next(c for c in evaluator.window_checks(ws, "day", ceiling_mode="endpoint")
+               if c.key == "window_prob")
+    assert row.passed and row.advisory
+    assert "30% chance" in row.label
+    assert "20G30 kt" in row.actual_text
+    blob = f"{row.label} {row.limit_text} {row.actual_text}"
+    assert "does not gate" not in blob
+    assert "PROB" not in blob
+    # …and none of it reached the gating values.
+    assert ws.wind_kt == 10 and ws.gust_kt is None
+
+
 def test_metar_does_not_drive_a_future_etd():
     # A gusty METAR now says nothing about conditions six hours out. It stays on
     # the card for display, but must not set the values that gate the verdict.

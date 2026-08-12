@@ -1037,7 +1037,7 @@ function tafBlock(w, timeLabel) {
     note = `${escapeHtml(label)} is outside this TAF (valid ${zHM(w.taf_valid_from)}-${zHM(w.taf_valid_to)})`;
   } else {
     note = `green = happens during ${escapeHtml(label)}`;
-    if (advisory) note += " · amber edge = possible only, does not gate";
+    if (advisory) note += " · amber edge = only a chance, not counted against your limits";
   }
   return `<details class="taf" open><summary>TAF <span class="hint">${note}</span></summary>
     ${ps.map(tafRow).join("")}
