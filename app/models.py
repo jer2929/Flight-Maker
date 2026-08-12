@@ -192,6 +192,8 @@ class WindowForecast(BaseModel):
     # never merged into the values above, so they cannot fail a check alone.
     prob_ceiling_agl_ft: Optional[float] = None
     prob_visibility_sm: Optional[float] = None
+    prob_wind_kt: Optional[float] = None
+    prob_gust_kt: Optional[float] = None
     prob_hazards: list[str] = []
     prob_labels: list[str] = []     # e.g. ["PROB30 1900Z-2100Z"]
 

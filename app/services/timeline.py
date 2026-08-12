@@ -112,15 +112,25 @@ def _merge_model_taf(model: dict, taf: dict | None) -> tuple[dict, bool]:
     """
     if taf is None:
         return model, False
-    # Model wind (accurate) but take worse; TAF authoritative for ceiling/vis/hazards.
-    merged = _worse(model, {
-        "wind_dir_true": taf.get("wind_dir_true"), "wind_kt": taf.get("wind_kt"),
-        "gust_kt": taf.get("gust_kt"), "hazards": taf.get("hazards", []),
-    })
+    # Hazards union; the TAF is authoritative for everything it actually states.
+    merged = _worse(model, {"hazards": taf.get("hazards", [])})
     if taf.get("visibility_sm") is not None:
         merged["visibility_sm"] = taf["visibility_sm"]
     if taf.get("ceiling_agl_ft") is not None:
         merged["ceiling_agl_ft"] = taf["ceiling_agl_ft"]
+    # Wind used to be worst-of model/TAF. That let a modelled 30 kt gust stand at
+    # a field whose TAF forecast a steady 10 kt - and since the headline chip
+    # reads TAF whenever the TAF supplied a ceiling, the card claimed a gust the
+    # TAF never made. A TAF is the forecaster's statement about that aerodrome;
+    # where it gives a wind, it wins, and the gust goes with it - taking the
+    # speed but leaving a model gust behind would reassemble the same lie.
+    if taf.get("wind_kt") is not None:
+        merged["wind_kt"] = taf["wind_kt"]
+        merged["gust_kt"] = taf.get("gust_kt")
+        # VRB: the TAF declines to give a direction. Keep the model's rather than
+        # blanking the runway diagram - it is the only directional guess going.
+        if taf.get("wind_dir_true") is not None:
+            merged["wind_dir_true"] = taf["wind_dir_true"]
     return merged, True
 
 
@@ -138,10 +148,10 @@ def _sources(merged: dict, taf: dict | None, taf_used: bool) -> dict:
         src["ceiling"] = Source.TAF
     if taf.get("visibility_sm") is not None:
         src["visibility"] = Source.TAF
-    # Wind/gust are worst-of, so the TAF only "drove" the value when it won.
-    if taf.get("wind_kt") is not None and merged.get("wind_kt") == taf["wind_kt"]:
+    # A TAF wind carries its gust with it, including the absence of one - so both
+    # are the TAF's whenever it stated a wind at all.
+    if taf.get("wind_kt") is not None:
         src["wind"] = Source.TAF
-    if taf.get("gust_kt") is not None and merged.get("gust_kt") == taf["gust_kt"]:
         src["gust"] = Source.TAF
     if taf.get("hazards"):
         src["hazards"] = Source.TAF

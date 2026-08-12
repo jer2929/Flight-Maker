@@ -11,6 +11,8 @@ returns the legacy ``(verdict, reasons, count)`` tuple used by the timeline.
 """
 from __future__ import annotations
 
+import re
+
 from app.config import get_limits
 from app.models import LimitCheck, RunwayWind, Source, ThreatCheck, Verdict, WeatherSummary
 
@@ -131,6 +133,20 @@ def _visibility_limit(mode: str, ceiling_mode: str, flight_rules: str) -> tuple[
     return (v.get("night_xc", 9) if mode == "night" else v.get("day_xc", 9)), "Visibility (XC)"
 
 
+_PROB_PCT = re.compile(r"PROB(\d{2})")
+
+
+def _prob_when(labels: list[str]) -> str:
+    """e.g. "1800Z-2300Z (30% chance)" from ["PROB30 1800Z-2300Z"].
+
+    "PROB30" is a TAF code, not English. The times are what the pilot needs and
+    the probability is the point, so both are spelled out.
+    """
+    pcts = {int(m.group(1)) for lab in labels for m in [_PROB_PCT.search(lab)] if m}
+    times = ", ".join(lab.split(" ", 1)[1] if " " in lab else lab for lab in labels)
+    return f"{times} ({max(pcts)}% chance)" if pcts else times
+
+
 def window_checks(
     weather: WeatherSummary, mode: str, location: str | None = None,
     ceiling_mode: str = "xc", flight_rules: str = "vfr",
@@ -168,17 +184,22 @@ def window_checks(
 
     # PROB30/PROB40: reported, never gated. A 30-40% chance is a planning input,
     # so it gets a row the pilot can see and weigh rather than a silent NO-GO.
+    # Worded without jargon: "does not gate" means nothing to someone who hasn't
+    # read the code.
     if wf.prob_labels:
         bits = []
+        if wf.prob_wind_kt is not None:
+            gust = f"G{wf.prob_gust_kt:.0f}" if wf.prob_gust_kt else ""
+            bits.append(f"wind {wf.prob_wind_kt:.0f}{gust} kt")
         if wf.prob_ceiling_agl_ft is not None:
             bits.append(f"{round(wf.prob_ceiling_agl_ft / 100) * 100:,.0f} ft ceiling")
         if wf.prob_visibility_sm is not None:
-            bits.append(f"{fmt_amount(wf.prob_visibility_sm, 'SM')} SM")
+            bits.append(f"{fmt_amount(wf.prob_visibility_sm, 'SM')} SM visibility")
         bits.extend(h.replace("_", " ") for h in wf.prob_hazards)
         checks.append(LimitCheck(
-            key="window_prob", label=f"Possible ({', '.join(wf.prob_labels)})",
-            limit_text="advisory only",
-            actual_text=(", ".join(bits) if bits else "see TAF") + " - does not gate",
+            key="window_prob", label=f"Might happen: {_prob_when(wf.prob_labels)}",
+            limit_text="not counted against your limits",
+            actual_text=(", ".join(bits) if bits else "see TAF") + " - plan for it",
             passed=True, advisory=True, group="weather", source=Source.TAF.value))
 
     if location:
