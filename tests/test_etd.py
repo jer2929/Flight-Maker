@@ -5,6 +5,7 @@ import pytest
 
 from app import orchestrator
 from app.models import Source
+from app.services import evaluator
 from app.services import weather as wx
 
 NOW = datetime.now(timezone.utc)
@@ -117,18 +118,105 @@ def test_index_for_utc_respects_a_local_offset():
     assert fc["hourly"]["time"][i] == expected_local
 
 
-def test_taf_periods_flag_only_the_covering_group():
-    periods = orchestrator._taf_periods(_segs(), BASE + timedelta(hours=6))
+def _span(from_hr, to_hr):
+    return orchestrator.flight_span(BASE + timedelta(hours=from_hr),
+                                    BASE + timedelta(hours=to_hr))
+
+
+def test_taf_periods_flag_only_the_groups_the_flight_meets():
+    # A flight wholly after the FM takes over meets only the FM group.
+    periods = orchestrator._taf_periods(_segs(), _span(5, 6))
     covering = [p for p in periods if p.in_window]
-    assert len(covering) == 1
-    assert covering[0].label == "FM"
+    assert [p.label for p in covering] == ["FM"]
+
+
+def test_taf_periods_flag_every_group_spanned_by_the_flight():
+    # A flight that straddles the FM boundary flies through both groups, so both
+    # are green. Flagging only the one covering the ETD instant hid the low
+    # overcast the second half of the flight actually lands in.
+    periods = orchestrator._taf_periods(_segs(), _span(3, 6))
+    assert [p.label for p in periods if p.in_window] == ["MAIN", "FM"]
 
 
 def test_taf_periods_flag_nothing_outside_validity():
-    periods = orchestrator._taf_periods(_segs(), BASE + timedelta(hours=40))
+    periods = orchestrator._taf_periods(_segs(), _span(40, 41))
     assert periods and not any(p.in_window for p in periods)
 
 
 def test_taf_periods_carry_their_raw_text():
-    periods = orchestrator._taf_periods(_segs(), BASE)
+    periods = orchestrator._taf_periods(_segs(), _span(0, 1))
     assert any("OVC008" in p.text for p in periods)
+
+
+def test_taf_periods_flag_a_now_departure():
+    # ETD "Now" with a short hop: the group covering this minute is still green.
+    # Not a special case in the code - it falls out of the span being real - but
+    # it is the case a pilot hits most, so it is pinned.
+    periods = orchestrator._taf_periods(_segs(), _span(0, 0))
+    assert [p.label for p in periods if p.in_window] == ["MAIN"]
+
+
+# A PROB30 alongside a TEMPO, both mid-flight.
+TAF_PROB = (
+    f"CYFD {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
+    f"27008KT P6SM SCT040 "
+    f"TEMPO {_dh(BASE + timedelta(hours=2))}/{_dh(BASE + timedelta(hours=3))} 27010KT 2SM BR OVC008 "
+    f"PROB30 {_dh(BASE + timedelta(hours=2))}/{_dh(BASE + timedelta(hours=4))} 1/2SM FG VV002"
+)
+
+
+def test_prob_period_is_green_but_marked_as_not_gating():
+    # "If it happens during the flight, the text is green" - including a PROB30.
+    # ``gates`` is what separates it, and it drives a border colour, never the
+    # loss of the highlight.
+    periods = orchestrator._taf_periods(wx.parse_taf_segments(TAF_PROB), _span(0, 3))
+    by_label = {p.label: p for p in periods}
+    assert by_label["PROB30"].in_window is True
+    assert by_label["PROB30"].gates is False
+    assert by_label["TEMPO"].in_window is True
+    assert by_label["TEMPO"].gates is True
+
+
+def test_a_tempo_mid_flight_fails_a_now_departure():
+    # The regression this whole change exists for: clear METAR, departing now,
+    # but a TEMPO puts you in 2 SM / 800 ft an hour into the leg. Gating on the
+    # ETD instant passed this flight; gating on the window fails it.
+    segs = wx.parse_taf_segments(TAF_PROB)
+    metar = f"CYFD {_dh(BASE)}00Z 27008KT 15SM FEW040 22/12 A3005"
+    ws = orchestrator._endpoint_weather_at(
+        metar, TAF_PROB, segs, None, None,
+        when=BASE, is_now=True, span=_span(0, 3))
+    # The headline stays the observation - a forecast never overrides what is
+    # being reported right now.
+    assert ws.source == Source.OBSERVED
+    assert ws.visibility_sm == 15
+
+    checks = evaluator.window_checks(ws, "day", ceiling_mode="endpoint")
+    failed = {c.key for c in checks if not c.passed}
+    assert failed == {"window_ceiling", "window_visibility"}
+    # …and the PROB30 rides along as an advisory that passes.
+    prob = next(c for c in checks if c.key == "window_prob")
+    assert prob.passed and prob.advisory
+    assert "1/2" in prob.actual_text or "0.5" in prob.actual_text
+
+
+def test_a_short_hop_that_lands_before_the_tempo_is_unaffected():
+    segs = wx.parse_taf_segments(TAF_PROB)
+    metar = f"CYFD {_dh(BASE)}00Z 27008KT 15SM FEW040 22/12 A3005"
+    ws = orchestrator._endpoint_weather_at(
+        metar, TAF_PROB, segs, None, None,
+        when=BASE, is_now=True, span=_span(0, 0.5))
+    assert all(c.passed for c in evaluator.window_checks(ws, "day", ceiling_mode="endpoint"))
+
+
+def test_future_etd_bakes_the_window_into_the_headline():
+    # On the forecast path the values themselves are the window worst case, so
+    # window_checks must not restate them as extra rows.
+    segs = wx.parse_taf_segments(TAF_PROB)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, TAF_PROB, segs, _fc(), BASE + timedelta(hours=1), _span(1, 3))
+    assert ws.window_gated is True
+    assert ws.ceiling_agl_ft == 800          # the TEMPO, from mid-window
+    assert ws.visibility_sm == 2
+    keys = {c.key for c in evaluator.window_checks(ws, "day", ceiling_mode="endpoint")}
+    assert keys == {"window_prob"}

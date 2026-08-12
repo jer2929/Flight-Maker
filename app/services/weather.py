@@ -304,6 +304,47 @@ def _overlaps(seg: dict, start: datetime, end: datetime) -> bool:
     return seg["start"] <= end and seg["end"] >= start
 
 
+overlaps = _overlaps   # public alias: the orchestrator scopes highlighting with it
+
+
+def _precip_rank(c: dict) -> tuple:
+    """Sort key for 'more significant precip': hazardous > heavy > present."""
+    return (bool(c.get("hazards")), bool(c.get("precip_heavy")), bool(c.get("precip")))
+
+
+def worse(a: dict, b: dict | None) -> dict:
+    """Merge two condition dicts taking the more conservative of each field.
+
+    The single "which of these two is worse" rule in the codebase: the hourly
+    timeline combines its two endpoints with it, the model/TAF overlay merge
+    uses it, and :func:`worst_in_window` folds a whole interval with it.
+    """
+    if not b:
+        return dict(a)
+    out = dict(a)
+    if b.get("wind_kt") is not None and (out.get("wind_kt") is None or b["wind_kt"] > out["wind_kt"]):
+        out["wind_kt"] = b["wind_kt"]
+        if b.get("wind_dir_true") is not None:
+            out["wind_dir_true"] = b["wind_dir_true"]
+    for k in ("gust_kt", "cloud_cover_pct", "precip_mm"):
+        if b.get(k) is not None and (out.get(k) is None or b[k] > out[k]):
+            out[k] = b[k]
+    for k in ("visibility_sm", "ceiling_agl_ft"):
+        if b.get(k) is not None and (out.get(k) is None or b[k] < out[k]):
+            out[k] = b[k]
+    out["hazards"] = sorted(set(out.get("hazards", [])) | set(b.get("hazards", [])))
+    # Carry the more significant precip label/heaviness (mm already max'd above).
+    if _precip_rank(b) > _precip_rank(out):
+        out["precip"] = b.get("precip")
+        out["precip_heavy"] = b.get("precip_heavy")
+    return out
+
+
+def is_prob(seg: dict) -> bool:
+    """True for a PROB30/PROB40 group (including ``PROB30 TEMPO``)."""
+    return str(seg.get("label", "")).startswith("PROB")
+
+
 def hazards_in_window(segments: list[dict], start: datetime,
                       end: datetime) -> tuple[set[str], list[dict]]:
     """Hazards forecast during ``[start, end]``, and those forecast outside it.
@@ -325,13 +366,20 @@ def hazards_in_window(segments: list[dict], start: datetime,
     return inside, outside
 
 
+def _as_utc(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
 def conditions_at(segments: list[dict], dt: datetime) -> Optional[dict]:
     """Effective TAF conditions at UTC ``dt``: latest applicable base, with any
-    TEMPO/PROB overlay merged in conservatively (worse wind/vis/ceiling)."""
+    TEMPO/PROB overlay merged in conservatively (worse wind/vis/ceiling).
+
+    A *point* query. Gating a flight on one ignores anything forecast between
+    the ETD and the ETA - see :func:`worst_in_window` for the interval form.
+    """
     if not segments:
         return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+    dt = _as_utc(dt)
     bases = [s for s in segments if s["kind"] == "base" and s["start"] <= dt <= s["end"]]
     if not bases:
         return None
@@ -340,18 +388,84 @@ def conditions_at(segments: list[dict], dt: datetime) -> Optional[dict]:
     for ov in segments:
         if ov["kind"] != "overlay" or not (ov["start"] <= dt <= ov["end"]):
             continue
-        c = ov["cond"]
-        if c["wind_kt"] is not None and (eff["wind_kt"] is None or c["wind_kt"] > eff["wind_kt"]):
-            eff["wind_kt"] = c["wind_kt"]
-            if c["wind_dir_true"] is not None:
-                eff["wind_dir_true"] = c["wind_dir_true"]
-        if c["gust_kt"] is not None and (eff["gust_kt"] is None or c["gust_kt"] > eff["gust_kt"]):
-            eff["gust_kt"] = c["gust_kt"]
-        if c["visibility_sm"] is not None and (eff["visibility_sm"] is None or c["visibility_sm"] < eff["visibility_sm"]):
-            eff["visibility_sm"] = c["visibility_sm"]
-        if c["ceiling_agl_ft"] is not None and (eff["ceiling_agl_ft"] is None or c["ceiling_agl_ft"] < eff["ceiling_agl_ft"]):
-            eff["ceiling_agl_ft"] = c["ceiling_agl_ft"]
-        if c["hazards"]:
-            eff["hazards"] = sorted(set(eff["hazards"]) | set(c["hazards"]))
+        eff = worse(eff, ov["cond"])
+        if ov["cond"].get("hazards"):
             eff["prob_overlay"] = True
     return eff
+
+
+def worst_in_window(segments: list[dict], start: datetime,
+                    end: datetime) -> Optional[dict]:
+    """Worst TAF conditions anywhere in ``[start, end]``.
+
+    The interval counterpart of :func:`conditions_at`. A flight is not an
+    instant, so gating on a point silently ignores a group that sits in the
+    middle of it - the TEMPO you would actually fly through.
+
+    Each change group is grouped by what it actually means:
+
+    * ``MAIN``/``FM``/``BECMG`` are permanent changes, so every base whose
+      (clipped) interval touches the window contributes to the gate. BECMG is
+      already stored as a step change at the start of its transition window, so
+      taking its conditions from that point on is the conservative reading.
+    * ``TEMPO`` is a temporary worsening you would fly through, so an
+      overlapping one merges in worst-of and gates.
+    * ``PROB30``/``PROB40`` are kept *separate*, under ``prob``. A 30-40%
+      chance is a planning input rather than a limit, so it never silently
+      fails a check; callers surface it as an advisory.
+
+    Returns ``None`` when no base group covers any part of the window - the TAF
+    has nothing to say about this flight.
+    """
+    if not segments:
+        return None
+    start, end = _as_utc(start), _as_utc(end)
+    if end < start:
+        start, end = end, start
+    periods = taf_periods(segments)
+    bases = sorted((s for s in periods
+                    if s["kind"] == "base" and _overlaps(s, start, end)),
+                   key=lambda s: s["start"])
+    if not bases:
+        return None
+
+    eff = dict(bases[0]["cond"])
+    for b in bases[1:]:
+        eff = worse(eff, b["cond"])
+    governing = list(bases)
+    prob: Optional[dict] = None
+    prob_periods: list[dict] = []
+    eff["prob_overlay"] = False
+
+    for ov in periods:
+        if ov["kind"] != "overlay" or not _overlaps(ov, start, end):
+            continue
+        if is_prob(ov):
+            prob = dict(ov["cond"]) if prob is None else worse(prob, ov["cond"])
+            prob_periods.append(ov)
+            continue
+        eff = worse(eff, ov["cond"])
+        governing.append(ov)
+        if ov["cond"].get("hazards"):
+            eff["prob_overlay"] = True
+
+    eff["prob"] = prob
+    eff["prob_periods"] = prob_periods
+    eff["governing"] = sorted(_binding(governing, eff), key=lambda s: s["start"])
+    return eff
+
+
+def _binding(periods: list[dict], eff: dict) -> list[dict]:
+    """The periods that actually produced one of the worst-case values.
+
+    Naming every group the flight touches is noise - a MAIN group listed beside
+    the TEMPO that undercut it implies MAIN had something to do with the limit.
+    Keep the ones a value can be traced to; fall back to all of them rather than
+    claim nothing when the window is entirely "no data".
+    """
+    keys = ("wind_kt", "gust_kt", "visibility_sm", "ceiling_agl_ft")
+    eff_haz = set(eff.get("hazards") or [])
+    out = [s for s in periods
+           if any(s["cond"].get(k) is not None and s["cond"][k] == eff.get(k) for k in keys)
+           or (set(s["cond"].get("hazards") or []) & eff_haz)]
+    return out or periods

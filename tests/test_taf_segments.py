@@ -1,12 +1,13 @@
 """Tests for TAF time-segmentation. TAFs are anchored to today's UTC day so
 date resolution succeeds regardless of when the suite runs."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.services.weather import (
     base_intervals,
     conditions_at,
     hazards_in_window,
     parse_taf_segments,
+    worst_in_window,
 )
 
 NOW = datetime.now(timezone.utc)
@@ -119,3 +120,66 @@ def test_hazard_window_counts_a_straddling_overlay():
     # A window ending just as the TEMPO begins still overlaps it.
     inside, _ = hazards_in_window(parse_taf_segments(TAF), _q(18), _q(20))
     assert inside == {"thunderstorm"}
+
+
+# --- worst_in_window: the interval form the flight is actually gated on -------
+
+# A BECMG lowers the ceiling permanently from 18Z; a TEMPO undercuts it 20-23Z;
+# a PROB30 is worse again in the same slot but must never gate on its own.
+TAF_BECMG = (
+    f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM SCT040 "
+    f"BECMG {_dd(D)}18/{_dd(D)}19 31012KT 5SM BKN015 "
+    f"TEMPO {_dd(D)}20/{_dd(D)}23 34022G34KT 2SM TSRA BKN008 "
+    f"PROB30 {_dd(D)}20/{_dd(D)}23 1/2SM FG VV002"
+)
+
+
+def test_worst_in_window_takes_the_worst_base_across_a_becmg():
+    # A flight straddling the BECMG meets both sides of it, so the gate is the
+    # worse one. Querying the ETD instant alone would report SCT040 and miss the
+    # BKN015 the second half of the flight lands in.
+    w = worst_in_window(parse_taf_segments(TAF_BECMG), _q(17), _q(19))
+    assert w["ceiling_agl_ft"] == 1500
+    assert w["visibility_sm"] == 5
+    assert w["wind_kt"] == 12
+
+
+def test_worst_in_window_gates_on_a_tempo_it_flies_through():
+    w = worst_in_window(parse_taf_segments(TAF_BECMG), _q(19), _q(21))
+    assert w["ceiling_agl_ft"] == 800          # the TEMPO, not the BECMG's 1500
+    assert w["visibility_sm"] == 2
+    assert w["gust_kt"] == 34
+    assert "thunderstorm" in w["hazards"]
+
+
+def test_worst_in_window_ignores_a_tempo_outside_the_flight():
+    # The same TEMPO, for a flight that lands before it starts.
+    w = worst_in_window(parse_taf_segments(TAF_BECMG), _q(13), _q(15))
+    assert w["ceiling_agl_ft"] is None         # MAIN is SCT040 - no ceiling
+    assert w["visibility_sm"] == 10            # P6SM, capped
+    assert w["hazards"] == []
+
+
+def test_prob_groups_are_reported_but_never_gate():
+    # The PROB30 is the worst thing in the window by a wide margin. It must stay
+    # out of the gating values entirely - a 30% chance is not a limit - while
+    # still being handed to the caller to show.
+    w = worst_in_window(parse_taf_segments(TAF_BECMG), _q(20), _q(22))
+    assert w["ceiling_agl_ft"] == 800          # TEMPO's, not the PROB30's 200
+    assert w["visibility_sm"] == 2             # TEMPO's, not the PROB30's 1/2
+    assert w["prob"]["ceiling_agl_ft"] == 200
+    assert w["prob"]["visibility_sm"] == 0.5
+    assert [s["label"] for s in w["prob_periods"]] == ["PROB30"]
+
+
+def test_worst_in_window_names_only_the_binding_groups():
+    # MAIN is in the window too, but the TEMPO is what produced every value, so
+    # listing MAIN beside it would imply it had a hand in the limit.
+    w = worst_in_window(parse_taf_segments(TAF_BECMG), _q(19), _q(21))
+    assert [s["label"] for s in w["governing"]] == ["TEMPO"]
+
+
+def test_worst_in_window_is_none_outside_the_taf():
+    segs = parse_taf_segments(TAF_BECMG)
+    assert worst_in_window(segs, _q(2) - timedelta(days=2),
+                           _q(3) - timedelta(days=2)) is None

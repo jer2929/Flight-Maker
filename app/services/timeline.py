@@ -98,41 +98,18 @@ def cloud_category(pct: float | None) -> str | None:
 model_conditions = _model_conditions  # public alias for reuse by the orchestrator
 
 
-def _precip_rank(c: dict) -> tuple:
-    """Sort key for 'more significant precip': hazardous > heavy > present."""
-    return (bool(c.get("hazards")), bool(c.get("precip_heavy")), bool(c.get("precip")))
+# The conservative condition merge lives in ``weather`` so that module's own
+# interval queries (``worst_in_window``) can use it - ``weather`` cannot import
+# this module, since this one imports it.
+_worse = wx.worse
 
 
-def _worse(a: dict, b: dict | None) -> dict:
-    """Merge two condition dicts taking the more conservative of each field."""
-    if not b:
-        return dict(a)
-    out = dict(a)
-    if b.get("wind_kt") is not None and (out.get("wind_kt") is None or b["wind_kt"] > out["wind_kt"]):
-        out["wind_kt"] = b["wind_kt"]
-        if b.get("wind_dir_true") is not None:
-            out["wind_dir_true"] = b["wind_dir_true"]
-    for k in ("gust_kt", "cloud_cover_pct", "precip_mm"):
-        if b.get(k) is not None and (out.get(k) is None or b[k] > out[k]):
-            out[k] = b[k]
-    for k in ("visibility_sm", "ceiling_agl_ft"):
-        if b.get(k) is not None and (out.get(k) is None or b[k] < out[k]):
-            out[k] = b[k]
-    out["hazards"] = sorted(set(out.get("hazards", [])) | set(b.get("hazards", [])))
-    # Carry the more significant precip label/heaviness (mm already max'd above).
-    if _precip_rank(b) > _precip_rank(out):
-        out["precip"] = b.get("precip")
-        out["precip_heavy"] = b.get("precip_heavy")
-    return out
+def _merge_model_taf(model: dict, taf: dict | None) -> tuple[dict, bool]:
+    """Model backbone with the TAF laid over it. Returns (conditions, taf_used).
 
-
-def _endpoint_hour(fc: dict, taf_segs: list[dict], i: int, dt_utc: datetime) -> tuple[dict, bool]:
-    """Conditions at one endpoint for hour i: model backbone + TAF overlay.
-
-    Returns (conditions, taf_used).
+    The single implementation of "TAF beats model" in the codebase - the point
+    query, the interval query and the hourly timeline all come through here.
     """
-    model = _model_conditions(fc, i)
-    taf = wx.conditions_at(taf_segs, dt_utc) if taf_segs else None
     if taf is None:
         return model, False
     # Model wind (accurate) but take worse; TAF authoritative for ceiling/vis/hazards.
@@ -147,27 +124,15 @@ def _endpoint_hour(fc: dict, taf_segs: list[dict], i: int, dt_utc: datetime) -> 
     return merged, True
 
 
-endpoint_hour = _endpoint_hour  # public alias for reuse by the orchestrator
+def _sources(merged: dict, taf: dict | None, taf_used: bool) -> dict:
+    """Per-field provenance, read back off the TAF conditions that were merged.
 
-
-def endpoint_hour_sourced(fc: dict, taf_segs: list[dict], i: int,
-                          dt_utc: datetime) -> tuple[dict, dict]:
-    """``_endpoint_hour`` plus a per-field provenance map.
-
-    The merge itself is not repeated here - provenance is read back off the TAF
-    conditions, so there is exactly one implementation of "TAF beats model" in
-    the codebase. Fields the TAF didn't speak to fall through to the model.
-
-    ``build_timeline`` deliberately keeps calling ``_endpoint_hour`` directly:
-    it discards the map, and calling this wrapper 48x would double the
-    ``conditions_at`` work for nothing.
+    Fields the TAF didn't speak to fall through to the model.
     """
-    merged, taf_used = _endpoint_hour(fc, taf_segs, i, dt_utc)
     src = {k: Source.MODEL for k in
            ("wind", "gust", "ceiling", "visibility", "hazards")}
-    if not taf_used:
-        return merged, src
-    taf = wx.conditions_at(taf_segs, dt_utc) or {}
+    if not taf_used or not taf:
+        return src
     # TAF wins outright on ceiling/visibility when it supplied one.
     if taf.get("ceiling_agl_ft") is not None:
         src["ceiling"] = Source.TAF
@@ -180,7 +145,54 @@ def endpoint_hour_sourced(fc: dict, taf_segs: list[dict], i: int,
         src["gust"] = Source.TAF
     if taf.get("hazards"):
         src["hazards"] = Source.TAF
-    return merged, src
+    return src
+
+
+def _endpoint_hour(fc: dict, taf_segs: list[dict], i: int, dt_utc: datetime) -> tuple[dict, bool]:
+    """Conditions at one endpoint for hour i: model backbone + TAF overlay.
+
+    Returns (conditions, taf_used).
+    """
+    taf = wx.conditions_at(taf_segs, dt_utc) if taf_segs else None
+    return _merge_model_taf(_model_conditions(fc, i), taf)
+
+
+endpoint_hour = _endpoint_hour  # public alias for reuse by the orchestrator
+
+
+def endpoint_hour_sourced(fc: dict, taf_segs: list[dict], i: int,
+                          dt_utc: datetime) -> tuple[dict, dict]:
+    """``_endpoint_hour`` plus a per-field provenance map.
+
+    ``build_timeline`` deliberately keeps calling ``_endpoint_hour`` directly:
+    it discards the map, and 48 provenance dicts are 48 dicts of nothing.
+    """
+    taf = wx.conditions_at(taf_segs, dt_utc) if taf_segs else None
+    merged, taf_used = _merge_model_taf(_model_conditions(fc, i), taf)
+    return merged, _sources(merged, taf, taf_used)
+
+
+def endpoint_window_sourced(fc: dict, taf_segs: list[dict], idxs: list[int],
+                            start: datetime, end: datetime) -> tuple[dict, dict, dict | None]:
+    """Worst conditions anywhere in ``[start, end]``, with provenance.
+
+    The interval counterpart of :func:`endpoint_hour_sourced`. Both sides of the
+    merge describe the same span: the model contributes the worst of the hours
+    the window touches, the TAF the worst of the groups it touches
+    (``weather.worst_in_window``). Gating on the hour containing the ETD instead
+    would miss the TEMPO you fly through twenty minutes later.
+
+    Returns ``(conditions, sources, taf)`` - the third element is the raw
+    window result, which carries ``prob``/``prob_periods``/``governing`` for
+    callers that need to say *which* group produced a limit.
+    """
+    model: dict | None = None
+    for i in idxs:
+        c = _model_conditions(fc, i)
+        model = c if model is None else _worse(model, c)
+    taf = wx.worst_in_window(taf_segs, start, end) if taf_segs else None
+    merged, taf_used = _merge_model_taf(model or {}, taf)
+    return merged, _sources(merged, taf, taf_used), taf
 
 
 def _start_index(times: list[str], offset: int) -> int:

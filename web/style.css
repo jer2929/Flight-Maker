@@ -1,5 +1,8 @@
 :root {
   --go: #1f8a4c; --mitigate: #c98a00; --nogo: #c0392b;
+  /* --go is a fill/border colour; against the dark panel it is too dark to read
+     as text, so green *text* uses this lighter tint. */
+  --go-ink: #5fd08a;
   --bg: #0f1419; --panel: #1a2129; --ink: #e6edf3; --muted: #8b98a5;
   --line: #2a3540; --accent: #3b82f6;
 }
@@ -462,10 +465,20 @@ footer { max-width: 1000px; margin: 20px auto; padding: 0 20px 30px; color: var(
 /* ETD picker (route inputs + discovery filters) */
 .etd-sel { width: 100%; min-width: 150px; }
 .ac .etd-sel { min-width: 170px; }
+/* The selected ETD came and went while the page sat open, so it was reset to
+   "Now". Say so - silently changing which flight is being assessed is exactly
+   the failure the no-persist rule exists to prevent. */
+.etd-lapsed .etd-sel { border-color: var(--mitigate); }
+/* The route tab wraps the select in a div with its own <label>; the discovery
+   tab's row *is* the label - hence both selectors. */
+.etd-lapsed > label::after, label.etd-lapsed::after {
+  content: "that time has passed - reset to Now";
+  display: block; color: var(--mitigate); font-size: .78rem; margin-top: 3px;
+}
 
-/* TAF split into its forecast periods, with the one covering your ETD/ETA
-   highlighted. Opacity alone isn't an accessible differentiator, so the green
-   left border and tinted background carry the signal too. */
+/* TAF split into its forecast periods, with every period the flight passes
+   through highlighted. Opacity alone isn't an accessible differentiator, so the
+   green text, left border and tinted background carry the signal too. */
 details.taf { margin: 8px 0 0; font-size: .8rem; }
 details.taf summary { cursor: pointer; color: var(--accent); }
 .taf-p {
@@ -473,12 +486,19 @@ details.taf summary { cursor: pointer; color: var(--accent); }
   padding: 2px 6px; font-family: ui-monospace, monospace; font-size: .76rem;
   border-left: 3px solid transparent; opacity: .45;
 }
+/* Anything you fly through is green - whatever kind of group it is. */
 .taf-p.in {
   opacity: 1; border-left-color: var(--go); background: rgba(31, 138, 76, .10);
+  color: var(--go-ink);
 }
+/* A PROB30/40 during the flight stays green (it does happen during the flight)
+   but takes an amber edge: it is a possibility to weigh, not a limit that fails
+   the card by itself. */
+.taf-p.in.prob { border-left-color: var(--mitigate); }
 .taf-p .taf-k { color: #8fbcff; }        /* matches the .src.TAF chip */
 .taf-p.overlay .taf-k { font-style: italic; }
 .taf-p .taf-t { color: var(--muted); }
+.taf-p.in .taf-k, .taf-p.in .taf-t, .taf-p.in .taf-x { color: var(--go-ink); }
 .taf-p .taf-x { word-break: break-word; }
 .taf-raw { margin-top: 6px; opacity: .6; }
 @media (max-width: 520px) {
