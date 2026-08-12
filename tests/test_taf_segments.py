@@ -106,20 +106,37 @@ def test_hazards_in_window_scopes_to_the_flight():
     segs = parse_taf_segments(TAF)
     # A midday flight: the TSRA is forecast 20-23Z and must NOT be reported as
     # present - this is the bug that made a next-day storm a NO-GO today.
-    inside, outside = hazards_in_window(segs, _q(13), _q(15))
+    inside, outside, _prob = hazards_in_window(segs, _q(13), _q(15))
     assert inside == set()
     assert [s["label"] for s in outside] == ["TEMPO"]
 
     # An evening flight through the same TSRA: it must be reported.
-    inside, outside = hazards_in_window(segs, _q(19), _q(22))
+    inside, outside, _prob = hazards_in_window(segs, _q(19), _q(22))
     assert inside == {"thunderstorm"}
     assert outside == []
 
 
 def test_hazard_window_counts_a_straddling_overlay():
     # A window ending just as the TEMPO begins still overlaps it.
-    inside, _ = hazards_in_window(parse_taf_segments(TAF), _q(18), _q(20))
+    inside, _out, _prob = hazards_in_window(parse_taf_segments(TAF), _q(18), _q(20))
     assert inside == {"thunderstorm"}
+
+
+def test_prob_hazards_are_reported_apart_from_forecast_ones():
+    # A TEMPO thunderstorm is a forecast; a PROB30 one is a 30% chance. Folding
+    # them into the same set made a PROB30 TSRA a hard NO-GO by the same path as
+    # a forecast one, with nothing on the card to say which it was.
+    segs = parse_taf_segments(TAF_BECMG)
+    inside, _out, prob = hazards_in_window(segs, _q(20), _q(22))
+    assert inside == {"thunderstorm"}          # the TEMPO's TSRA
+    assert prob == set()                       # this PROB30 is only FG, no TS
+
+    prob_ts = parse_taf_segments(
+        f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM SCT040 "
+        f"PROB30 {_dd(D)}20/{_dd(D)}23 27012KT 2SM TSRA BKN020CB")
+    inside, _out, prob = hazards_in_window(prob_ts, _q(20), _q(22))
+    assert inside == set()                     # nothing forecast outright
+    assert prob == {"thunderstorm"}            # …only a chance of it
 
 
 # --- worst_in_window: the interval form the flight is actually gated on -------
