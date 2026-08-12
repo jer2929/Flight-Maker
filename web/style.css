@@ -295,6 +295,9 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .nearby { margin: 6px 0; font-size: .84rem; color: var(--ink); background: rgba(255,255,255,.03);
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 .nearby .nlabel { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; }
+/* The neighbour's TAF gets the same green highlight as your own field's, which
+   would otherwise read as "this counts". It doesn't. */
+.nearby-caveat { margin-top: 4px; font-style: italic; }
 .advisories { font-size: .84rem; }
 .advisories summary { cursor: pointer; font-weight: 600; }
 .adv { margin: 6px 0; padding: 6px 8px; background: rgba(201,138,0,.08); border-left: 3px solid var(--mitigate);
@@ -436,6 +439,10 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
   border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: .82rem;
 }
 .gfa-tab.active, .gfa-frame.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+/* The panel covering your ETD, marked even after you click to another one, so
+   you can always find your way back to the chart for your flight. */
+.gfa-frame.etd::after { content: " ✈"; }
+.gfa-frame.etd:not(.active) { border-color: var(--go); color: var(--go-ink); }
 .gfa-img-link { display: block; }
 .gfa-img { display: block; width: 100%; max-width: 760px; height: auto; margin: 10px auto 6px;
   background: #fff; border: 1px solid var(--line); border-radius: 8px; }

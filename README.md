@@ -66,11 +66,30 @@ for taxi and approach - not for a single instant:
   forecast never overrides an observation of the present moment - and what the TAF
   says about the rest of the leg appears as its own clearly-labelled rows, naming
   the group it came from (`Ceiling in flight window (TEMPO 1900Z-2000Z)`).
-* **PROB30/PROB40** are shown but never fail the card on their own. A 30-40% chance
-  is a planning input, not a limit, so it gets a row you can weigh instead of a
-  silent NO-GO - spelled out in plain words rather than TAF code:
-  `Might happen: 1800Z-2300Z (30% chance) | not counted against your limits |
-  wind 20G30 kt, 4,000 ft ceiling, 3 SM visibility, thunderstorm - plan for it`.
+* **PROB30/PROB40** never fail the card on ceiling, visibility or wind. The row
+  keeps the TAF's own language: `PROB30 1800Z-2300Z | Advisory only | wind 20G30
+  kt, 4,000 ft ceiling, 3 SM visibility, thunderstorm`.
+  A **hazard** carried only by a PROB group (a `PROB30 TSRA`) is different: it
+  gates only if you have that hazard on your **Weather auto NO-GO** list in
+  Settings, and otherwise shows as an advisory naming the group. Thunderstorm is
+  on that list by default, so a PROB30 TSRA is still a NO-GO out of the box -
+  turn it off and it becomes a caution instead.
+
+### Aerodromes with no TAF of their own
+When a field doesn't report, the nearest reporting station's METAR/TAF is shown -
+split into periods and highlighted like any other, because it is the only forecast
+text available. It is **reference only and never gates**: a TAF's ceiling,
+visibility and wind describe roughly a 5 SM radius around *its* aerodrome, and
+CYFD to CYHM is 13 nm of escarpment and lake-breeze. Regional hazards reach the
+verdict through the GFA, SIGMETs and AIRMETs, which are actual area products
+covering your field, rather than by borrowing a neighbour's aerodrome forecast.
+
+### GFA charts
+The GFA panel opens on the chart that **covers your ETD**, not the current one -
+at 1900Z with a 0100Z departure you get the 0000Z panel, not the 1800Z one. The
+covering panel stays marked (✈) after you click to another, and if your ETD is
+past the reach of the latest issuance the caption says so rather than showing a
+chart that doesn't describe your flight.
 
 ### En-route aerodromes
 A collapsed-by-default list of every aerodrome within **5 nm of the straight

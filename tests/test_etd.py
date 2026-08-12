@@ -89,11 +89,11 @@ def test_a_vrb_taf_wind_keeps_the_model_direction():
     assert ws.wind_dir_true == 270               # from the model
 
 
-def test_the_prob_row_avoids_jargon_and_names_the_wind():
-    # "PROB30" and "does not gate" are code, not English. The row has to say when,
-    # how likely, and that it will not fail the card - in words a pilot who has
-    # never read this repo can act on. It must also carry the PROB's wind, which
-    # is the whole point of a VRB20G30KT group.
+def test_the_prob_row_keeps_taf_language_and_names_the_wind():
+    # Pilots read the raw TAF underneath, so the row stays in its language:
+    # the group and its times verbatim, "Advisory only" as the limit. It must
+    # also carry the PROB's wind, which is the whole point of a VRB20G30KT
+    # group and previously appeared nowhere on the card.
     taf = (f"CYFD {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
            f"22010KT P6SM SCT040 "
            f"PROB30 {_dh(BASE + timedelta(hours=1))}/{_dh(BASE + timedelta(hours=4))} "
@@ -104,11 +104,10 @@ def test_the_prob_row_avoids_jargon_and_names_the_wind():
     row = next(c for c in evaluator.window_checks(ws, "day", ceiling_mode="endpoint")
                if c.key == "window_prob")
     assert row.passed and row.advisory
-    assert "30% chance" in row.label
+    assert row.label.startswith("PROB30 ")
+    assert row.limit_text == "Advisory only"
     assert "20G30 kt" in row.actual_text
-    blob = f"{row.label} {row.limit_text} {row.actual_text}"
-    assert "does not gate" not in blob
-    assert "PROB" not in blob
+    assert "does not gate" not in f"{row.limit_text} {row.actual_text}"
     # …and none of it reached the gating values.
     assert ws.wind_kt == 10 and ws.gust_kt is None
 

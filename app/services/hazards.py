@@ -48,6 +48,11 @@ def _has(text: str, *patterns: str) -> bool:
     return any(re.search(p, text) for p in patterns)
 
 
+def _prob_where(labels) -> str:
+    """The PROB groups themselves, in TAF language - "PROB30 1800Z-2300Z"."""
+    return ", ".join(labels) if labels else "PROB30/40"
+
+
 def weather_checks(
     *,
     raw_text: str,                 # area product text (SIGMET/AIRMET/PIREP)
@@ -67,6 +72,12 @@ def weather_checks(
     out_of_window: list[dict] = (),           # TAF hazard periods outside it
     etd_is_now: bool = True,
     window_label: str = "",
+    # Hazards carried only by a PROB30/PROB40 group overlapping the flight, and
+    # the pilot's own "any of these -> NO-GO" list. A PROB hazard gates only if
+    # it appears in that list; see ``_forecast_hazard``.
+    prob_hazards: set[str] = frozenset(),
+    gating_flags: set[str] = frozenset(),
+    prob_labels: list[str] = (),              # e.g. ["PROB30 1800Z-2300Z"]
 ) -> list[LimitCheck]:
     blob = raw_text.upper()
     area = area_text.upper()
@@ -97,16 +108,25 @@ def weather_checks(
 
         A METAR is an observation of *now*, so it gates only a now-departure;
         for a later ETD it is reported as an advisory rather than vanishing.
+
+        A hazard carried *only* by a PROB30/PROB40 is a 30-40% chance, not a
+        forecast. It gates only when the pilot has listed that hazard among the
+        weather flags they treat as an automatic NO-GO; otherwise it is reported
+        as an advisory naming the PROB group, so the decision stays theirs.
         """
         in_taf = flag in window_hazards
         in_endpoint = flag in hazards
         in_metar = flag in metar_hazards
         in_area = bool(area) and _has(area, *area_pats)
-        failed = in_taf or in_endpoint or in_area or (in_metar and etd_is_now)
+        in_prob = flag in prob_hazards and not in_taf
+        prob_gates = in_prob and flag in gating_flags
+        failed = in_taf or in_endpoint or in_area or (in_metar and etd_is_now) or prob_gates
         if failed:
             srcs = []
             if in_taf:
                 srcs.append("TAF")
+            if prob_gates:
+                srcs.append(f"TAF {_prob_where(prob_labels)} - your auto NO-GO list")
             if in_endpoint and not in_taf:
                 srcs.append("forecast")
             if in_metar and etd_is_now:
@@ -114,6 +134,10 @@ def weather_checks(
             if in_area:
                 srcs.append("SIGMET/AIRMET")
             add(key, label, True, f"{name}{win} - " + " + ".join(srcs))
+        elif in_prob:
+            add(key, label, False,
+                f"{name} possible{win} - TAF {_prob_where(prob_labels)}, advisory only",
+                advisory=True)
         elif in_metar and not etd_is_now:
             add(key, label, False,
                 f"{name} observed now - not in {win_bare}", advisory=True)

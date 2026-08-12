@@ -20,6 +20,34 @@ def test_convective_fails_on_ts_in_flight_window():
     assert not _run(window_hazards={"thunderstorm"})["convective"].passed
 
 
+def test_prob_thunderstorm_gates_only_if_ts_is_on_your_auto_nogo_list():
+    # A PROB30 TSRA is a 30% chance, not a forecast. It used to reach the
+    # convective row by the same path as a TEMPO one and force a NO-GO with
+    # nothing on the card to say which it was.
+    args = dict(prob_hazards={"thunderstorm"},
+                prob_labels=["PROB30 1800Z-2300Z"])
+
+    # TS listed as an automatic NO-GO (the shipped default): it gates, and the
+    # row says why - both that it is a PROB group and that the pilot asked.
+    gated = _run(**args, gating_flags={"thunderstorm"})["convective"]
+    assert not gated.passed
+    assert "PROB30 1800Z-2300Z" in gated.actual_text
+    assert "auto NO-GO" in gated.actual_text
+
+    # TS not on the list: advisory, naming the group, verdict untouched.
+    adv = _run(**args, gating_flags=set())["convective"]
+    assert adv.passed and adv.advisory
+    assert "PROB30 1800Z-2300Z" in adv.actual_text
+
+
+def test_a_forecast_ts_gates_regardless_of_the_prob_setting():
+    # A TEMPO/base TS is a forecast, not a chance - the auto-NO-GO list has no
+    # say over it, and it must not be downgraded by the PROB plumbing.
+    c = _run(window_hazards={"thunderstorm"}, prob_hazards=set(),
+             gating_flags=set())["convective"]
+    assert not c.passed
+
+
 def test_convective_fails_on_area_product_text():
     # Area products (SIGMET/AIRMET/PIREP) are still scanned as text - they carry
     # their own validity, which is a separate follow-up.
