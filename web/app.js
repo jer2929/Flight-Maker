@@ -1544,7 +1544,12 @@ function whyBlock(a) {
   // Rendered from the checks rather than the flattened `reasons` strings: the
   // provenance is only on the check.
   const limits = (a.limit_checks || []).filter((c) => !c.passed && c.applicable && !c.advisory);
-  if (!limits.length && !threats.length && !advisories.length) return "";
+  // A GO with nothing to add stays silent. A verdict that is NOT a GO always
+  // renders, even with all three lists empty: an unexplained badge is the one
+  // outcome this block exists to prevent, so the empty case falls through to a
+  // stated fallback below rather than returning nothing and hiding it.
+  const nothingToSay = !limits.length && !threats.length && !advisories.length;
+  if (nothingToSay && a.verdict === "GO") return "";
   const heading = a.verdict === "GO" ? "Worth knowing" : `Why ${a.verdict}`;
   const parts = [];
   if (limits.length) {
@@ -1562,6 +1567,14 @@ function whyBlock(a) {
   if (advisories.length) {
     parts.push(`<div class="why-group"><span class="why-h">Advisory - not counted against your limits</span>
       <ul class="reasons">${advisories.map((c) => `<li>${escapeHtml(c.label)}: ${escapeHtml(c.actual_text)}</li>`).join("")}</ul></div>`);
+  }
+  if (!parts.length) {
+    // Reached only if the engine downgraded a verdict without attaching a row
+    // to say why. Say *that*, plainly, instead of rendering a bare badge - a
+    // pilot who can see the app has no reason is better off than one staring
+    // at a MITIGATE that looks like it means nothing.
+    parts.push(`<div class="why-group"><span class="why-h">No reason was attached to this verdict</span>
+      <ul class="reasons"><li>${escapeHtml(a.verdict)} with no limit bust or threat reported - treat as unverified and check the raw METAR/TAF below.</li></ul></div>`);
   }
   return `<div class="why ${cls(a.verdict)}"><div class="why-title">${heading}</div>${parts.join("")}</div>`;
 }

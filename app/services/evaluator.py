@@ -441,12 +441,24 @@ def threat_check_list(present: set[str]) -> list[ThreatCheck]:
     # "absent" that reads as though a night flight had passed a check.
     if not get_limits()["threat_stacking"].get("night_as_threat", True):
         hide_when_absent = hide_when_absent | {"night_operations"}
-    return [
+    rows = [
         ThreatCheck(key=k, label=THREAT_LABELS.get(k, k.replace("_", " ").title()),
                     present=k in present)
         for k in order
         if k not in hide_when_absent or k in present
     ]
+    # Anything counted must be shown. threat_weight() sums the `present` set
+    # while this list only walked `major_threats`, so a threat missing from that
+    # config drove the verdict with no row to explain it - a MITIGATE badge over
+    # a card with nothing on it. Appending the strays keeps the two in step by
+    # construction rather than by the two lists happening to agree.
+    listed = {r.key for r in rows}
+    rows.extend(
+        ThreatCheck(key=k, label=THREAT_LABELS.get(k, k.replace("_", " ").title()),
+                    present=True)
+        for k in sorted(present - listed)
+    )
+    return rows
 
 
 def threat_weight(present: set[str]) -> int:

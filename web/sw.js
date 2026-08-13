@@ -8,11 +8,19 @@
  *   - other GETs    -> cache-first (the static shell: HTML/CSS/JS/icons).
  *   - cross-origin  -> bypassed entirely (Leaflet CDN, GeoMet radar tiles, etc.).
  *
- * Bump VERSION on any shell change; old caches are purged on activate, and
- * skipWaiting + clients.claim make a new deploy take over on the next load so
- * users never get stuck on a stale shell.
+ * VERSION is stamped by the server from the SHELL FILES' OWN CONTENT (see
+ * main.py:service_worker) - it is not maintained by hand, because by hand it
+ * was forgotten. app.js changed in three separate PRs while VERSION sat still,
+ * and cache-first + ignoreSearch meant every browser that had already
+ * installed this worker kept serving the OLD app.js indefinitely. That shipped
+ * as a card showing a MITIGATE badge with no explanation under it: the backend
+ * was sending the threat rows, and a months-old script was rendering the page.
+ * The "sometimes it works" was just which devices had the worker installed.
+ *
+ * Old caches are purged on activate, and skipWaiting + clients.claim make a new
+ * deploy take over on the next load so users never get stuck on a stale shell.
  */
-const VERSION = "minima-v8-20260813";
+const VERSION = "__SHELL_VERSION__";
 const SHELL_CACHE = `shell-${VERSION}`;
 
 const SHELL = [
