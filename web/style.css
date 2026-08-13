@@ -149,8 +149,20 @@ select, input[type=text], .route-inputs input {
 .badge.MITIGATE { background: rgba(201,138,0,.2); color: #f5c451; }
 .badge.NOGO { background: rgba(192,57,43,.2); color: #ff9b8f; }
 .meta { color: var(--muted); font-size: .85rem; margin: 6px 0; display: flex; gap: 14px; flex-wrap: wrap; }
-.reasons { margin: 8px 0 0; padding-left: 18px; font-size: .86rem; }
+.reasons { margin: 4px 0 0; padding-left: 18px; font-size: .86rem; }
 .reasons li { margin: 2px 0; }
+
+/* Why a discovery card is not a plain GO. Sits directly under the card head, so
+   the badge and its explanation are read together rather than a screen apart. */
+.why {
+  margin: 8px 0 2px; padding: 8px 10px; border-radius: 8px;
+  background: rgba(255,255,255,.05); border-left: 3px solid var(--line);
+}
+.why.MITIGATE { border-left-color: var(--mitigate); }
+.why.NOGO { border-left-color: var(--nogo); }
+.why-title { font-weight: 700; font-size: .84rem; margin-bottom: 2px; }
+.why-group + .why-group { margin-top: 6px; }
+.why-h { font-size: .78rem; color: var(--muted); }
 .raw { color: var(--muted); font-family: ui-monospace, monospace; font-size: .76rem; margin-top: 8px; word-break: break-word; }
 .ok-line { color: #6ee7a0; font-size: .9rem; margin: 6px 0; }
 .meta .warn { color: #ff9b8f; }
@@ -219,6 +231,11 @@ select, input[type=text], .route-inputs input {
 .tl-cell.MITIGATE { background: rgba(201,138,0,.35); }
 .tl-cell.NOGO { background: rgba(192,57,43,.35); }
 .tl-cell.night { opacity: .5; }
+/* An hour a PROB30/40 touches. Painted with background-image rather than a
+   box-shadow because .best already owns the shadow and the two co-occur. Same
+   amber as the TAF strip's PROB edge, and it means the same thing there: only a
+   chance, shown but never counted against your limits. */
+.tl-cell.prob { background-image: linear-gradient(to right, var(--mitigate) 0 3px, transparent 3px); }
 .tl-cell.best { border-color: #fff; box-shadow: 0 0 0 1px #fff inset; }
 .tl-cell.active { outline: 2px solid var(--accent, #4ea1ff); outline-offset: 1px; }
 .tl-hour { font-weight: 700; }
@@ -241,9 +258,10 @@ select, input[type=text], .route-inputs input {
 .seg-btn { background: #0f1419; color: var(--muted); border: none; padding: 7px 14px; cursor: pointer; font-size: .9rem; }
 .seg-btn.active { background: var(--accent); color: #fff; }
 
-/* Day/night derived from civil twilight rather than picked by hand - dashed so
-   it reads as "we chose this for you, and you can still override it". */
-#mode-seg.auto { border-style: dashed; }
+/* Whether day/night was derived or picked by hand is said in words, by
+   .mode-note below. The control itself never changes shape: it used to switch to
+   a dashed border when derived, so choosing an ETD redrew its outline and the
+   whole thing read as a glitch. Only the active half moves. */
 .mode-note { margin: 4px 0 0; font-size: .76rem; }
 
 /* checklist location + source chips */

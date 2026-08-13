@@ -381,10 +381,17 @@ def _as_utc(dt: datetime) -> datetime:
 
 def conditions_at(segments: list[dict], dt: datetime) -> Optional[dict]:
     """Effective TAF conditions at UTC ``dt``: latest applicable base, with any
-    TEMPO/PROB overlay merged in conservatively (worse wind/vis/ceiling).
+    TEMPO overlay merged in conservatively (worse wind/vis/ceiling).
 
     A *point* query. Gating a flight on one ignores anything forecast between
     the ETD and the ETA - see :func:`worst_in_window` for the interval form.
+
+    ``PROB30``/``PROB40`` are kept **separate**, under ``prob`` and
+    ``prob_labels``, exactly as :func:`worst_in_window` keeps them. This function
+    used to fold them in with everything else, which is why the same TAF could
+    turn an hour of the hour-by-hour strip red while the route card - reading it
+    through ``worst_in_window`` - called that time advisory. A 30-40% chance is a
+    planning input, not a limit; the caller decides what to do with it.
     """
     if not segments:
         return None
@@ -394,12 +401,20 @@ def conditions_at(segments: list[dict], dt: datetime) -> Optional[dict]:
         return None
     eff = dict(max(bases, key=lambda s: s["start"])["cond"])
     eff["prob_overlay"] = False
+    prob: Optional[dict] = None
+    prob_periods: list[dict] = []
     for ov in segments:
         if ov["kind"] != "overlay" or not (ov["start"] <= dt <= ov["end"]):
+            continue
+        if is_prob(ov):
+            prob = dict(ov["cond"]) if prob is None else worse(prob, ov["cond"])
+            prob_periods.append(ov)
             continue
         eff = worse(eff, ov["cond"])
         if ov["cond"].get("hazards"):
             eff["prob_overlay"] = True
+    eff["prob"] = prob
+    eff["prob_periods"] = prob_periods
     return eff
 
 

@@ -102,11 +102,10 @@ def weather_checks(
     out_of_window: list[dict] = (),           # TAF hazard periods outside it
     etd_is_now: bool = True,
     window_label: str = "",
-    # Hazards carried only by a PROB30/PROB40 group overlapping the flight, and
-    # the pilot's own "any of these -> NO-GO" list. A PROB hazard gates only if
-    # it appears in that list; see ``_forecast_hazard``.
+    # Hazards carried only by a PROB30/PROB40 group overlapping the flight. They
+    # are reported here and gated in ``evaluator.prob_checks``, which every view
+    # reaches; see ``_forecast_hazard``.
     prob_hazards: set[str] = frozenset(),
-    gating_flags: set[str] = frozenset(),
     prob_labels: list[str] = (),              # e.g. ["PROB30 1800Z-2300Z"]
 ) -> list[LimitCheck]:
     blob = raw_text.upper()
@@ -141,23 +140,22 @@ def weather_checks(
         for a later ETD it is reported as an advisory rather than vanishing.
 
         A hazard carried *only* by a PROB30/PROB40 is a 30-40% chance, not a
-        forecast. It gates only when the pilot has listed that hazard among the
-        weather flags they treat as an automatic NO-GO; otherwise it is reported
-        as an advisory naming the PROB group, so the decision stays theirs.
+        forecast, and is reported here as an advisory naming the PROB group. Its
+        *gating* now belongs to ``evaluator.prob_checks``, which is reached from
+        the route card, the discovery cards and the hour-by-hour strip alike -
+        this row used to apply the auto-NO-GO rule itself, which both left the
+        other two views out and reported the same group twice on the route.
         """
         in_taf = flag in window_hazards
         in_endpoint = flag in hazards
         in_metar = flag in metar_hazards
         in_area = bool(area) and _has(area, *area_pats)
         in_prob = flag in prob_hazards and not in_taf
-        prob_gates = in_prob and flag in gating_flags
-        failed = in_taf or in_endpoint or in_area or (in_metar and etd_is_now) or prob_gates
+        failed = in_taf or in_endpoint or in_area or (in_metar and etd_is_now)
         if failed:
             srcs = []
             if in_taf:
                 srcs.append("TAF")
-            if prob_gates:
-                srcs.append(f"TAF {_prob_where(prob_labels)} - your auto NO-GO list")
             if in_endpoint and not in_taf:
                 srcs.append("forecast")
             if in_metar and etd_is_now:

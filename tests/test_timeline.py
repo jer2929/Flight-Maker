@@ -167,3 +167,75 @@ def test_timeline_times_are_utc():
     tldata = build_timeline(fc, fc, [], [], RWY, RWY, hours=3)
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:00")
     assert tldata[0].time == now_utc
+
+
+# --- PROB in the hour-by-hour strip -----------------------------------------
+
+def _taf(group, body):
+    """A TAF valid from this hour, benign at its base, whose ``group`` covers
+    hours 2-5 from now - so the timeline hour three out sits inside it.
+
+    Anchored to real datetimes rather than modular hour arithmetic: a hand-rolled
+    ``(h + 2) % 24`` silently produced a zero-length validity around midnight, and
+    a TAF that covers nothing is a test that proves nothing.
+    """
+    base = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    stamp = lambda dt: dt.strftime("%d%H")     # noqa: E731 - TAF's own DDHH form
+    return (f"CYFD {stamp(base)}00Z {stamp(base)}/{stamp(base + timedelta(hours=12))} "
+            f"27008KT P6SM SCT040 "
+            f"{group} {stamp(base + timedelta(hours=2))}/"
+            f"{stamp(base + timedelta(hours=5))} {body}")
+
+
+def _hour3(taf_raw):
+    """The timeline hour three from now, i.e. inside the change group."""
+    from app.services.weather import parse_taf_segments
+    winds = [(50, 5)] * 6
+    fc = _fc(winds, [1] * 6)
+    segs = parse_taf_segments(taf_raw)
+    return build_timeline(fc, fc, segs, segs, RWY, RWY, hours=6)[3]
+
+
+def test_a_prob_visibility_no_longer_no_gos_the_hour():
+    """The reported bug: the strip folded PROB groups into the hour's gating
+    conditions, so a 30% chance of 2 SM turned the cell red - while the route
+    card called that same time advisory."""
+    h = _hour3(_taf("PROB30", "34022G34KT 2SM BR BKN015"))
+    assert h.verdict == Verdict.GO
+    assert h.visibility_sm is None or h.visibility_sm > 6
+    assert h.prob and "2 SM visibility" in h.prob
+    assert "PROB30" in h.prob
+
+
+def test_a_tempo_visibility_still_no_gos_the_hour():
+    """A TEMPO is a temporary worsening you would actually fly through, not a
+    chance - the fix must not quietly downgrade it too."""
+    h = _hour3(_taf("TEMPO", "34022G34KT 2SM BR BKN015"))
+    assert h.verdict == Verdict.NOGO
+    assert h.visibility_sm == 2
+    assert h.prob is None
+
+
+def test_a_prob_thunderstorm_still_gates_when_it_is_on_your_auto_nogo_list():
+    # Thunderstorm ships on the auto-NO-GO list, and the route card gates on it;
+    # the strip has to answer the same way.
+    h = _hour3(_taf("PROB30", "34022G34KT 2SM TSRA BKN015"))
+    assert h.verdict == Verdict.NOGO
+    assert "thunderstorm" in h.hazards
+    assert h.prob and "thunderstorm" in h.prob
+
+
+def test_a_prob_thunderstorm_is_advisory_once_you_take_ts_off_the_list():
+    from app.config import get_default_limits, limits_override
+    keep = [f for f in get_default_limits()["hard_limits"]["weather_flags"]
+            if f != "thunderstorm"]
+    with limits_override({"weather_flags": keep}):
+        h = _hour3(_taf("PROB30", "34022G34KT 2SM TSRA BKN015"))
+    assert h.verdict == Verdict.GO
+    assert "thunderstorm" not in h.hazards
+    assert h.prob and "thunderstorm" in h.prob
+
+
+def test_an_hour_with_no_prob_carries_none():
+    h = _hour3(_taf("TEMPO", "27009KT P6SM SCT040"))
+    assert h.prob is None

@@ -1126,7 +1126,6 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         window_label=_window_label(etd_utc, eta_utc),
         prob_hazards=prob_haz,
         prob_labels=prob_labels,
-        gating_flags=set(L.get("weather_flags") or []),
         night=(mode == "night"),
         llj_kt=llj_kt,
         ceiling_points=ceiling_points,
