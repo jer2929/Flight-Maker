@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.services import solar
+from app.services.geo import flight_time_hr, haversine_nm
+from app.sources import airports as ap
 
 CYFD_LAT, CYFD_LON = 43.13, -80.34
 ALERT_LAT, ALERT_LON = 82.5, -62.3      # polar day in June, polar night in December
@@ -128,3 +130,77 @@ def test_daynight_endpoint_clamps_a_lapsed_etd_like_the_route_does():
 
 def test_daynight_endpoint_rejects_unknown_aerodrome():
     assert _client().get("/api/daynight", params={"ident": "ZZZZ"}).status_code == 404
+
+
+# --- both ends of the flight decide day/night -------------------------------
+
+def _daynight(**params):
+    return _client().get("/api/daynight", params=params).json()
+
+
+# CYOW is ~240 nm east of CYFD - a couple of hours in a training aeroplane, and
+# far enough east that its twilight arrives ~19 minutes earlier. That offset is
+# why the fixture computes both ends instead of assuming the destination's clock
+# matches the departure's, and why the legs come from the same distance and
+# flight-time helpers the endpoint itself uses rather than from round numbers.
+SLOW_TAS, FAST_TAS = 110.0, 400.0
+
+
+def _leg(tas):
+    dep, dest = ap.get_airport("CYFD"), ap.get_airport("CYOW")
+    nm = haversine_nm(dep.lat, dep.lon, dest.lat, dest.lon)
+    return timedelta(hours=flight_time_hr(nm, tas))
+
+
+def _dusk_etd():
+    """A departure time where the slow aeroplane lands after evening civil
+    twilight at CYOW and the fast one lands before it, with CYFD still in
+    daylight at the moment of departure. ``None`` if no such slot exists inside
+    the forecast horizon (mid-summer at this latitude, say)."""
+    now = datetime.now(timezone.utc)
+    for mins in range(0, 47 * 60, 5):
+        etd = now + timedelta(minutes=mins)
+        if solar.is_night(CYFD_LAT, CYFD_LON, etd):
+            continue
+        dest = ap.get_airport("CYOW")
+        if (not solar.is_night(dest.lat, dest.lon, etd + _leg(FAST_TAS))
+                and solar.is_night(dest.lat, dest.lon, etd + _leg(SLOW_TAS))):
+            return etd.strftime("%Y-%m-%dT%H:%M:00Z")
+    return None
+
+
+def test_a_night_arrival_makes_it_a_night_flight():
+    """The reported gap: a daylight departure that lands after evening civil
+    twilight is a night flight, and the toggle decides which personal minimums
+    the whole assessment runs against. Answering from the departure alone gave
+    that arrival the day ceiling and visibility limits."""
+    etd = _dusk_etd()
+    assert etd, "no dusk departure within the forecast horizon"
+    dep_only = _daynight(ident="CYFD", at=etd)
+    assert dep_only["mode"] == "day"
+    assert dep_only["dest_mode"] is None
+
+    # CYOW is ~240 nm east: 2+ hours in a 110 kt aeroplane, landing well after dark.
+    both = _daynight(ident="CYFD", at=etd, dest="CYOW", tas=SLOW_TAS)
+    assert both["dep_mode"] == "day"
+    assert both["dest_mode"] == "night"
+    assert both["mode"] == "night"
+    assert both["night_at"] == "destination"
+    assert both["dest_ident"] == "CYOW"
+
+
+def test_a_faster_aeroplane_lands_before_twilight_and_stays_a_day_flight():
+    """Same route, same departure time: the ETA is what decides, so the pilot's
+    own cruise TAS has to reach the calculation."""
+    etd = _dusk_etd()
+    assert etd, "no dusk departure within the forecast horizon"
+    fast = _daynight(ident="CYFD", at=etd, dest="CYOW", tas=FAST_TAS)
+    assert fast["mode"] == "day" and fast["night_at"] is None
+
+
+def test_an_unknown_or_absent_destination_leaves_the_answer_on_the_departure():
+    etd = _dusk_etd()
+    assert etd, "no dusk departure within the forecast horizon"
+    for params in ({}, {"dest": "ZZZZ"}, {"dest": "CYFD"}):
+        d = _daynight(ident="CYFD", at=etd, **params)
+        assert d["mode"] == "day" and d["eta"] is None

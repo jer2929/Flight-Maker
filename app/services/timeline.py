@@ -205,8 +205,33 @@ def endpoint_window_sourced(fc: dict, taf_segs: list[dict], idxs: list[int],
     return merged, _sources(merged, taf, taf_used), taf
 
 
+def _daylight_at(dep_fc: dict, dest_fc: dict, i: int) -> bool:
+    """Is hour ``i`` daylight at *both* ends of the route?
+
+    The rest of the timeline takes the worse of departure and destination, and
+    darkness is no different: a leg that lands after evening civil twilight is a
+    night flight, whatever the sun is doing back at the departure field. Reading
+    ``is_day`` from the departure alone used to call that hour daylight, so it
+    got day minimums and no night threat.
+
+    Both series are indexed by the same ``i`` because both forecasts are
+    requested in UTC (see ``openmeteo.forecast``). Missing ``is_day`` - a model
+    that doesn't carry it - falls back to daylight rather than inventing a night.
+    """
+    day = True
+    for fc in (dep_fc, dest_fc):
+        if fc and _series(fc, "is_day"):
+            val = _at(fc, "is_day", i)
+            if val is not None:
+                day = day and bool(val)
+    return day
+
+
 def _start_index(times: list[str], offset: int) -> int:
-    """First hour at or after 'now' (local), so windows never look backward."""
+    """First hour at or after 'now', so windows never look backward.
+
+    ``offset`` is 0 for the UTC series we request; it stays so a response
+    carrying a real offset is still indexed correctly."""
     now_local = datetime.now(timezone.utc).timestamp() + offset
     target = datetime.utcfromtimestamp(now_local).strftime("%Y-%m-%dT%H:00")
     for i, t in enumerate(times):
@@ -240,6 +265,14 @@ def build_timeline(
     start = _start_index(times, offset)        # future only
     static_hazards = static_hazards or set()
 
+    # Night is a property of the *hour*, not of the flight. The caller's list is
+    # built once from the day/night toggle, so carrying it through unchanged
+    # stacked "night operations" on hours in full daylight - and left it off
+    # genuinely dark hours whenever the toggle said day. Strip it here and let
+    # each hour re-add it from its own daylight flag. The pilot's opt-out is
+    # still applied in exactly one place (``evaluator.derive_threats``).
+    base_threats = [t for t in (manual_threats or []) if t != "night_operations"]
+
     timeline: list[HourCondition] = []
     for i in range(start, min(start + hours, len(times))):
         tstr = times[i]
@@ -261,14 +294,15 @@ def build_timeline(
 
         combined = _worse(dep_cond, dest_cond)
         haz = sorted(set(combined.get("hazards", [])) | static_hazards)
-        daylight = bool(_at(dep_fc, "is_day", i)) if _series(dep_fc, "is_day") else True
+        daylight = _daylight_at(dep_fc, dest_fc, i)
         ws = WeatherSummary(
             wind_dir_true=combined.get("wind_dir_true"), wind_kt=combined.get("wind_kt"),
             gust_kt=combined.get("gust_kt"), visibility_sm=combined.get("visibility_sm"),
             ceiling_agl_ft=combined.get("ceiling_agl_ft"), hazards=haz,
         )
         mode = "day" if daylight else "night"
-        verdict, reasons, _ = evaluate(ws, rw, mode, is_complex, manual_threats)
+        hour_threats = base_threats if daylight else base_threats + ["night_operations"]
+        verdict, reasons, _ = evaluate(ws, rw, mode, is_complex, hour_threats)
 
         wind_dir_mag = None
         if ws.wind_dir_true is not None and w_lat is not None:

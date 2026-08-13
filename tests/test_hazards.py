@@ -1,4 +1,4 @@
-from app.services.hazards import gfa_links, weather_checks
+from app.services.hazards import gfa_region, weather_checks
 
 
 def _run(**over):
@@ -6,7 +6,7 @@ def _run(**over):
         raw_text="", hazards=set(), night=False, llj_kt=None,
         ceiling_points=[8000, 8000, 8000], vis_points=[15, 15, 15],
         lowering_ceiling=False, freezing_level_ft=None, personal_vis_sm=9,
-        gfa=gfa_links(43.1, -80.3),
+        gfa_region=gfa_region(43.1, -80.3),
         window_hazards=set(), metar_hazards=set(), out_of_window=[],
         etd_is_now=True, window_label="1200-1400Z",
     )
@@ -73,32 +73,91 @@ def test_metar_hazard_gates_now_but_only_advises_for_a_later_etd():
     assert later.passed and later.advisory      # observed, but not your window
 
 
-def test_only_chart_rows_carry_a_chart_link():
-    # rowCheck renders a link for any advisory row that has one, so an
-    # out-of-window hazard notice must not sprout a misleading GFA link.
-    checks = _run(out_of_window=[{"ident": "CYHM", "hazards": ["thunderstorm"],
-                                  "when": "1800-2200Z"}])
-    assert checks["icing"].advisory_link
-    assert checks["turbulence"].advisory_link
-    assert checks["hazard_out_of_window"].advisory_link is None
+def test_no_row_links_out_to_the_gfa_portal():
+    # The GFA charts are embedded on the results page. The icing/turbulence rows
+    # used to carry a "GFA ↗" chip pointing at the NAV CANADA front door, which
+    # was strictly less useful than the panel directly below them.
+    for c in _run().values():
+        assert not hasattr(c, "advisory_link")
+    assert "GFA icing panel below" in _run()["icing"].actual_text
+    assert "GFA turbulence panel below" in _run()["turbulence"].actual_text
 
 
 def test_freezing_rain_fails():
     assert not _run(hazards={"freezing_rain"})["freezing_rain"].passed
 
 
-def test_icing_advisory_when_no_text():
+def test_quiet_icing_row_passes_without_a_warning_triangle():
+    # The reported bug: every single flight raised an amber ⚠ telling the pilot to
+    # go and read a chart. With nothing forecast and nothing in the model, the row
+    # is a plain pass that simply says so.
     c = _run()["icing"]
-    assert c.passed and c.advisory
+    assert c.passed and not c.advisory
+    assert "no AIRMET/SIGMET icing" in c.actual_text
 
 
-def test_icing_fails_on_airmet_text():
-    c = _run(raw_text="AIRMET ICG SEV ICE FRZLVL 040")["icing"]
+def test_icing_row_describes_the_model_layer_without_gating():
+    bands = [{"base_ft": 3500, "top_ft": 7800, "warmest_c": -3.0,
+              "coldest_c": -11.0, "prime": True}]
+    c = _run(icing_bands=bands, freezing_level_ft=3100)["icing"]
+    assert c.passed and not c.advisory          # informational, never a NO-GO
+    assert "3,500-7,800 ft" in c.actual_text
+    assert "-3 to -11 C" in c.actual_text
+    assert "freezing level ~3,100 ft" in c.actual_text
+
+
+def test_icing_model_layer_outside_the_planned_altitude_is_not_mentioned():
+    bands = [{"base_ft": 22000, "top_ft": 26000, "warmest_c": -20.0,
+              "coldest_c": -20.0, "prime": False}]
+    c = _run(icing_bands=bands, planned_high_ft=6500)["icing"]
+    assert c.passed and "no model cloud below freezing" in c.actual_text
+
+
+def test_icing_fails_on_severe_airmet_text():
+    c = _run(raw_text="AIRMET ICG SEV ICE 020/080")["icing"]
     assert not c.passed and not c.advisory
+    assert "SEV icing" in c.actual_text
 
 
-def test_turbulence_advisory_default():
-    assert _run()["turbulence"].advisory
+def test_moderate_icing_in_band_gates_but_light_does_not():
+    assert not _run(raw_text="AIRMET MOD ICG 020/080")["icing"].passed
+    assert _run(raw_text="AIRMET LGT ICG 020/080")["icing"].passed
+
+
+def test_icing_above_the_planned_altitude_does_not_gate():
+    c = _run(raw_text="SIGMET SEV ICE FL240/FL400", planned_high_ft=6500)["icing"]
+    assert c.passed
+
+
+def test_ice_pellets_and_no_ice_are_not_airframe_icing():
+    # `\bICE\b` used to match all of these and force a NO-GO.
+    assert _run(raw_text="PIREP: ICE PELLETS OBSERVED 020/080")["icing"].passed
+    assert _run(raw_text="PIREP: NO ICE 020/080")["icing"].passed
+    assert _run(raw_text="PIREP: ICE CRYSTALS 020/080")["icing"].passed
+
+
+def test_quiet_turbulence_row_passes_without_a_warning_triangle():
+    c = _run()["turbulence"]
+    assert c.passed and not c.advisory
+    assert "no AIRMET/PIREP turbulence" in c.actual_text
+
+
+def test_turbulence_row_reports_the_model_index():
+    turb = {"shear_kt_per_kft": 6.0, "gust_factor_kt": 11.0, "llj_kt": 12.0,
+            "level": "light", "driver": "shear, gusts"}
+    c = _run(turbulence=turb)["turbulence"]
+    assert c.passed and not c.advisory
+    assert "shear 6 kt/1,000 ft" in c.actual_text and "light" in c.actual_text
+
+
+def test_moderate_turbulence_in_band_gates_but_high_level_does_not():
+    assert not _run(raw_text="AIRMET MOD TURB BTN 3000FT AND 8000FT")["turbulence"].passed
+    assert _run(raw_text="SIGMET SEV TURB FL240/FL400",
+                planned_high_ft=6500)["turbulence"].passed
+
+
+def test_light_chop_pirep_does_not_gate():
+    assert _run(raw_text="UACN10 PIREP LGT CHOP 040")["turbulence"].passed
 
 
 def test_llj_night_over_40_fails():

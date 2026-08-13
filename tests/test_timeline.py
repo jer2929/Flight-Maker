@@ -106,3 +106,64 @@ def test_best_window_summary_mentions_precip():
     fc = _fc_wx([(50, 5)] * 3, [61, 80, 61], [0.4, 0.6, 0.3])
     tldata = build_timeline(fc, fc, [], [], RWY, RWY, hours=3)
     assert "rain" in _summarise(tldata)
+
+
+# --- night as a per-hour property, not a property of the whole flight --------
+
+def _night_reason(hour):
+    """The threat-stack line for an hour, if it carries one."""
+    return next((r for r in hour.reasons if r.startswith("Threat stack")), "")
+
+
+def test_night_threat_is_not_stacked_on_daylight_hours():
+    # The reported bug: picking "Night flight" carried night_operations into
+    # every one of the 48 hours, so hours in full daylight showed a night threat
+    # in the hour-by-hour strip.
+    winds = [(50, 5)] * 6
+    fc = _fc(winds, [1, 1, 1, 0, 0, 0])     # first three daylight, last three dark
+    tldata = build_timeline(fc, fc, [], [], RWY, RWY,
+                            manual_threats=["night_operations"], hours=6)
+    assert all("Night operations" not in _night_reason(h) for h in tldata[:3])
+    assert all("Night operations" in _night_reason(h) for h in tldata[3:])
+
+
+def test_night_threat_is_stacked_on_dark_hours_even_on_a_day_flight():
+    # The mirror image, and just as wrong: with the toggle on Day, genuinely
+    # dark hours in the strip carried night minimums but no night threat.
+    winds = [(50, 5)] * 4
+    fc = _fc(winds, [1, 1, 0, 0])
+    tldata = build_timeline(fc, fc, [], [], RWY, RWY, manual_threats=[], hours=4)
+    assert "Night operations" not in _night_reason(tldata[0])
+    assert "Night operations" in _night_reason(tldata[2])
+
+
+def test_other_manual_threats_are_untouched_by_the_night_scoping():
+    winds = [(50, 5)] * 3
+    fc = _fc(winds, [1, 1, 1])
+    tldata = build_timeline(fc, fc, [], [], RWY, RWY,
+                            manual_threats=["terrain_critical", "night_operations"],
+                            hours=3)
+    assert all("Terrain-critical" in _night_reason(h) for h in tldata)
+
+
+def test_an_hour_dark_at_either_end_is_a_night_hour():
+    # The timeline takes the worse of departure and destination everywhere else;
+    # darkness is no different. Reading is_day from the departure alone gave a
+    # night arrival the day ceiling and visibility minimums.
+    winds = [(50, 5)] * 4
+    dep = _fc(winds, [1, 1, 1, 1])          # daylight all the way at departure
+    dest = _fc(winds, [1, 1, 0, 0])         # dark at the destination from hour 2
+    tldata = build_timeline(dep, dest, [], [], RWY, RWY,
+                            manual_threats=[], hours=4)
+    assert [h.daylight for h in tldata] == [True, True, False, False]
+    assert "Night operations" in _night_reason(tldata[2])
+
+
+def test_timeline_times_are_utc():
+    # Open-Meteo is queried with timezone=UTC, so the hour labels the pilot reads
+    # are Zulu with no conversion layer between them and the model.
+    winds = [(50, 5)] * 3
+    fc = _fc(winds, [1, 1, 1])
+    tldata = build_timeline(fc, fc, [], [], RWY, RWY, hours=3)
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:00")
+    assert tldata[0].time == now_utc

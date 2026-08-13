@@ -22,7 +22,8 @@ of a **Personal Flight Decision Card**:
    conditions anywhere between wheels-up and wheels-down - plus flight time and
    best cruise altitude (winds aloft), the **en-route
    aerodromes** within 5 nm of your track, active NOTAMs/SIGMETs, and an
-   **hour-by-hour 24–48 h timeline** that highlights the best GO window(s).
+   **hour-by-hour 24–48 h timeline**, in Zulu like everything else, that
+   highlights the best GO window(s).
 3. **Discovery** - "where can I go within X nm of my base," ranked by the card.
    It takes an ETD too: each candidate is assessed at *its own* ETA, so a 20 nm
    hop and a 200 nm leg from the same departure time are judged on the weather
@@ -107,6 +108,31 @@ covering panel stays marked (✈) after you click to another, and if your ETD is
 past the reach of the latest issuance the caption says so rather than showing a
 chart that doesn't describe your flight.
 
+### Icing and turbulence
+Nothing can parse a GFA chart, so these two rows used to read *"review the GFA
+icing chart"* with an amber ⚠ - on every flight, in every season, whatever the
+weather, next to a link that went to the NAV CANADA front door rather than to the
+chart embedded further down the same page. A warning that fires every time teaches
+you to ignore warnings. Both rows now come from two real sources:
+
+* **Area products** (AIRMET / SIGMET / PIREP) are read for **severity and altitude
+  band**, so only a *moderate-or-worse* report overlapping the altitudes you'll
+  actually occupy - surface to cruise plus 2,000 ft - stops the flight. A light-chop
+  PIREP no longer grounds you, an FL240–FL400 turbulence SIGMET no longer applies to
+  a Cessna at 4,500 ft, and `ICE PELLETS` / `ICE CRYSTALS` / `NO ICE` are no longer
+  read as airframe icing.
+* **The HRDPS model** already being fetched for wind and cloud carries per-level
+  temperature and humidity, so the app finds the layers where cloud sits between
+  0 °C and −20 °C and reports them as altitude bands ("cloud below freezing
+  3,500–7,800 ft at −3 to −11 °C, freezing level 3,100 ft"). Turbulence comes from
+  vector wind shear through the low levels, the surface gust factor and the 925 hPa
+  low-level jet.
+
+The model half is **advisory and never gates** - a model is not a forecaster, and
+this one has no terrain-wave, convective or frontal reasoning in it. What it does
+is replace "go and read a chart" with a description of the air plus *confirm on the
+GFA panel below*, and stay silent on the days there is nothing to say.
+
 ### En-route aerodromes
 A collapsed-by-default list of every aerodrome within **5 nm of the straight
 route**, in the order you'd fly over them, with runway, surface, length and the
@@ -130,18 +156,26 @@ readily a stack escalates the verdict:
 | **Cautious** | A single *serious* weather threat (IMC / convective / icing) is disqualifying. |
 
 ### Day or night, and whether night is a threat
-The day/night toggle **selects itself from your ETD**, using civil twilight at
-the departure aerodrome: night is the CARs 101.01 definition - from the end of
-evening civil twilight to the beginning of morning civil twilight - not sunset to
-sunrise, and not the one-hour-either-side currency window. It defaulted to Day on
-every load before, so a 0200Z departure was quietly assessed against daytime
-ceiling and visibility minimums unless you remembered to flip it. Clicking either
-button still wins; the override holds until you change the ETD or the aerodrome,
-which is a different flight.
+The day/night toggle **selects itself from your flight**, using civil twilight:
+night is the CARs 101.01 definition - from the end of evening civil twilight to
+the beginning of morning civil twilight - not sunset to sunrise, and not the
+one-hour-either-side currency window. It defaulted to Day on every load before, so
+a 0200Z departure was quietly assessed against daytime ceiling and visibility
+minimums unless you remembered to flip it.
 
-A day departure can still be a night arrival. Rather than override your choice,
-the flight window says so: *"ETA 2312Z is after evening civil twilight at CYKZ
-(2251Z) - the arrival is a night landing."*
+**Both ends count.** A flight that leaves in daylight and lands after evening civil
+twilight *is* a night flight, and the toggle decides which set of personal minimums
+the whole assessment runs against - so answering from the departure alone handed
+that arrival the day limits. The ETA is the great-circle distance over your own
+cruise TAS, and the caption says which end made the call: *"night landing at CYOW,
+ETA 0114Z"*. The toggle re-derives whenever the departure, the destination, the ETD
+or the aircraft changes. Clicking either button still wins, until one of those
+changes - which is a different flight.
+
+In the hour-by-hour strip, night is a property of **each hour**, not of the flight:
+dark hours carry the night threat and night minimums, daylight hours don't,
+whichever way the toggle is set. Selecting "Night flight" used to stack a night
+threat on all 48 hours, including ones in full daylight.
 
 Whether night **stacks a threat** on the decision card is yours to set, in
 My Minimums → **Night operations**. It is on by default (the original card). For
@@ -186,9 +220,10 @@ gate. Where a field has no TAF of its own, the nearest reporting station's TAF i
 split and highlighted the same way. The raw TAF is kept underneath to cross-check
 against.
 
-> **Known gaps:** SIGMET/AIRMET/PIREP are still applied whenever they're active,
-> without scoping to their own validity times. They're typically ≤6 h products,
-> so the window is much narrower than a 30 h TAF's, but it's the next thing to fix.
+> **Known gaps:** SIGMET/AIRMET/PIREP are scoped by severity and altitude band
+> (see *Icing and turbulence*), but still applied whenever they're active, without
+> scoping to their own validity *times*. They're typically ≤6 h products, so the
+> window is much narrower than a 30 h TAF's, but it's the next thing to fix.
 > The TAF parser also doesn't recognise `INTER`, so such a group's conditions are
 > absorbed into the preceding one rather than windowed on their own; `CAVOK`, `NSW`
 > and metric visibility are likewise unparsed.

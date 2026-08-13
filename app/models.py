@@ -89,10 +89,6 @@ class LimitCheck(BaseModel):
     advisory: bool = False  # passed, but needs human review
     source: Optional[str] = None  # where the value came from
     location: Optional[str] = None  # e.g. "CYHM (destination)"
-    # Only the rows that genuinely want a chart carry a link. Not every advisory
-    # row is a "go read the GFA" row - out-of-window hazard notices, for one.
-    advisory_link: Optional[str] = None
-    advisory_link_label: Optional[str] = None
 
 
 class ThreatCheck(BaseModel):
@@ -280,7 +276,7 @@ class AirportAssessment(BaseModel):
 class HourCondition(BaseModel):
     """One hour of the 24-48 h route timeline."""
 
-    time: str                  # ISO local time
+    time: str                  # ISO UTC, "YYYY-MM-DDTHH:MM" (Zulu - see openmeteo.forecast)
     verdict: Verdict
     wind_dir_true: Optional[float] = None
     wind_dir_mag: Optional[float] = None
@@ -301,8 +297,8 @@ class HourCondition(BaseModel):
 
 
 class BestWindow(BaseModel):
-    start: str
-    end: str
+    start: str          # ISO UTC, matching HourCondition.time
+    end: str            # ISO UTC, matching HourCondition.time
     hours: int
     summary: str
 

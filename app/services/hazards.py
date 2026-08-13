@@ -19,10 +19,13 @@ What can and can't be automated:
   * Strong low-level jet at night          -> derived from HRDPS 925 hPa (~2000 ft) wind.
   * Rapidly lowering ceilings, widespread IFR -> derived from ceilings/vis sampled
     along the route.
-  * Forecast icing / moderate turbulence   -> there is no reliable way to *parse* a
-    GFA chart, so these are flagged from AIRMET/SIGMET/PIREP text when present and
-    otherwise returned as ADVISORY rows linking to the GFA charts for the pilot to
-    review (with a model freezing-level hint for icing).
+  * Forecast icing / moderate turbulence   -> graded from AIRMET/SIGMET/PIREP text
+    (``services.area_products`` reads the severity and the altitude band, so only a
+    MODERATE-or-worse report overlapping your altitude gates the flight), and
+    described from the model (``services.airmass`` finds cloud below freezing and
+    low-level shear). The model half never gates - it replaces the old permanent
+    "review the GFA" warning triangle with a plain statement of what the air looks
+    like, to be confirmed on the GFA panel embedded on the same page.
 """
 from __future__ import annotations
 
@@ -30,18 +33,18 @@ import re
 from typing import Optional
 
 from app.models import LimitCheck
+from app.services import airmass, area_products
 from app.services import weather as wx
 
 
-def gfa_links(lat: float, lon: float) -> dict[str, str]:
-    """Links to the CFPS GFA for the relevant region (for human review)."""
-    region = "GFACN34" if -95.0 <= lon <= -74.0 else "GFACN3x"
-    base = "https://plan.navcanada.ca/"
-    return {
-        "region": region,
-        "clouds_weather": base,   # GFA CLDWX panel
-        "icing_turb": base,       # GFA TURBC (icing / turbulence / freezing level)
-    }
+def gfa_region(lat: float, lon: float) -> str:
+    """The CFPS GFA region covering a point, for the checklist copy.
+
+    Named only - deliberately not linked. The GFA charts are embedded on the
+    results page, so a row that sent the pilot to the NAV CANADA portal's front
+    door was strictly worse than pointing at the panel below it.
+    """
+    return "GFACN34" if -95.0 <= lon <= -74.0 else "GFACN3x"
 
 
 def _has(text: str, *patterns: str) -> bool:
@@ -51,6 +54,26 @@ def _has(text: str, *patterns: str) -> bool:
 def _prob_where(labels) -> str:
     """The PROB groups themselves, in TAF language - "PROB30 1800Z-2300Z"."""
     return ", ".join(labels) if labels else "PROB30/40"
+
+
+def _gates(report: dict) -> bool:
+    """Does this area report stop the flight?
+
+    Only MODERATE or worse. Light icing or light chop is information, not a
+    reason to stay on the ground, and treating it as one is what made these two
+    rows fire on flights nobody would have cancelled.
+    """
+    return area_products.SEVERITY_RANK[report["severity"]] >= \
+        area_products.SEVERITY_RANK["moderate"]
+
+
+def _report_text(report: dict, kind: str, alt_phrase: str) -> str:
+    """An area report written back with its severity and band, e.g.
+    ``MOD icing FL040-FL100 (AIRMET/SIGMET/PIREP), overlaps your 500-6,500 ft``."""
+    sev = {"severe": "SEV", "moderate": "MOD", "light": "LGT"}[report["severity"]]
+    band = area_products.band_text(report["base_ft"], report["top_ft"])
+    return (f"{sev} {kind} {band} (AIRMET/SIGMET/PIREP)"
+            f"{f', overlaps your {alt_phrase}' if alt_phrase else ''}")
 
 
 def weather_checks(
@@ -64,8 +87,15 @@ def weather_checks(
     lowering_ceiling: bool,
     freezing_level_ft: Optional[float],
     personal_vis_sm: float,
-    gfa: dict[str, str],
+    gfa_region: str,
     area_text: str = "",           # SIGMET/AIRMET/PIREP only
+    # --- model-derived air mass (never gates; see ``services.airmass``) -------
+    icing_bands: list[dict] = (),       # cloud-below-freezing bands, ft MSL
+    turbulence: Optional[dict] = None,  # shear / gust / low-level-jet index
+    # The altitude band the flight actually occupies, for scoping area products
+    # and model bands. Defaults to the low-level slab a GA VFR flight lives in.
+    planned_low_ft: float = 0.0,
+    planned_high_ft: float = 10000.0,
     # --- time scoping -------------------------------------------------------
     window_hazards: set[str] = frozenset(),   # TAF hazards during ETD->ETA
     metar_hazards: set[str] = frozenset(),    # observed now, either endpoint
@@ -84,17 +114,18 @@ def weather_checks(
     checks: list[LimitCheck] = []
 
     def add(key, label, failed, actual, *, advisory=False, applicable=True,
-            link=None, link_label=None):
+            limit="none on route"):
         checks.append(LimitCheck(
-            key=key, label=label, limit_text="none on route",
+            key=key, label=label, limit_text=limit,
             actual_text=actual, passed=not failed, group="weather",
             advisory=advisory, applicable=applicable,
-            advisory_link=link, advisory_link_label=link_label,
         ))
 
     # Two forms: "... TS in your 1200-1400Z window" vs "... outside your window".
     win = f" in your {window_label} window" if window_label else " during your flight"
     win_bare = f"your {window_label} window" if window_label else "your flight"
+    # The altitude slab the flight occupies, for the icing/turbulence rows.
+    where = f"{planned_low_ft:,.0f}-{planned_high_ft:,.0f} ft"
 
     def _forecast_hazard(flag: str, key: str, label: str, name: str,
                          area_pats: tuple[str, ...]) -> bool:
@@ -168,27 +199,58 @@ def weather_checks(
     _forecast_hazard("freezing_rain", "freezing_rain", "Freezing rain", "FZRA",
                      (r"\bFZRA\b", r"FREEZING"))
 
-    # 4. Forecast icing in planned altitude band (AIRMET/SIGMET text; else advisory)
-    icing_txt = _has(blob, r"\bICG\b", r"\bICE\b", r"ICING")
-    if icing_txt:
-        add("icing", "Forecast icing", True, "AIRMET/SIGMET icing on route")
-    else:
-        hint = ""
-        if freezing_level_ft is not None and freezing_level_ft < 8000:
-            hint = f" - freezing level ~{round(freezing_level_ft):,} ft"
-        add("icing", "Forecast icing", False,
-            f"no AIRMET/SIGMET - review GFA icing chart ({gfa['region']}){hint}",
-            advisory=True, link=gfa.get("icing_turb"), link_label="GFA")
 
-    # 5. Moderate turbulence below 3000 ft (AIRMET/PIREP text; else advisory)
-    turb_txt = _has(blob, r"\bTURB\b", r"\bTURBC\b", r"MOD\s+TURB")
-    if turb_txt:
-        add("turbulence", "Moderate turbulence (low level)", True,
-            "AIRMET/SIGMET/PIREP turbulence on route")
+    # What actually stops the flight on these two rows, so the limit column
+    # matches the rule rather than implying any trace of icing is a NO-GO.
+    mod_limit = f"no MOD+ report in {where}"
+
+    # 4. Forecast icing.
+    #
+    # A MODERATE-or-worse report overlapping the planned altitude gates the
+    # flight. Anything lighter, or entirely above/below where you're flying, is
+    # reported without gating - as is the model's own picture of the air. The
+    # model never fails this row: it says what the air looks like so the GFA
+    # panel below can be read with a question already in mind.
+    icing_rpt = area_products.find_hazard(raw_text, "icing", planned_low_ft, planned_high_ft)
+    frz = (f"freezing level ~{round(freezing_level_ft):,} ft"
+           if freezing_level_ft is not None else "")
+    bands = airmass.bands_overlapping(list(icing_bands), planned_low_ft, planned_high_ft)
+    model_txt = airmass.describe_icing(bands)
+    if icing_rpt and _gates(icing_rpt):
+        add("icing", "Forecast icing", True, _report_text(icing_rpt, "icing", where),
+            limit=mod_limit)
     else:
-        add("turbulence", "Moderate turbulence (low level)", False,
-            f"no AIRMET/PIREP - review GFA turbulence chart ({gfa['region']})",
-            advisory=True, link=gfa.get("icing_turb"), link_label="GFA")
+        bits = []
+        if icing_rpt:
+            bits.append(_report_text(icing_rpt, "icing", where) + " - not gating")
+        elif model_txt:
+            bits.append(f"no AIRMET/SIGMET icing; model shows cloud below freezing {model_txt}")
+        else:
+            bits.append(f"no AIRMET/SIGMET icing; no model cloud below freezing "
+                        f"{planned_low_ft:,.0f}-{planned_high_ft:,.0f} ft")
+        if frz:
+            bits.append(frz)
+        bits.append(f"confirm on the GFA icing panel below ({gfa_region})")
+        add("icing", "Forecast icing", False, " - ".join(bits), limit=mod_limit)
+
+    # 5. Moderate turbulence at low level, same two-source treatment.
+    turb_rpt = area_products.find_hazard(raw_text, "turbulence", planned_low_ft, planned_high_ft)
+    turb = turbulence or {}
+    if turb_rpt and _gates(turb_rpt):
+        add("turbulence", "Moderate turbulence (low level)", True,
+            _report_text(turb_rpt, "turbulence", where), limit=mod_limit)
+    else:
+        bits = []
+        if turb_rpt:
+            bits.append(_report_text(turb_rpt, "turbulence", where) + " - not gating")
+        else:
+            desc = airmass.describe_turbulence(turb)
+            level = turb.get("level", "none")
+            bits.append(f"no AIRMET/PIREP turbulence; model {desc} - {level}"
+                        if desc else "no AIRMET/PIREP turbulence; no model data")
+        bits.append(f"confirm on the GFA turbulence panel below ({gfa_region})")
+        add("turbulence", "Moderate turbulence (low level)", False, " - ".join(bits),
+            limit=mod_limit)
 
     # 6. Low-level wind shear forecast
     _forecast_hazard("low_level_wind_shear", "llws", "Low-level wind shear", "LLWS",
