@@ -210,12 +210,6 @@ def endpoint_window_sourced(fc: dict, taf_segs: list[dict], idxs: list[int],
     return merged, _sources(merged, taf, taf_used), taf
 
 
-def _prob_label(seg: dict) -> str:
-    """e.g. ``PROB30 1800Z-2300Z`` - the group as the pilot reads it off the TAF."""
-    z = "%H%MZ"
-    return f"{seg.get('label', 'PROB')} {seg['start'].strftime(z)}-{seg['end'].strftime(z)}"
-
-
 def _prob_for_hour(*taf_results: dict | None) -> tuple[str | None, set[str]]:
     """The PROB group over this hour: ``(advisory text, hazards that gate)``.
 
@@ -231,7 +225,7 @@ def _prob_for_hour(*taf_results: dict | None) -> tuple[str | None, set[str]]:
         if not res or not res.get("prob"):
             continue
         cond = dict(res["prob"]) if cond is None else _worse(cond, res["prob"])
-        labels.extend(_prob_label(s) for s in res.get("prob_periods", []))
+        labels.extend(wx.period_label(s) for s in res.get("prob_periods", []))
     if cond is None:
         return None, set()
     hazards = list(cond.get("hazards") or [])

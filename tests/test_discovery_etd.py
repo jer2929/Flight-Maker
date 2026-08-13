@@ -104,3 +104,34 @@ def test_ensemble_wind_is_skipped_for_a_future_etd(upstreams):
 
     _suggest(None)
     assert upstreams.get("ensemble_called") is True
+
+
+def test_a_tempo_over_the_first_half_of_the_leg_gates_the_card(monkeypatch, upstreams):
+    """Discovery passed no flight span, so ``_assess_endpoint`` fell back to
+    ETA +/- 30 min and never looked at the leg. A TEMPO over the first half of a
+    long flight gated the *route* card for the same airport and was invisible on
+    its discovery card - two readings of one TAF, disagreeing.
+    """
+    from app.models import Verdict
+
+    etd = BASE + timedelta(hours=6)
+    dd = lambda dt: dt.strftime("%d%H")            # noqa: E731 - the TAF's own form
+    # CYAM is ~2.4 h out, so this TEMPO closes an hour before the old ETA window
+    # even opened.
+    taf = (f"CYAM {dd(etd)}00Z {dd(etd)}/{dd(etd + timedelta(hours=12))} "
+           f"27008KT P6SM SCT040 "
+           f"TEMPO {dd(etd)}/{dd(etd + timedelta(hours=1))} 27008KT 1SM BR OVC004")
+
+    async def _tafs(sites):
+        return {"CYAM": taf}
+
+    monkeypatch.setattr(cfps, "tafs", _tafs)
+    results = asyncio.run(orchestrator.suggest(300.0, "day", [], etd=etd))
+    card = next(r for r in results if r.airport.ident == "CYAM")
+    assert card.flight_time_hr > 1.5, "need a leg long enough to have a first half"
+    assert card.verdict == Verdict.NOGO
+    # ...and the card says which group did it, not just that something did.
+    busts = [c for c in card.limit_checks if not c.passed and c.applicable]
+    assert any(c.source == "TAF" and c.source_detail and c.source_detail.startswith("TEMPO")
+               for c in busts)
+    assert any("OVC004" in (c.source_text or "") for c in busts)

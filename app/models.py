@@ -89,6 +89,14 @@ class LimitCheck(BaseModel):
     advisory: bool = False  # passed, but needs human review
     source: Optional[str] = None  # where the value came from
     location: Optional[str] = None  # e.g. "CYHM (destination)"
+    # Which TAF group produced the value, and its raw text - so a bust reads
+    # "2 SM ... from TAF, TEMPO 0100Z-0300Z" with the line itself underneath,
+    # instead of a number with no traceable origin.
+    source_detail: Optional[str] = None  # e.g. "TEMPO 0100Z-0300Z"
+    source_text: Optional[str] = None    # e.g. "TEMPO 0100/0300 2SM TSRA BKN008"
+    # A row whose sentence doesn't fit the "X exceeds your limit (Y)" template
+    # (no live weather, no legal VFR altitude). Used verbatim when set.
+    reason_text: Optional[str] = None
 
 
 class ThreatCheck(BaseModel):
@@ -184,6 +192,12 @@ class WindowForecast(BaseModel):
     gust_kt: Optional[float] = None
     hazards: list[str] = []
     governing: list[str] = []       # e.g. ["BECMG 1800Z-2400Z", "TEMPO 1900Z-2100Z"]
+    # Which single group each value came from, keyed by the condition field
+    # ("ceiling_agl_ft", "visibility_sm", "wind_kt", "gust_kt", "hazards").
+    # ``governing`` says which groups had a hand in the window; these say which
+    # one to name when *this* value busts a limit.
+    by_field: dict[str, str] = {}        # field -> period label
+    by_field_text: dict[str, str] = {}   # field -> raw TAF slice
     # PROB30/PROB40 falling in the window. Reported so the pilot sees them,
     # never merged into the values above, so they cannot fail a check alone.
     prob_ceiling_agl_ft: Optional[float] = None

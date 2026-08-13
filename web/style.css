@@ -163,6 +163,15 @@ select, input[type=text], .route-inputs input {
 .why-title { font-weight: 700; font-size: .84rem; margin-bottom: 2px; }
 .why-group + .why-group { margin-top: 6px; }
 .why-h { font-size: .78rem; color: var(--muted); }
+/* Provenance under a failing line: which source, which TAF group, and the group
+   as it reads in the raw TAF - so a number on the card can be traced to the line
+   the pilot would go and check. */
+.why-src { font-size: .76rem; color: var(--muted); margin-top: 1px; }
+.why-raw {
+  font-family: ui-monospace, monospace; font-size: .72rem; color: var(--muted);
+  margin-top: 5px; padding-left: 18px; word-break: break-word; opacity: .85;
+}
+.why-raw-tag { font-family: var(--font, inherit); font-style: italic; margin-right: 6px; }
 .raw { color: var(--muted); font-family: ui-monospace, monospace; font-size: .76rem; margin-top: 8px; word-break: break-word; }
 .ok-line { color: #6ee7a0; font-size: .9rem; margin: 6px 0; }
 .meta .warn { color: #ff9b8f; }

@@ -64,7 +64,7 @@ from app.sources import awc, cfps, openmeteo
 _SEVERITY = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
 _CFPS_SITE_URL = "https://plan.navcanada.ca/"
 
-# Taxi, hold and approach slop either side of the planned window. Hazard scoping
+# Hold, approach and diversion slop *after* the planned arrival. Hazard scoping
 # and the TAF-period highlight both use it, so the UI can quote one number.
 WINDOW_PAD_MIN = 30
 
@@ -83,17 +83,23 @@ ENROUTE_MAX_FIELDS = 20
 
 
 def flight_span(etd: datetime, eta: datetime | None = None) -> tuple[datetime, datetime]:
-    """The padded ETD->ETA span every window query is scoped to.
+    """The ETD->ETA span every window query is scoped to, padded at the far end.
 
     One helper because the highlight and the gate used to build this span
     separately and disagreed: hazards were scoped to the whole flight while the
     green TAF row marked only a +/-30 min band around a single instant, so a
     TEMPO in the middle of the flight gated the verdict without ever being
     highlighted. ``eta=None`` (circuits, which never leave the field) collapses
-    it to the pad either side of the ETD.
+    it to the ETD plus the pad.
+
+    The window **opens at the ETD itself**. It used to open half an hour earlier,
+    as taxi slop, which meant a group that had already ended still gated the
+    flight: pick an ETD of 1400Z with an FM at 1400Z clearing the sky, and the
+    card reported the low layer that ran until 1400Z. You do not fly before you
+    depart. The pad stays on the arrival end, where holding and a diversion are
+    real time spent in the weather.
     """
-    pad = timedelta(minutes=WINDOW_PAD_MIN)
-    return etd - pad, (eta or etd) + pad
+    return etd, (eta or etd) + timedelta(minutes=WINDOW_PAD_MIN)
 
 
 def _worse_verdict(a: Verdict, b: Verdict) -> Verdict:
@@ -251,24 +257,17 @@ def _window_forecast(taf_win: dict | None) -> WindowForecast | None:
         visibility_sm=taf_win.get("visibility_sm"),
         wind_kt=taf_win.get("wind_kt"), gust_kt=taf_win.get("gust_kt"),
         hazards=list(taf_win.get("hazards") or []),
-        governing=[_period_label(s) for s in taf_win.get("governing", [])],
+        governing=[wx.period_label(s) for s in taf_win.get("governing", [])],
+        by_field={k: wx.period_label(s)
+                  for k, s in (taf_win.get("by_field") or {}).items()},
+        by_field_text={k: s.get("text", "")
+                       for k, s in (taf_win.get("by_field") or {}).items()},
         prob_ceiling_agl_ft=prob.get("ceiling_agl_ft"),
         prob_visibility_sm=prob.get("visibility_sm"),
         prob_wind_kt=prob.get("wind_kt"), prob_gust_kt=prob.get("gust_kt"),
         prob_hazards=list(prob.get("hazards") or []),
-        prob_labels=[_period_label(s) for s in taf_win.get("prob_periods", [])],
+        prob_labels=[wx.period_label(s) for s in taf_win.get("prob_periods", [])],
     )
-
-
-def _period_label(seg: dict) -> str:
-    """e.g. "TEMPO 1900Z-2100Z", or "MAIN 1700Z-1700Z+1" across a day rollover.
-
-    A TAF period routinely runs past midnight Z, and a bare "1700Z-1700Z" reads
-    as a zero-length window rather than a whole day.
-    """
-    days = (seg["end"].date() - seg["start"].date()).days
-    tail = f"+{days}" if days > 0 else ""
-    return f"{seg.get('label', '')} {_zhm(seg['start'])}-{_zhm(seg['end'])}{tail}".strip()
 
 
 def _endpoint_weather_forecast(metar: str | None, taf: str | None,
@@ -473,6 +472,13 @@ def _assess_endpoint(
         c.location = airport.ident
     if weather.source == Source.NONE:
         verdict = Verdict.MITIGATE if verdict == Verdict.GO else verdict
+        # A row rather than a loose string, so the card can render every line of
+        # "why" from one list instead of two that have to be zipped back up.
+        checks.append(LimitCheck(
+            key="no_live_weather", label="Live weather", limit_text="any source",
+            actual_text="none available", passed=False, group="weather",
+            location=airport.ident,
+            reason_text="No live weather available - verify manually"))
 
     # Runway components (all ends), magnetic headings filled.
     comps: list[RunwayComponent] = []
@@ -481,9 +487,7 @@ def _assess_endpoint(
 
     gs = alt.groundspeed_kt if alt else None
     site_notams = _notams_for(airport.ident, notams)
-    reasons = _explicit_reasons(checks)
-    if weather.source == Source.NONE:
-        reasons.append("No live weather available - verify manually")
+    reasons = _explicit_reasons(checks)   # includes the no-live-weather row above
     links = cfs_links.airport_links(airport.ident)
     return AirportAssessment(
         airport=airport, distance_nm=round(distance_nm, 1), bearing_true=round(bearing),
@@ -502,15 +506,18 @@ def _assess_endpoint(
     )
 
 
+def reason_line(c: LimitCheck) -> str:
+    """One failing row as a sentence. Shared with the browser's card renderer,
+    which builds the same string from the same fields."""
+    if c.reason_text:
+        return c.reason_text
+    where = f" at {c.location}" if c.location else ""
+    return f"{c.label} {c.actual_text} exceeds your limit ({c.limit_text}){where}"
+
+
 def _explicit_reasons(checks: list[LimitCheck]) -> list[str]:
     """Spell out exactly which personal minimum is broken and why."""
-    out = []
-    for c in checks:
-        if c.passed or not c.applicable:
-            continue
-        where = f" at {c.location}" if c.location else ""
-        out.append(f"{c.label} {c.actual_text} exceeds your limit ({c.limit_text}){where}")
-    return out
+    return [reason_line(c) for c in checks if not c.passed and c.applicable]
 
 
 def _zhm(dt: datetime) -> str:
@@ -846,7 +853,42 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     else:
         checks.append(LimitCheck(key="visibility", label="Visibility (XC)", limit_text=f"≥ {vis_limit} SM",
                                  actual_text="no data", passed=True))
+    _stamp_route_groups(checks, dep_a, dest_a)
     return checks
+
+
+# Which condition value each route row is a limit on, so a TAF-sourced row can
+# be traced back to the group that produced it.
+_ROUTE_ROW_FIELD = {
+    "wind": "wind_kt", "gust_spread": "gust_kt", "ceiling": "ceiling_agl_ft",
+    "ceiling_endpoint": "ceiling_agl_ft", "visibility": "visibility_sm",
+}
+
+
+def _stamp_route_groups(checks: list[LimitCheck], dep_a, dest_a) -> None:
+    """Name the TAF group behind each route row that an endpoint won.
+
+    The route rows are built by aggregating across the two ends *and* the
+    enroute model samples, so they never pass through ``evaluator._attribute``.
+    Without this the route checklist said "TAF" where the discovery card for the
+    same airport said "TAF - TEMPO 2100Z-2300Z", which is the same value
+    explained two different ways.
+
+    A row whose worst value came from an enroute sample is model data and has no
+    group; it is left alone by the ``location`` match.
+    """
+    by_label = {}
+    for a in (dep_a, dest_a):
+        wf = a.weather.window_forecast
+        if wf is not None and a.weather.window_gated:
+            by_label[a.airport.ident] = wf
+    for c in checks:
+        field = _ROUTE_ROW_FIELD.get(c.key)
+        wf = by_label.get((c.location or "").split(" ")[0])
+        if not field or wf is None or c.source != Source.TAF.value:
+            continue
+        c.source_detail = wf.by_field.get(field)
+        c.source_text = wf.by_field_text.get(field) or None
 
 
 async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threats: list[str],
@@ -1366,13 +1408,22 @@ async def suggest(
             course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
             ceiling_ft=gate_ceiling, flight_rules=flight_rules,
             distance_nm=dist, field_elev_ft=origin.elevation_ft)
+        # The arrival the card is actually assessed at, at the altitude we would
+        # fly. ``cand_eta`` above is the cruise-TAS estimate the ceiling gate
+        # uses; this one carries the wind, so the two differ by a few minutes.
+        eta = etd_utc + timedelta(hours=flight_time_hr(
+            dist, cruise_kt, alt.groundspeed_kt if alt else None))
         a = _assess_endpoint(
             airport, metars.get(airport.ident), tafs.get(airport.ident),
             cand_fc, notams, mode, manual_threats, dist, bearing, alt,
             ensemble=ens_by_ident.get(airport.ident), flight_rules=flight_rules,
             ceiling_mode="xc",
-            when=etd_utc + timedelta(hours=flight_time_hr(dist, cruise_kt,
-                                                          alt.groundspeed_kt if alt else None)),
+            when=eta,
+            # Discovery used to pass no span at all, so it fell back to
+            # ETA +/- 30 min and never looked at the leg: a TEMPO over the first
+            # half of a 90-minute flight gated the route card for this airport
+            # and was invisible on its discovery card. Scope both to the flight.
+            span=flight_span(etd_utc, eta),
             is_now=is_now, show_obs=show_obs,
         )
         # Make the cloud gate visible: if winds are known but the ceiling left no
@@ -1380,9 +1431,13 @@ async def suggest(
         # instead of silently omitting the altitude.
         if (alt is None and flight_rules == "vfr" and levels_now
                 and gate_ceiling is not None):
-            a.reasons.append(
-                f"Ceiling too low for a VFR cruising altitude "
-                f"(clouds at {round(gate_ceiling / 100) * 100:,.0f} ft AGL)")
+            deck = f"{round(gate_ceiling / 100) * 100:,.0f} ft AGL"
+            a.limit_checks.append(LimitCheck(
+                key="vfr_cruise_ceiling", label="VFR cruising altitude",
+                limit_text="≥ 500 ft below the deck", actual_text=f"clouds at {deck}",
+                passed=False, group="conditions", location=airport.ident,
+                reason_text=f"Ceiling too low for a VFR cruising altitude (clouds at {deck})"))
+            a.reasons.append(reason_line(a.limit_checks[-1]))
         rw = a.best_runway
         if into_wind and (not rw or rw.headwind_kt < 0 or rw.crosswind_kt > xw_limit):
             continue
