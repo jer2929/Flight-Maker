@@ -58,6 +58,17 @@ threat_stacking:
   # Independent of the day/night toggle itself: night always selects your night
   # ceiling and visibility minimums, whatever this is set to.
   night_as_threat: true
+  # Wind that is *within* your limits can still be worth a mitigation, so the
+  # automatic "strong or gusty winds" threat trips below the hard limit. These
+  # are fractions of YOUR wind limits, not fixed knots: raise a limit and the
+  # trigger moves with it. They used to be hardcoded 15 kt and 8 kt, which are
+  # exactly these fractions of the default 20 kt / 10 kt - so the default
+  # profile behaves identically - but a pilot who set a 20 kt gust spread still
+  # got flagged at 8 kt, with a card that said "within personal limits" and
+  # MITIGATE at the same time.
+  auto_threat_fraction:
+    sustained: 0.75      # 15 kt against the default 20 kt sustained limit
+    gust_spread: 0.8     # 8 kt against the default 10 kt gust-spread limit
   major_threats:
     - night_operations
     - actual_imc
