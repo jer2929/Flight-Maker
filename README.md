@@ -181,10 +181,16 @@ minimums unless you remembered to flip it.
 twilight *is* a night flight, and the toggle decides which set of personal minimums
 the whole assessment runs against - so answering from the departure alone handed
 that arrival the day limits. The ETA is the great-circle distance over your own
-cruise TAS, and the caption says which end made the call: *"night landing at CYOW,
-ETA 0114Z"*. The toggle re-derives whenever the departure, the destination, the ETD
+cruise TAS. The toggle re-derives whenever the departure, the destination, the ETD
 or the aircraft changes. Clicking either button still wins, until one of those
 changes - which is a different flight.
+
+The control itself is inert: the selected half moves and nothing else does. It
+used to switch to a dashed border when it had chosen for you, and to carry a
+caption whose length silently set the control's width, so choosing an ETD redrew
+its outline and grew an empty box past the second button. Both are gone; the
+arrival note that explained a night landing went with them, since the toggle
+position is the answer and the assessment already spells the arrival out.
 
 In the hour-by-hour strip, night is a property of **each hour**, not of the flight:
 dark hours carry the night threat and night minimums, daylight hours don't,
