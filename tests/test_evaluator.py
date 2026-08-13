@@ -552,3 +552,39 @@ def test_route_rows_name_the_same_group_the_discovery_card_does():
     assert rows[0].source_detail == "TEMPO 2000Z-2300Z"
     assert "TSRA" in rows[0].source_text
     assert rows[1].source_detail is None
+
+
+# ---- every counted threat must be visible ---------------------------------
+#
+# threat_weight() sums the `present` set while threat_check_list() walked only
+# `major_threats`. A threat missing from that config still moved the verdict but
+# rendered no row, so the card showed a MITIGATE badge with nothing under it.
+
+def test_threat_not_in_major_threats_still_gets_a_row():
+    limits = get_default_limits()
+    limits["threat_stacking"]["major_threats"] = [
+        t for t in limits["threat_stacking"]["major_threats"]
+        if t != "strong_or_gusty_winds"
+    ]
+    wx = WeatherSummary(wind_dir_true=310, wind_kt=25, visibility_sm=20, ceiling_agl_ft=8000)
+    # Set the contextvar directly: major_threats is not a pilot-editable pref, so
+    # limits_override() cannot express this - but a bad edit to limits.yaml can.
+    from app.config import _limits_override
+    tok = _limits_override.set(limits)
+    try:
+        present = derive_threats(wx, False, [])
+        rows = evaluator.threat_check_list(present)
+        shown = {r.key for r in rows if r.present}
+        assert present, "sanity: the wind should raise a threat"
+        assert present <= shown, "a counted threat rendered no row"
+    finally:
+        _limits_override.reset(tok)
+
+
+def test_every_counted_threat_has_a_row_by_default():
+    wx = WeatherSummary(wind_dir_true=310, wind_kt=25, gust_kt=40,
+                        visibility_sm=1, ceiling_agl_ft=500,
+                        hazards=["thunderstorm", "forecast_icing", "low_level_wind_shear"])
+    present = derive_threats(wx, True, ["terrain_critical"], flight_rules="ifr")
+    shown = {r.key for r in evaluator.threat_check_list(present) if r.present}
+    assert present == shown

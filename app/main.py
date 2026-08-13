@@ -6,12 +6,13 @@ gated by the pilot's own personal minimums. Serves a small single-page UI from
 """
 from __future__ import annotations
 
+import hashlib
 import json
 
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app import orchestrator
@@ -304,9 +305,23 @@ async def airport_detail(ident: str):
     }
 
 
+def _stamped(name: str, media_type: str) -> Response:
+    """A shell file with its ``__SHELL_VERSION__`` placeholders filled in."""
+    src = (WEB_DIR / name).read_text(encoding="utf-8")
+    return Response(content=src.replace("__SHELL_VERSION__", shell_version()),
+                    media_type=media_type)
+
+
+# Both spellings are stamped: the service worker precaches "/" and "/index.html"
+# as separate entries, and the StaticFiles mount below would otherwise hand the
+# raw template - placeholder and all - to anyone who asked for the second one.
 @app.get("/")
+@app.get("/index.html")
 async def index():
-    return FileResponse(WEB_DIR / "index.html")
+    # The ?v= on the CSS/JS tags is what invalidates the plain HTTP cache for
+    # browsers with no service worker installed. Same content hash as the
+    # worker's VERSION, so the two can never disagree about what "current" is.
+    return _stamped("index.html", "text/html")
 
 
 @app.get("/manifest.webmanifest")
@@ -316,13 +331,42 @@ async def manifest():
     return FileResponse(WEB_DIR / "manifest.webmanifest", media_type="application/manifest+json")
 
 
+# The files the service worker caches as the app shell, and whose content
+# decides the cache version.
+_SHELL_FILES = ["index.html", "app.js", "style.css"]
+
+
+def shell_version() -> str:
+    """A cache version derived from the shell files' own bytes.
+
+    The service worker is cache-first, so this string is the *only* thing that
+    can retire a stale script in an installed browser. It used to be a hand-
+    edited constant, and hand-editing failed exactly as you'd expect: app.js
+    changed in three consecutive PRs without it moving, so browsers kept
+    serving a months-old bundle and rendered decision cards the running backend
+    had long since stopped producing.
+
+    Hashing the content means a deploy that changes the shell always ships a
+    new worker, and one that doesn't never churns the cache - no discipline
+    required from whoever writes the next change.
+    """
+    h = hashlib.sha256()
+    for name in _SHELL_FILES:
+        p = WEB_DIR / name
+        if p.exists():
+            h.update(p.read_bytes())
+    return f"minima-{h.hexdigest()[:16]}"
+
+
 @app.get("/sw.js")
 async def service_worker():
     # Served from the root so the worker's scope covers the whole origin.
     # ``no-cache`` ensures a new deploy's worker is picked up promptly rather
     # than a stale copy lingering in the browser's HTTP cache.
-    return FileResponse(
-        WEB_DIR / "sw.js",
+    src = (WEB_DIR / "sw.js").read_text(encoding="utf-8")
+    src = src.replace("__SHELL_VERSION__", shell_version())
+    return Response(
+        content=src,
         media_type="text/javascript",
         headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
     )
