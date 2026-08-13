@@ -57,7 +57,7 @@ from app.services.geo import (
     initial_bearing_true,
 )
 from app.services.runway import all_runway_components, best_runway, fill_headings, surface_is_hard
-from app.services.winds_aloft import recommend_altitude
+from app.services.winds_aloft import clears_ceiling, lowest_ceiling, recommend_altitude
 from app.sources import airports as ap
 from app.sources import awc, cfps, openmeteo
 
@@ -332,6 +332,27 @@ def _endpoint_weather_at(metar: str | None, taf: str | None,
             ws.window_forecast = _window_forecast(wx.worst_in_window(taf_segs, *span))
         return ws
     return _endpoint_weather_forecast(metar, taf, taf_segs, fc, when, span)
+
+
+def _card_ceilings(ws: WeatherSummary | None) -> list[float | None]:
+    """Every ceiling this endpoint's card reports: the headline value, and the
+    TAF's worst case across the flight window.
+
+    Used to gate the cruising altitude. On a future ETD the window worst case
+    *is* the headline, so the two agree; on a "now" departure the headline is an
+    observation of this minute and the window is the TEMPO you fly into an hour
+    later - and a recommended altitude has to clear both, or the card prints a
+    deck at 1,500 ft next to a suggestion to cruise at 9,500.
+
+    PROB30/PROB40 ceilings are deliberately left out: a 30-40% chance is never a
+    limit anywhere else on the card, so it does not move the altitude either.
+    """
+    if ws is None:
+        return []
+    out: list[float | None] = [ws.ceiling_agl_ft]
+    if ws.window_forecast is not None:
+        out.append(ws.window_forecast.ceiling_agl_ft)
+    return out
 
 
 def _apply(ws: WeatherSummary, c: dict) -> None:
@@ -1059,24 +1080,35 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
 
     # Gate the (VFR) cruising altitude on the minimum ceiling along the whole
     # route - departure, enroute midpoints and destination - so a recommended
-    # level never clashes with a cloud deck. The destination ceiling is derived
-    # here (before its full assessment) with the same helper, at the ETA.
-    dest_ceiling = _endpoint_weather_at(metars.get(dest.ident), tafs.get(dest.ident),
+    # level never clashes with a cloud deck. Each end contributes both of the
+    # ceilings its card reports (see ``_card_ceilings``): the headline value AND
+    # the TAF's worst case across the flight window, so a TEMPO deck an hour into
+    # a "now" departure gates the pick even though the METAR is clear right now.
+    # The destination is derived here (before its full assessment) with the same
+    # helper, scoped to the provisional flight window.
+    dest_ws_prov = _endpoint_weather_at(metars.get(dest.ident), tafs.get(dest.ident),
                                         dest_segs, dest_fc, dest_ens,
-                                        when=eta_prov, is_now=is_now).ceiling_agl_ft
-    gate_ceiling_pts = ([dep_a.weather.ceiling_agl_ft, dest_ceiling]
-                        + [e.get("ceiling_ft") for e in enroute])
-    gate_ceiling = min([c for c in gate_ceiling_pts if c is not None], default=None)
+                                        when=eta_prov, is_now=is_now,
+                                        span=flight_span(etd_utc, eta_prov))
+    gate_ceiling = lowest_ceiling(_card_ceilings(dep_a.weather)
+                                  + _card_ceilings(dest_ws_prov)
+                                  + [e.get("ceiling_ft") for e in enroute])
     # Winds aloft at the mid-leg hour, not at the ETD: a 2 h leg's cruise wind is
     # better represented by the middle of the flight than by its first minute.
-    alt = recommend_altitude(_winds_aloft_at(dep_fc, etd_utc + timedelta(hours=t_prov / 2)),
-                             bearing, get_cruise_kt(),
-                             course_mag=bearing_mag, ceiling_ft=gate_ceiling,
-                             flight_rules=flight_rules, distance_nm=distance,
-                             field_elev_ft=dep.elevation_ft) if dep_fc else None
-    if alt:
-        for lv in alt.levels:
+    levels = (_winds_aloft_at(dep_fc, etd_utc + timedelta(hours=t_prov / 2))
+              if dep_fc else [])
+
+    def _pick_altitude(ceiling_ft: float | None) -> AltitudeRecommendation | None:
+        """The best level under ``ceiling_ft``, magnetic wind directions filled."""
+        rec = recommend_altitude(levels, bearing, get_cruise_kt(),
+                                 course_mag=bearing_mag, ceiling_ft=ceiling_ft,
+                                 flight_rules=flight_rules, distance_nm=distance,
+                                 field_elev_ft=dep.elevation_ft)
+        for lv in (rec.levels if rec else []):
             lv.direction_mag = _mag(lv.direction_true, dep.lat, dep.lon)
+        return rec
+
+    alt = _pick_altitude(gate_ceiling)
 
     # --- Flight window (pass 2 of 2) ------------------------------------------
     # Refine the ETA now that groundspeed is known, and stop there. A second
@@ -1121,6 +1153,22 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         return trends.analyze([wx.parse_metar(r) for r in reversed(h)])[1]
     lowering = (_ceiling_dropping(dep_fc) or _ceiling_dropping(dest_fc)
                 or _hist_lowering(dep.ident) or _hist_lowering(dest.ident))
+
+    # Re-gate against the ceilings the finished cards actually print. The pick
+    # above was made against the *provisional* destination, assessed at the
+    # cruise-TAS ETA; the card is assessed at the wind-corrected one, and the two
+    # can land in different forecast hours. A level above a deck shown on the
+    # same page is never right, so the pick is re-run against the lowest ceiling
+    # anywhere on the route. This can only lower it, so the ETA (computed from
+    # the faster, higher level) stays a conservative estimate rather than being
+    # iterated a third time - see the two-pass note above.
+    gate_ceiling = lowest_ceiling([gate_ceiling, *ceiling_points,
+                                   *_card_ceilings(dep_a.weather),
+                                   *_card_ceilings(dest_a.weather)])
+    if alt and not clears_ceiling(alt.altitude_ft, gate_ceiling, flight_rules):
+        alt = _pick_altitude(gate_ceiling)
+        dest_a.altitude = alt   # the card carries the same pick as the header
+
     cruise_alt = alt.altitude_ft if alt else None
     cloud_at_cruise = bool(cruise_alt and enroute_ceiling is not None and enroute_ceiling < cruise_alt)
 
@@ -1239,8 +1287,17 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
 
     beyond = bool(dep_fc) and _index_for_utc(dep_fc, eta_utc)[1]
     notes: list[str] = []
-    if alt is None and not is_now:
+    if alt is None and not levels and not is_now:
         notes.append("ETA estimated from cruise TAS - no winds aloft available")
+    # Winds are known, but the deck left no legal VFR cruising altitude under it.
+    # Say which deck did it, rather than dropping the altitude line in silence -
+    # and say what to do instead: the hemispheric rule only applies above 3,000
+    # ft AGL, so the flight is planned below that or it doesn't go.
+    if alt is None and levels and flight_rules != "ifr" and gate_ceiling is not None:
+        notes.append(
+            f"No VFR cruising altitude clears the {round(gate_ceiling / 100) * 100:,.0f} ft "
+            "ceiling - plan to cruise below 3,000 ft AGL, where the hemispheric rule "
+            "does not apply")
     if beyond:
         notes.append(f"ETD is beyond the {settings.timeline_hours} h forecast horizon")
     # A day departure can still be a night arrival. Say so rather than silently
@@ -1391,7 +1448,15 @@ async def suggest(
     # Origin ceiling gates the cruising altitude along with each destination's, so a
     # low deck near home lowers the suggestion for every candidate (the "enroute
     # ceiling" - origin + destination, without an extra forecast call per candidate).
-    origin_ceiling = _point_at(origin_fc, None if is_now else etd_utc).get("ceiling_ft") if origin_fc else None
+    # The model hour AND what the origin actually reports: a METAR/TAF deck at home
+    # is as real as a modelled one, and the lower of the two is what you fly under.
+    origin_ws = _endpoint_weather_at(
+        metars.get(origin_ident), tafs.get(origin_ident),
+        wx.parse_taf_segments(tafs.get(origin_ident) or ""), origin_fc, None,
+        when=etd_utc, is_now=is_now)
+    origin_ceiling = lowest_ceiling(
+        [_point_at(origin_fc, None if is_now else etd_utc).get("ceiling_ft") if origin_fc else None,
+         *_card_ceilings(origin_ws)])
     results: list[AirportAssessment] = []
     for airport, dist in candidates:
         bearing = initial_bearing_true(origin.lat, origin.lon, airport.lat, airport.lon)
@@ -1401,8 +1466,7 @@ async def suggest(
         cand_eta = etd_utc + timedelta(hours=flight_time_hr(dist, cruise_kt))
         cand_ceiling = (_point_at(cand_fc, None if is_now else cand_eta).get("ceiling_ft")
                         if cand_fc else None)
-        gate_ceiling = min([c for c in (origin_ceiling, cand_ceiling) if c is not None],
-                           default=None)
+        gate_ceiling = lowest_ceiling([origin_ceiling, cand_ceiling])
         alt = recommend_altitude(
             levels_now, bearing, cruise_kt,
             course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
@@ -1426,6 +1490,20 @@ async def suggest(
             span=flight_span(etd_utc, eta),
             is_now=is_now, show_obs=show_obs,
         )
+        # The ceilings this card reports - the candidate's METAR now, or its TAF
+        # across the window - are only known once it has been assessed, and the
+        # gate above saw only the model. Re-gate against them so no card ever
+        # shows a cruising altitude above a deck printed on the same card. This
+        # only ever lowers the pick, so the ETA it was assessed at (from the
+        # faster, higher level) stays a conservative estimate.
+        gate_ceiling = lowest_ceiling([gate_ceiling, *_card_ceilings(a.weather)])
+        if alt and not clears_ceiling(alt.altitude_ft, gate_ceiling, flight_rules):
+            alt = recommend_altitude(
+                levels_now, bearing, cruise_kt,
+                course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
+                ceiling_ft=gate_ceiling, flight_rules=flight_rules,
+                distance_nm=dist, field_elev_ft=origin.elevation_ft)
+            a.altitude = alt
         # Make the cloud gate visible: if winds are known but the ceiling left no
         # legal VFR cruising altitude (≥500 ft below the deck), say so on the card
         # instead of silently omitting the altitude.

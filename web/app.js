@@ -954,7 +954,7 @@ function renderRoute(r) {
       ${win ? `<span title="Conditions are assessed for this window">🕐 ETD ${zHM(win.etd_utc)} → ETA ${zHM(win.eta_utc)}${win.eta_provisional ? " (est.)" : ""}</span>` : ""}
       <span>📏 ${r.distance_nm} nm · course ${dirM(r.bearing_mag, r.bearing_true)}</span>
       <span>⏱ ${fmtHrMin(r.flight_time_hr)}</span>
-      ${alt ? `<span>⬆ Best alt ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
+      ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud">⬆ Best alt ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
       ${r.enroute_ceiling_ft != null ? `<span>☁ Enroute ceiling ${fmtCeil(r.enroute_ceiling_ft)}</span>` : ""}
       ${r.cloud_at_cruise ? `<span class="warn">⚠️ Cloud below planned cruise altitude</span>` : ""}
       ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${windDir(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
@@ -1578,7 +1578,7 @@ function discoveryCard(a) {
       <span>💨 ${windStr(w)}</span>
       ${ceilChip(w)}
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
-      ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below the enroute ceiling and scaled to leg distance">⬆ Best alt ${fmtFt(a.altitude.altitude_ft)}</span><span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "🟢 tailwind" : "🔴 headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
+      ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below every ceiling on this card (reported now and forecast for your window) and scaled to leg distance">⬆ Best alt ${fmtFt(a.altitude.altitude_ft)}</span><span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "🟢 tailwind" : "🔴 headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
     ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
     ${runwaysBlock(a)}

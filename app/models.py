@@ -215,7 +215,9 @@ class FlightWindow(BaseModel):
     eta_utc: str
     is_now: bool                    # ETD is current - the METAR anchors departure
     flight_time_hr: float
-    eta_provisional: bool = False   # no winds aloft, so ETA is cruise-TAS only
+    # No cruising altitude was picked - no winds aloft, or the deck left no legal
+    # VFR level under it - so the ETA is cruise-TAS only. ``notes`` says which.
+    eta_provisional: bool = False
     beyond_model_horizon: bool = False
     taf_covers_etd: bool = False
     taf_covers_eta: bool = False
