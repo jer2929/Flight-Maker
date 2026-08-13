@@ -1,5 +1,7 @@
 """Tests for user-editable personal minimums: deep-merge, validation/clamping,
 and per-request override isolation (the chokepoint the whole app gates on)."""
+import pytest
+
 from app.config import (
     cruise_override,
     get_cruise_kt,
@@ -9,6 +11,8 @@ from app.config import (
     limits_override,
     merge_limits,
 )
+from app.models import RunwayWind, Source, WeatherSummary
+from app.services.evaluator import decision, derive_threats, wind_threat_thresholds
 
 
 def test_merge_overrides_leaf_keeps_defaults():
@@ -107,6 +111,105 @@ def test_conservatism_unknown_ignored():
     # Unknown preset name is dropped → rule unchanged, no weights written.
     assert merged["threat_stacking"]["rule"] == base["threat_stacking"]["rule"]
     assert "weights" not in merged["threat_stacking"]
+
+
+# ---- every editable minimum actually re-gates the engine -------------------
+#
+# The merge tests above prove a pref reaches get_limits(). They do NOT prove the
+# engine reads it, and that gap shipped a real bug: derive_threats() carried
+# hardcoded 15 kt / 8 kt wind triggers, so a pilot who raised their gust spread
+# to 20 kt still got MITIGATE at a 9 kt spread - on a card that simultaneously
+# said "within personal limits". These cases relax one setting past conditions
+# that bust the default and assert the verdict actually moves.
+
+def _wx(**kw):
+    base = dict(source=Source.MODEL, wind_dir_true=310, wind_kt=3, gust_kt=None,
+                visibility_sm=20, ceiling_agl_ft=8000, hazards=[])
+    base.update(kw)
+    return WeatherSummary(**base)
+
+
+def _rw(crosswind_kt=0.0):
+    return RunwayWind(runway_ident="29", heading_true=288, headwind_kt=5,
+                      crosswind_kt=crosswind_kt, crosswind_kt_gust=None,
+                      headwind_kt_gust=None)
+
+
+# (prefs, weather, runway, mode, ceiling_mode, flight_rules)
+RESPECTED = {
+    "wind.sustained": ({"wind": {"sustained_max_kt": 40}}, _wx(wind_kt=25), None, "day", "xc", "vfr"),
+    "wind.gust_spread": ({"wind": {"gust_spread_max_kt": 20}}, _wx(wind_kt=5, gust_kt=14), None, "day", "xc", "vfr"),
+    "wind.crosswind": ({"wind": {"crosswind_max_kt": 25}}, _wx(), _rw(15), "day", "xc", "vfr"),
+    "ceiling.day_xc": ({"ceiling_agl_ft": {"day_xc": 1000}}, _wx(ceiling_agl_ft=2500), None, "day", "xc", "vfr"),
+    "ceiling.day_circuit": ({"ceiling_agl_ft": {"day_circuit": 800}}, _wx(ceiling_agl_ft=1200), None, "day", "circuit", "vfr"),
+    "ceiling.night_circuit": ({"ceiling_agl_ft": {"night_circuit": 800}}, _wx(ceiling_agl_ft=1500), None, "night", "circuit", "vfr"),
+    # Night XC compares against the cloud-base limit; the others must clear it.
+    "ceiling.night_xc": ({"ceiling_agl_ft": {"night_xc_cloud_base": 2000}}, _wx(ceiling_agl_ft=5000), None, "night", "xc", "vfr"),
+    "vis.day_xc": ({"visibility_sm": {"day_xc": 3}}, _wx(visibility_sm=5), None, "day", "xc", "vfr"),
+    "vis.day_circuit": ({"visibility_sm": {"day_circuit": 2}}, _wx(visibility_sm=3), None, "day", "circuit", "vfr"),
+    "vis.night_circuit": ({"visibility_sm": {"night_circuit": 2}}, _wx(visibility_sm=3), None, "night", "circuit", "vfr"),
+    "vis.night_xc": ({"visibility_sm": {"night_xc": 3}}, _wx(visibility_sm=5, ceiling_agl_ft=None), None, "night", "xc", "vfr"),
+    "ifr.ceiling": ({"ifr_ceiling_agl_ft": {"day_xc": 400}}, _wx(ceiling_agl_ft=800), None, "day", "xc", "ifr"),
+    "ifr.visibility": ({"ifr_visibility_sm": {"day_xc": 1}}, _wx(visibility_sm=2), None, "day", "xc", "ifr"),
+    "weather_flags": ({"weather_flags": []}, _wx(hazards=["thunderstorm"]), None, "day", "xc", "vfr"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(RESPECTED))
+def test_relaxing_a_minimum_changes_the_verdict(name):
+    prefs, wx, rw, mode, ceiling_mode, rules = RESPECTED[name]
+    kw = dict(ceiling_mode=ceiling_mode, flight_rules=rules)
+    strict = decision(wx, rw, mode, False, [], **kw)[0]
+    with limits_override(prefs):
+        relaxed = decision(wx, rw, mode, False, [], **kw)[0]
+    assert relaxed != strict, f"{name}: engine ignored the pilot's own minimum"
+
+
+def test_conservatism_preset_changes_the_verdict():
+    wx = _wx(wind_kt=16)  # two stacked threats, no hard-limit bust
+    strict = decision(wx, None, "day", True, [])[0]
+    with limits_override({"conservatism": "confident"}):
+        assert decision(wx, None, "day", True, [])[0] != strict
+
+
+def test_night_and_imc_threat_toggles_are_respected():
+    assert "night_operations" in derive_threats(_wx(), False, ["night_operations"])
+    with limits_override({"night_as_threat": False}):
+        assert "night_operations" not in derive_threats(_wx(), False, ["night_operations"])
+    low = _wx(visibility_sm=1)
+    assert "actual_imc" not in derive_threats(low, False, [], flight_rules="ifr")
+    with limits_override({"imc_as_threat": True}):
+        assert "actual_imc" in derive_threats(low, False, [], flight_rules="ifr")
+
+
+# ---- wind threat triggers scale with the pilot's own wind limits ------------
+
+def test_wind_threat_thresholds_match_legacy_defaults():
+    # The default profile must behave exactly as it did when these were the
+    # hardcoded literals 15 and 8 - the fractions exist to preserve that.
+    assert wind_threat_thresholds() == (15.0, 8.0)
+
+
+def test_wind_threat_thresholds_track_raised_limits():
+    with limits_override({"wind": {"sustained_max_kt": 40, "gust_spread_max_kt": 20}}):
+        assert wind_threat_thresholds() == (30.0, 16.0)
+
+
+def test_gust_spread_within_raised_limit_is_not_a_threat():
+    # The reported bug: 5G14 is a 9 kt spread. Default (10 kt limit) flags it;
+    # a pilot who set 20 kt has said it is unremarkable.
+    wx = _wx(wind_kt=5, gust_kt=14)
+    assert "strong_or_gusty_winds" in derive_threats(wx, False, [])
+    with limits_override({"wind": {"gust_spread_max_kt": 20}}):
+        assert "strong_or_gusty_winds" not in derive_threats(wx, False, [])
+
+
+def test_lowering_a_limit_tightens_the_trigger_too():
+    # Scaling cuts both ways - a cautious pilot's lower limit trips sooner.
+    wx = _wx(wind_kt=5, gust_kt=11)  # 6 kt spread, under the default 8 kt trip
+    assert "strong_or_gusty_winds" not in derive_threats(wx, False, [])
+    with limits_override({"wind": {"gust_spread_max_kt": 5}}):
+        assert "strong_or_gusty_winds" in derive_threats(wx, False, [])
 
 
 # ---- aircraft cruise TAS override -----------------------------------------

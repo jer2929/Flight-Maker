@@ -357,6 +357,25 @@ def _min_check(key, label, limit, actual, unit, source=None) -> LimitCheck:
     )
 
 
+def wind_threat_thresholds() -> tuple[float, float]:
+    """(sustained kt, gust-spread kt) at which the automatic "strong or gusty
+    winds" threat trips.
+
+    Scaled off the pilot's own wind limits rather than fixed knots. The whole
+    point of the threat is "inside your limits, but enough wind to plan for",
+    which is only meaningful relative to where those limits sit - a pilot who
+    raises their gust spread to 20 kt has said a 9 kt spread is unremarkable,
+    and the card has to agree with them.
+    """
+    L = get_limits()
+    w = L["hard_limits"]["wind"]
+    frac = L["threat_stacking"].get("auto_threat_fraction") or {}
+    return (
+        float(w["sustained_max_kt"]) * float(frac.get("sustained", 0.75)),
+        float(w["gust_spread_max_kt"]) * float(frac.get("gust_spread", 0.8)),
+    )
+
+
 def derive_threats(
     weather: WeatherSummary,
     is_complex_airspace: bool,
@@ -382,9 +401,10 @@ def derive_threats(
     # it under VFR so a stale/forged query string can't surface it.
     if flight_rules != "ifr":
         threats.discard("single_pilot_ifr_no_autopilot")
-    if weather.wind_kt is not None and weather.wind_kt >= 15:
+    sustained_trip, spread_trip = wind_threat_thresholds()
+    if weather.wind_kt is not None and weather.wind_kt >= sustained_trip:
         threats.add("strong_or_gusty_winds")
-    if weather.gust_kt is not None and weather.wind_kt is not None and (weather.gust_kt - weather.wind_kt) >= 8:
+    if weather.gust_kt is not None and weather.wind_kt is not None and (weather.gust_kt - weather.wind_kt) >= spread_trip:
         threats.add("strong_or_gusty_winds")
     if "thunderstorm" in weather.hazards:
         threats.add("convective_nearby")

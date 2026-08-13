@@ -169,6 +169,13 @@ readily a stack escalates the verdict:
 | **Confident** | Tolerates one threat; two → mitigate, three → no-go. |
 | **Cautious** | A single *serious* weather threat (IMC / convective / icing) is disqualifying. |
 
+The automatic **strong / gusty winds** threat trips *below* your hard limit -
+wind you can legally accept is still wind worth planning for. It is scaled off
+your own wind minimums (`threat_stacking.auto_threat_fraction`), so raising a
+limit raises the trigger with it: on the default 20 kt sustained / 10 kt gust
+spread it fires at 15 kt and 8 kt, and a pilot who sets a 20 kt gust spread is
+not flagged until 16 kt.
+
 ### Day or night, and whether night is a threat
 The day/night toggle **selects itself from your flight**, using civil twilight:
 night is the CARs 101.01 definition - from the end of evening civil twilight to
