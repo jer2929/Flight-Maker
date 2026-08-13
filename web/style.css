@@ -254,15 +254,19 @@ select, input[type=text], .route-inputs input {
 .legend .go::before { color: var(--go); } .legend .mit::before { color: var(--mitigate); } .legend .nogo::before { color: var(--nogo); }
 
 /* Day/Night segmented control */
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+/* align-self matters: .control is a flex column, so without it the segmented
+   control is stretched to the column's width - which is set by whatever the
+   widest sibling happens to be. That is how the day/night toggle grew an empty
+   padded region past its second button whenever the caption beside it was long.
+   inline-flex does not help; a flex item is stretched regardless. */
+.seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .seg-btn { background: #0f1419; color: var(--muted); border: none; padding: 7px 14px; cursor: pointer; font-size: .9rem; }
 .seg-btn.active { background: var(--accent); color: #fff; }
 
-/* Whether day/night was derived or picked by hand is said in words, by
-   .mode-note below. The control itself never changes shape: it used to switch to
-   a dashed border when derived, so choosing an ETD redrew its outline and the
-   whole thing read as a glitch. Only the active half moves. */
-.mode-note { margin: 4px 0 0; font-size: .76rem; }
+/* The day/night control never changes shape. It used to switch to a dashed
+   border when derived, and carried a caption underneath whose length silently
+   set the control's width - between them, choosing an ETD redrew the whole
+   thing. Only the active half moves now. */
 
 /* checklist location + source chips */
 .chk .act .loc { color: #8fbcff; }

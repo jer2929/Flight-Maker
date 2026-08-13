@@ -403,11 +403,7 @@ function wire() {
     if (b.dataset.rules !== undefined) renderExtraThreats();
     // Picking day/night yourself overrides the civil-twilight auto-selection
     // until the ETD or aerodrome changes.
-    if (b.dataset.mode !== undefined) {
-      MODE_MANUAL = true;
-      const note = $("#mode-note");
-      if (note) note.textContent = "Set by you";
-    }
+    if (b.dataset.mode !== undefined) MODE_MANUAL = true;
   }));
 
   // A new ETD, or either end of the route, is a different flight - so the manual
@@ -528,9 +524,9 @@ function autoDayNightContext() {
   return null;  // My Minimums - the flight controls are hidden there
 }
 
-// Move the selection, and nothing else. Whether the mode was derived or chosen
-// is said in words by #mode-note; the control used to also switch to a dashed
-// border when derived, which meant picking an ETD redrew its outline.
+// Move the selection, and nothing else. The control used to switch to a dashed
+// border when derived, and to carry a caption whose length set its width, so
+// picking an ETD redrew the whole thing. Only the active half moves now.
 function setMode(mode) {
   const btn = $$(".seg-btn[data-mode]").find((b) => b.dataset.mode === mode);
   if (!btn) return;
@@ -562,22 +558,7 @@ async function refreshAutoDayNight() {
     const d = await r.json();
     if (MODE_MANUAL || seq !== DAYNIGHT_SEQ) return;  // superseded while in flight
     setMode(d.mode);
-    const note = $("#mode-note");
-    if (note) note.textContent = dayNightNote(d);
   } catch { /* leave the toggle as it stands */ }
-}
-
-// Why the toggle sits where it does. When the destination is what made it a
-// night flight, say so - otherwise a pilot looking at a sunlit departure sees
-// the toggle flip to Night for no visible reason.
-function dayNightNote(d) {
-  if (d.night_at === "destination" && d.dest_ident) {
-    return `Auto from civil twilight · night landing at ${d.dest_ident}, ETA ${zHM(d.eta)}`;
-  }
-  if (d.next_transition) {
-    return `Auto from civil twilight · ${d.next_transition_to === "night" ? "night" : "day"} from ${zHM(d.next_transition)}`;
-  }
-  return "Auto from civil twilight";
 }
 
 function switchTab(name) {
