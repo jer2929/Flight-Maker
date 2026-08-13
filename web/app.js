@@ -1177,9 +1177,17 @@ function endpointCard(a, role, timeLabel) {
   const showTakeoff = role !== "Destination";
   const showLanding = role !== "Departure";
   const gust = (g) => g ? ` (gust ${Math.round(Math.abs(g))})` : "";
+  // The green line and the badge answer different questions, so the card says
+  // both. `reasons` is failing *hard limits* only; a verdict off the threat
+  // stack - 6G14 kt is a passing 8 kt gust spread and a "strong or gusty winds"
+  // threat at the same time - left the card reading "✓ Within personal limits"
+  // under a MITIGATE badge with nothing to reconcile the two. whyBlock names
+  // what actually moved the verdict, and re-renders the failing limits itself,
+  // so the reasons list is not drawn twice.
   return `<div class="card ${cls(a.verdict)}">
     <div class="card-head"><h3>${role}: ${a.airport.ident} · ${a.airport.name}</h3><span class="badge ${cls(a.verdict)}">${a.verdict}</span></div>
-    ${issues.length ? `<ul class="reasons nogo-reasons">${issues.map((x) => `<li>${x}</li>`).join("")}</ul>` : `<div class="ok-line">✓ Within personal limits</div>`}
+    ${issues.length ? "" : `<div class="ok-line">✓ Within personal limits</div>`}
+    ${whyBlock(a)}
     <div class="meta obs">
       <span>${srcChip(w.source)}${w.as_of ? " " + w.as_of : ""}</span>
       <span>💨 ${wind}</span>
