@@ -145,7 +145,8 @@ def window_checks(
     field right now" and "a TEMPO puts you in 2 SM an hour from now" are both
     true, and only the second one is about the flight you are about to make.
 
-    PROB30/PROB40 ride along as an ``advisory`` row - always shown, never fatal.
+    PROB30/PROB40 ride along as an ``advisory`` row, except for the hazards the
+    pilot has put on their own auto-NO-GO list - see :func:`prob_checks`.
     """
     wf = weather.window_forecast
     if wf is None:
@@ -166,29 +167,81 @@ def window_checks(
                 "window_visibility", f"Visibility in flight window{where}",
                 vis_limit, wf.visibility_sm, unit="SM", source=Source.TAF.value))
 
-    # PROB30/PROB40: reported, never gated on ceiling/vis/wind. The row keeps the
-    # TAF's own group and times - these are pilots, and "PROB30 1800Z-2300Z" is
-    # the precise thing they already read off the raw TAF underneath.
-    if wf.prob_labels:
-        bits = []
-        if wf.prob_wind_kt is not None:
-            gust = f"G{wf.prob_gust_kt:.0f}" if wf.prob_gust_kt else ""
-            bits.append(f"wind {wf.prob_wind_kt:.0f}{gust} kt")
-        if wf.prob_ceiling_agl_ft is not None:
-            bits.append(f"{round(wf.prob_ceiling_agl_ft / 100) * 100:,.0f} ft ceiling")
-        if wf.prob_visibility_sm is not None:
-            bits.append(f"{fmt_amount(wf.prob_visibility_sm, 'SM')} SM visibility")
-        bits.extend(h.replace("_", " ") for h in wf.prob_hazards)
-        checks.append(LimitCheck(
-            key="window_prob", label=", ".join(wf.prob_labels),
-            limit_text="Advisory only",
-            actual_text=", ".join(bits) if bits else "see TAF",
-            passed=True, advisory=True, group="weather", source=Source.TAF.value))
+    checks.extend(prob_checks(
+        labels=wf.prob_labels, wind_kt=wf.prob_wind_kt, gust_kt=wf.prob_gust_kt,
+        ceiling_agl_ft=wf.prob_ceiling_agl_ft, visibility_sm=wf.prob_visibility_sm,
+        hazards=wf.prob_hazards))
 
     if location:
         for c in checks:
             c.location = location
     return checks
+
+
+def gating_hazards() -> set[str]:
+    """The hazards the pilot has put on their own automatic NO-GO list."""
+    return set(get_limits()["hard_limits"].get("weather_flags") or [])
+
+
+def prob_summary(*, wind_kt=None, gust_kt=None, ceiling_agl_ft=None,
+                 visibility_sm=None, hazards=()) -> str:
+    """A PROB30/PROB40 group written the way a pilot reads it off the raw TAF -
+    ``wind 22G34 kt, 1,500 ft ceiling, 2 SM visibility, thunderstorm``.
+
+    One renderer, used by the checklist rows and by the hour-by-hour strip, so
+    the same group never gets described two different ways in one page.
+    """
+    bits = []
+    if wind_kt is not None:
+        gust = f"G{gust_kt:.0f}" if gust_kt else ""
+        bits.append(f"wind {wind_kt:.0f}{gust} kt")
+    if ceiling_agl_ft is not None:
+        bits.append(f"{round(ceiling_agl_ft / 100) * 100:,.0f} ft ceiling")
+    if visibility_sm is not None:
+        bits.append(f"{fmt_amount(visibility_sm, 'SM')} SM visibility")
+    bits.extend(h.replace("_", " ") for h in hazards)
+    return ", ".join(bits)
+
+
+def prob_checks(*, labels, wind_kt=None, gust_kt=None, ceiling_agl_ft=None,
+                visibility_sm=None, hazards=()) -> list[LimitCheck]:
+    """The decision-card rows for a PROB30/PROB40 group. **The one place the PROB
+    rule lives**, so the route card, the discovery cards and the hour-by-hour
+    strip cannot drift apart on it - which is exactly what they had done.
+
+    A PROB is a 30-40% chance, not a forecast, so:
+
+    * its ceiling, visibility and wind are **never** a limit bust. They are
+      reported, and the decision stays the pilot's.
+    * a hazard it carries gates **only** when the pilot has listed that hazard
+      among the ones they treat as an automatic NO-GO. Thunderstorm is on that
+      list by default, so a PROB30 TSRA does still stop the flight - because the
+      pilot said it should, not because the app assumed it.
+
+    The row keeps the TAF's own group and times ("PROB30 1800Z-2300Z"): that is
+    the precise thing already visible in the raw TAF underneath.
+    """
+    if not labels:
+        return []
+    label = ", ".join(labels)
+    gating = sorted(set(hazards) & gating_hazards())
+    rows: list[LimitCheck] = []
+    if gating:
+        rows.append(LimitCheck(
+            key="window_prob_hazard", label=label,
+            limit_text="none on your auto NO-GO list",
+            actual_text=(", ".join(h.replace("_", " ") for h in gating)
+                         + " - on your auto NO-GO list"),
+            passed=False, group="weather", source=Source.TAF.value))
+    rest = prob_summary(wind_kt=wind_kt, gust_kt=gust_kt,
+                        ceiling_agl_ft=ceiling_agl_ft, visibility_sm=visibility_sm,
+                        hazards=[h for h in hazards if h not in gating])
+    if rest or not gating:
+        rows.append(LimitCheck(
+            key="window_prob", label=label, limit_text="Advisory only",
+            actual_text=rest or "see TAF",
+            passed=True, advisory=True, group="weather", source=Source.TAF.value))
+    return rows
 
 
 def _num_check(key, label, limit, actual, unit, source=None, actual_suffix="") -> LimitCheck:

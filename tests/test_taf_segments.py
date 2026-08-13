@@ -200,3 +200,46 @@ def test_worst_in_window_is_none_outside_the_taf():
     segs = parse_taf_segments(TAF_BECMG)
     assert worst_in_window(segs, _q(2) - timedelta(days=2),
                            _q(3) - timedelta(days=2)) is None
+
+
+# --- PROB is a chance, not a limit ------------------------------------------
+
+PROB_TAF = (
+    f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM SCT040 "
+    f"PROB30 {_dd(D)}20/{_dd(D)}23 34022G34KT 2SM TSRA BKN015"
+)
+
+
+def test_conditions_at_keeps_prob_out_of_the_gating_conditions():
+    """The reported bug: the hour-by-hour strip read the TAF through
+    ``conditions_at``, which merged PROB groups in with everything else - so a
+    PROB30 2SM turned an hour red while the route card, reading the same TAF
+    through ``worst_in_window``, called that time advisory."""
+    c = conditions_at(parse_taf_segments(PROB_TAF), _q(21))
+    # The base group, untouched by the 30% chance.
+    assert c["wind_kt"] == 8
+    assert c["visibility_sm"] > 6
+    assert c["ceiling_agl_ft"] is None or c["ceiling_agl_ft"] > 1500
+    assert "thunderstorm" not in (c["hazards"] or [])
+    assert not c["prob_overlay"]
+
+    # ...and the group is still there to be reported.
+    assert c["prob"]["visibility_sm"] == 2
+    assert "thunderstorm" in c["prob"]["hazards"]
+    assert [s["label"] for s in c["prob_periods"]] == ["PROB30"]
+
+
+def test_conditions_at_reports_no_prob_when_none_covers_the_hour():
+    c = conditions_at(parse_taf_segments(PROB_TAF), _q(13))
+    assert c["prob"] is None and c["prob_periods"] == []
+
+
+def test_conditions_at_and_worst_in_window_agree_about_prob():
+    """The two readings of the same TAF must not disagree - that split is what
+    made the strip and the route card give different answers."""
+    segs = parse_taf_segments(PROB_TAF)
+    point = conditions_at(segs, _q(21))
+    window = worst_in_window(segs, _q(21), _q(22))
+    assert point["hazards"] == window["hazards"]
+    assert point["visibility_sm"] == window["visibility_sm"]
+    assert point["prob"]["visibility_sm"] == window["prob"]["visibility_sm"]

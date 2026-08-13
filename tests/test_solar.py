@@ -152,19 +152,26 @@ def _leg(tas):
     return timedelta(hours=flight_time_hr(nm, tas))
 
 
+# Keep both arrivals clear of the twilight boundary. The API takes an ETD to the
+# minute, so a slot chosen with the arrival only seconds past twilight lands on
+# the other side of it once the seconds are dropped - which is a flaky test, not
+# a real disagreement about the sun.
+_MARGIN = timedelta(minutes=10)
+
+
 def _dusk_etd():
-    """A departure time where the slow aeroplane lands after evening civil
-    twilight at CYOW and the fast one lands before it, with CYFD still in
+    """A departure time where the slow aeroplane lands well after evening civil
+    twilight at CYOW and the fast one lands well before it, with CYFD still in
     daylight at the moment of departure. ``None`` if no such slot exists inside
     the forecast horizon (mid-summer at this latitude, say)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    dest = ap.get_airport("CYOW")
     for mins in range(0, 47 * 60, 5):
         etd = now + timedelta(minutes=mins)
         if solar.is_night(CYFD_LAT, CYFD_LON, etd):
             continue
-        dest = ap.get_airport("CYOW")
-        if (not solar.is_night(dest.lat, dest.lon, etd + _leg(FAST_TAS))
-                and solar.is_night(dest.lat, dest.lon, etd + _leg(SLOW_TAS))):
+        if (not solar.is_night(dest.lat, dest.lon, etd + _leg(FAST_TAS) + _MARGIN)
+                and solar.is_night(dest.lat, dest.lon, etd + _leg(SLOW_TAS) - _MARGIN)):
             return etd.strftime("%Y-%m-%dT%H:%M:00Z")
     return None
 

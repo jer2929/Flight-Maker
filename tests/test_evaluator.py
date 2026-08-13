@@ -1,5 +1,6 @@
-from app.config import limits_override
+from app.config import get_default_limits, limits_override
 from app.models import RunwayWind, Source, Verdict, WeatherSummary
+from app.services import evaluator
 from app.services.evaluator import check_hard_limits, conditions_checks, decision, derive_threats, evaluate, threat_verdict
 
 
@@ -386,3 +387,58 @@ def test_night_opt_out_is_not_bypassable_by_a_forged_query_string():
         present = derive_threats(_night_wx(), True,
                                  manual_threats=["night_operations", "terrain_critical"])
         assert present == {"terrain_critical", "unfamiliar_or_complex_airspace"}
+
+
+# --- PROB30/PROB40: one rule, shared by every view --------------------------
+
+def _prob_rows(**kw):
+    return {c.key: c for c in evaluator.prob_checks(
+        labels=["PROB30 1800Z-2300Z"], **kw)}
+
+
+def test_prob_ceiling_and_visibility_never_gate():
+    """A 30-40% chance of 2 SM is a planning input, not a limit bust. It is
+    reported and the decision stays the pilot's."""
+    rows = _prob_rows(visibility_sm=2, ceiling_agl_ft=800, wind_kt=22, gust_kt=34)
+    assert "window_prob_hazard" not in rows
+    adv = rows["window_prob"]
+    assert adv.passed and adv.advisory
+    assert "2 SM visibility" in adv.actual_text
+    assert "800 ft ceiling" in adv.actual_text
+    assert "wind 22G34 kt" in adv.actual_text
+
+
+def test_a_prob_hazard_gates_only_when_it_is_on_your_auto_nogo_list():
+    # Thunderstorm ships on the auto-NO-GO list, so a PROB30 TSRA does stop the
+    # flight - because the pilot said it should, not because the app assumed it.
+    rows = _prob_rows(hazards=["thunderstorm"])
+    assert not rows["window_prob_hazard"].passed
+    assert "auto NO-GO list" in rows["window_prob_hazard"].actual_text
+
+    # Take it off the list and the same group is advisory only.
+    with limits_override({"weather_flags": [f for f in
+                          get_default_limits()["hard_limits"]["weather_flags"]
+                          if f != "thunderstorm"]}):
+        rows = _prob_rows(hazards=["thunderstorm"])
+    assert "window_prob_hazard" not in rows
+    assert rows["window_prob"].passed and rows["window_prob"].advisory
+
+
+def test_a_gating_prob_hazard_does_not_swallow_the_rest_of_the_group():
+    """The visibility still has to be visible: it is the thing the pilot will
+    actually plan around once they have accepted the thunderstorm risk."""
+    rows = _prob_rows(hazards=["thunderstorm"], visibility_sm=2)
+    assert not rows["window_prob_hazard"].passed
+    assert "2 SM visibility" in rows["window_prob"].actual_text
+    assert "thunderstorm" not in rows["window_prob"].actual_text
+
+
+def test_no_prob_group_means_no_rows():
+    assert evaluator.prob_checks(labels=[], visibility_sm=2) == []
+
+
+def test_prob_summary_is_the_single_renderer():
+    assert evaluator.prob_summary(wind_kt=22, gust_kt=34) == "wind 22G34 kt"
+    # Low visibility keeps its fraction rather than rounding to "0 SM" (fmt_amount).
+    assert evaluator.prob_summary(visibility_sm=0.5) == "0.5 SM visibility"
+    assert evaluator.prob_summary() == ""

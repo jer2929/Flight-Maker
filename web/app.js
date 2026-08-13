@@ -405,7 +405,6 @@ function wire() {
     // until the ETD or aerodrome changes.
     if (b.dataset.mode !== undefined) {
       MODE_MANUAL = true;
-      $("#mode-seg").classList.remove("auto");
       const note = $("#mode-note");
       if (note) note.textContent = "Set by you";
     }
@@ -529,13 +528,14 @@ function autoDayNightContext() {
   return null;  // My Minimums - the flight controls are hidden there
 }
 
-function setMode(mode, auto) {
+// Move the selection, and nothing else. Whether the mode was derived or chosen
+// is said in words by #mode-note; the control used to also switch to a dashed
+// border when derived, which meant picking an ETD redrew its outline.
+function setMode(mode) {
   const btn = $$(".seg-btn[data-mode]").find((b) => b.dataset.mode === mode);
   if (!btn) return;
   btn.closest(".seg").querySelectorAll(".seg-btn")
      .forEach((x) => x.classList.toggle("active", x === btn));
-  const seg = $("#mode-seg");
-  if (seg) seg.classList.toggle("auto", !!auto);
 }
 
 // Requests are numbered so a slow earlier answer can never overwrite a newer
@@ -561,7 +561,7 @@ async function refreshAutoDayNight() {
     if (!r.ok) return;                       // unknown aerodrome mid-typing
     const d = await r.json();
     if (MODE_MANUAL || seq !== DAYNIGHT_SEQ) return;  // superseded while in flight
-    setMode(d.mode, true);
+    setMode(d.mode);
     const note = $("#mode-note");
     if (note) note.textContent = dayNightNote(d);
   } catch { /* leave the toggle as it stands */ }
@@ -1419,7 +1419,7 @@ function renderTimeline(timeline, windows) {
   const byDay = {};
   timeline.forEach((h) => { (byDay[h.time.slice(0, 10)] ||= []).push(h); });
   let html = `<div class="timeline-wrap"><h3>Hour-by-hour, Zulu (full decision card; worse of departure &amp; destination)</h3>
-    <div class="legend"><span class="go">GO</span><span class="mit">MITIGATE</span><span class="nogo">NO-GO</span><span>· all times Zulu · dimmed = night · outlined = best window · ⛈ storm 🧊 freezing ❄ snow 🌧 rain</span></div>`;
+    <div class="legend"><span class="go">GO</span><span class="mit">MITIGATE</span><span class="nogo">NO-GO</span><span>· all times Zulu · dimmed = night · outlined = best window · amber edge = only a chance, not counted against your limits · ⛈ storm 🧊 freezing ❄ snow 🌧 rain</span></div>`;
   for (const day of Object.keys(byDay).sort()) {
     const label = (utcDate(day + "T12:00") || new Date()).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
     html += `<div class="tl-day">${label} (Z)</div><div class="tl-row">`;
@@ -1434,8 +1434,11 @@ function renderTimeline(timeline, windows) {
         precipText(h),
         h.hazards.length ? "hazards: " + h.hazards.join(",") : "",
         `[${h.source}]`, ...h.reasons,
+        // A 30-40% chance is shown but never counted, exactly as the route card
+        // treats it - so say plainly that it did not move this hour's verdict.
+        h.prob ? `${h.prob} - only a chance, not counted against your limits` : "",
       ].filter(Boolean).join("\n");
-      const klass = `${cls(h.verdict)}${h.daylight ? "" : " night"}${inWindow(h.time) ? " best" : ""}`;
+      const klass = `${cls(h.verdict)}${h.daylight ? "" : " night"}${inWindow(h.time) ? " best" : ""}${h.prob ? " prob" : ""}`;
       const safe = title.replace(/"/g, "'");
       const wx = wxGlyph(h);
       html += `<div class="tl-cell ${klass}" title="${safe}" data-detail="${title.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")}"><span class="tl-hour">${hour}</span>${wx ? `<span class="tl-wx">${wx}</span>` : ""}</div>`;
@@ -1480,10 +1483,43 @@ async function runDiscovery() {
   finally { btn.disabled = false; btn.textContent = "Find flights now"; }
 }
 
+// Why a candidate is not a plain GO, stated on the card itself.
+//
+// A discovery card used to show a MITIGATE or NO-GO badge and, often, nothing at
+// all to explain it: the only thing rendered was `reasons`, which the backend
+// builds from *failing limit checks alone* (orchestrator._explicit_reasons). A
+// verdict that came from the threat stack - which is most MITIGATEs - arrived
+// with an empty list. The threats and the advisories were on the wire the whole
+// time; nobody was drawing them.
+function whyBlock(a) {
+  const threats = (a.threat_checks || []).filter((t) => t.present);
+  const advisories = (a.limit_checks || []).filter((c) => c.advisory);
+  const limits = a.reasons || [];
+  if (!limits.length && !threats.length && !advisories.length) return "";
+  const heading = a.verdict === "GO" ? "Worth knowing" : `Why ${a.verdict}`;
+  const parts = [];
+  if (limits.length) {
+    parts.push(`<div class="why-group"><span class="why-h">Over your limits</span>
+      <ul class="reasons">${limits.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul></div>`);
+  }
+  if (threats.length) {
+    const stack = `${threats.length} threat${threats.length > 1 ? "s" : ""}` +
+      (a.threat_result_label ? ` → ${escapeHtml(a.threat_result_label)}` : "");
+    parts.push(`<div class="why-group"><span class="why-h">Stacked threats (${stack})</span>
+      <ul class="reasons">${threats.map((t) => `<li>${escapeHtml(t.label || threatLabel(t.key))}</li>`).join("")}</ul></div>`);
+  }
+  if (advisories.length) {
+    parts.push(`<div class="why-group"><span class="why-h">Advisory - not counted against your limits</span>
+      <ul class="reasons">${advisories.map((c) => `<li>${escapeHtml(c.label)}: ${escapeHtml(c.actual_text)}</li>`).join("")}</ul></div>`);
+  }
+  return `<div class="why ${cls(a.verdict)}"><div class="why-title">${heading}</div>${parts.join("")}</div>`;
+}
+
 function discoveryCard(a) {
   const w = a.weather || {}, rw = a.best_runway;
   return `<div class="card ${cls(a.verdict)}">
     <div class="card-head"><h3>${a.airport.ident} · ${a.airport.name}${a.access_note ? ` <span class="ppr">${a.access_note}</span>` : ""}</h3><span class="badge ${cls(a.verdict)}">${a.verdict}</span></div>
+    ${whyBlock(a)}
     <div class="meta">
       <span>${a.distance_nm} nm · ${dirM(null, a.bearing_true)}</span>
       <span>⏱ ${fmtHrMin(a.flight_time_hr)}</span>
@@ -1496,7 +1532,6 @@ function discoveryCard(a) {
     ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
     ${runwaysBlock(a)}
     <div class="meta">${notamToggle(a)}<span class="links">${linksHtml(a)}</span></div>
-    ${a.reasons.length ? `<ul class="reasons">${a.reasons.map((x) => `<li>${x}</li>`).join("")}</ul>` : ""}
     ${w.raw_metar ? `<div class="raw">METAR ${escapeHtml(w.raw_metar)}${ageChip(w.raw_metar)}</div>` : ""}
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
   </div>`;

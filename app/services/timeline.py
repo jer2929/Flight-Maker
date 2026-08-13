@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from app.models import BestWindow, HourCondition, Runway, Source, Verdict, WeatherSummary
 from app.services import magvar
 from app.services import weather as wx
-from app.services.evaluator import evaluate
+from app.services.evaluator import evaluate, gating_hazards, prob_summary
 from app.services.runway import best_runway
 from app.sources import openmeteo
 
@@ -158,13 +158,18 @@ def _sources(merged: dict, taf: dict | None, taf_used: bool) -> dict:
     return src
 
 
-def _endpoint_hour(fc: dict, taf_segs: list[dict], i: int, dt_utc: datetime) -> tuple[dict, bool]:
+def _endpoint_hour(fc: dict, taf_segs: list[dict], i: int,
+                   dt_utc: datetime) -> tuple[dict, bool, dict | None]:
     """Conditions at one endpoint for hour i: model backbone + TAF overlay.
 
-    Returns (conditions, taf_used).
+    Returns ``(conditions, taf_used, taf)``. The third element is the raw TAF
+    result, which carries the PROB group ``conditions_at`` deliberately keeps out
+    of the gating conditions - ``_merge_model_taf`` never sees it, because a
+    30-40% chance must not quietly become this hour's ceiling.
     """
     taf = wx.conditions_at(taf_segs, dt_utc) if taf_segs else None
-    return _merge_model_taf(_model_conditions(fc, i), taf)
+    merged, taf_used = _merge_model_taf(_model_conditions(fc, i), taf)
+    return merged, taf_used, taf
 
 
 endpoint_hour = _endpoint_hour  # public alias for reuse by the orchestrator
@@ -203,6 +208,39 @@ def endpoint_window_sourced(fc: dict, taf_segs: list[dict], idxs: list[int],
     taf = wx.worst_in_window(taf_segs, start, end) if taf_segs else None
     merged, taf_used = _merge_model_taf(model or {}, taf)
     return merged, _sources(merged, taf, taf_used), taf
+
+
+def _prob_label(seg: dict) -> str:
+    """e.g. ``PROB30 1800Z-2300Z`` - the group as the pilot reads it off the TAF."""
+    z = "%H%MZ"
+    return f"{seg.get('label', 'PROB')} {seg['start'].strftime(z)}-{seg['end'].strftime(z)}"
+
+
+def _prob_for_hour(*taf_results: dict | None) -> tuple[str | None, set[str]]:
+    """The PROB group over this hour: ``(advisory text, hazards that gate)``.
+
+    A PROB30/PROB40 is a 30-40% chance, not a forecast. Its ceiling, visibility
+    and wind are reported and never gate. The hazards it carries gate only when
+    the pilot has listed them as automatic NO-GOs, which is
+    ``evaluator.gating_hazards`` - the same list, read from the same place, as
+    the route and discovery cards use via ``evaluator.prob_checks``.
+    """
+    cond: dict | None = None
+    labels: list[str] = []
+    for res in taf_results:
+        if not res or not res.get("prob"):
+            continue
+        cond = dict(res["prob"]) if cond is None else _worse(cond, res["prob"])
+        labels.extend(_prob_label(s) for s in res.get("prob_periods", []))
+    if cond is None:
+        return None, set()
+    hazards = list(cond.get("hazards") or [])
+    summary = prob_summary(
+        wind_kt=cond.get("wind_kt"), gust_kt=cond.get("gust_kt"),
+        ceiling_agl_ft=cond.get("ceiling_agl_ft"),
+        visibility_sm=cond.get("visibility_sm"), hazards=hazards)
+    label = ", ".join(dict.fromkeys(labels)) or "PROB30/40"
+    return f"{label}: {summary or 'see TAF'}", set(hazards) & gating_hazards()
 
 
 def _daylight_at(dep_fc: dict, dest_fc: dict, i: int) -> bool:
@@ -278,8 +316,8 @@ def build_timeline(
         tstr = times[i]
         dt_utc = datetime.strptime(tstr, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc) - timedelta(seconds=offset)
 
-        dep_cond, dep_taf = _endpoint_hour(dep_fc, dep_taf_segs, i, dt_utc)
-        dest_cond, dest_taf = _endpoint_hour(dest_fc, dest_taf_segs, i, dt_utc)
+        dep_cond, dep_taf, dep_raw = _endpoint_hour(dep_fc, dep_taf_segs, i, dt_utc)
+        dest_cond, dest_taf, dest_raw = _endpoint_hour(dest_fc, dest_taf_segs, i, dt_utc)
 
         rw_dep = best_runway(runways_dep, dep_cond.get("wind_dir_true"), dep_cond.get("wind_kt"), dep_cond.get("gust_kt"))
         rw_dest = best_runway(runways_dest, dest_cond.get("wind_dir_true"), dest_cond.get("wind_kt"), dest_cond.get("gust_kt"))
@@ -293,7 +331,12 @@ def build_timeline(
             wind_src, rw, w_lat, w_lon = f"{dep_ident} (dep)", rw_dep, dep_lat, dep_lon
 
         combined = _worse(dep_cond, dest_cond)
-        haz = sorted(set(combined.get("hazards", [])) | static_hazards)
+        # The PROB group, if either end has one over this hour. Its ceiling,
+        # visibility and wind never gate; the hazards it carries gate only if the
+        # pilot put them on their own auto-NO-GO list - the same rule the route
+        # card applies, read out of the same place.
+        prob_note, prob_gating = _prob_for_hour(dep_raw, dest_raw)
+        haz = sorted(set(combined.get("hazards", [])) | static_hazards | prob_gating)
         daylight = _daylight_at(dep_fc, dest_fc, i)
         ws = WeatherSummary(
             wind_dir_true=combined.get("wind_dir_true"), wind_kt=combined.get("wind_kt"),
@@ -320,7 +363,7 @@ def build_timeline(
             hazards=ws.hazards,
             precip=combined.get("precip"), precip_mm=combined.get("precip_mm"),
             source=Source.TAF if (dep_taf or dest_taf) else Source.MODEL,
-            reasons=reasons, daylight=daylight,
+            reasons=reasons, daylight=daylight, prob=prob_note,
         ))
     return timeline
 
