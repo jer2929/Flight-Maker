@@ -7,11 +7,17 @@ odd/even thousands. Winds at each candidate altitude are interpolated from the
 model's pressure-level winds. The hemispheric rule uses the *magnetic* course.
 VFR picks stay at least 500 ft below the ceiling (cloud clearance); IFR is not
 gated on the ceiling.
+
+``ceiling_ft`` is the **lowest** deck the flight is planned against - both ends,
+every enroute sample, and what the TAF forecasts across the window - which
+callers build with :func:`lowest_ceiling`. A pick must never sit above a ceiling
+the same page reports, so a caller that learns of a lower deck after the fact
+re-checks with :func:`clears_ceiling` and asks again.
 """
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Iterable, Optional
 
 from app.models import AltitudeRecommendation, WindAloft
 from app.services.runway import angular_difference
@@ -22,6 +28,12 @@ _VFR_WESTBOUND = [4500, 6500, 8500, 10500]         # magnetic track 180-359, eve
 # IFR cruising altitudes (plain thousands), capped < 12,500 ft.
 _IFR_EASTBOUND = [3000, 5000, 7000, 9000, 11000]   # magnetic track 0-179, odd thousands
 _IFR_WESTBOUND = [4000, 6000, 8000, 10000, 12000]  # magnetic track 180-359, even thousands
+
+# VFR cloud clearance: a cruising altitude is only usable if it sits at least
+# this far below the deck. The one place the number lives, so the gate inside
+# ``recommend_altitude`` and the callers that re-check a pick against a ceiling
+# they learned about later can never drift apart.
+VFR_CLOUD_CLEARANCE_FT = 500.0
 
 # Distance realism: roughly how much climb height (ft, above the departure field)
 # is worth unlocking per nm of leg. A short hop shouldn't be told to climb to the
@@ -65,6 +77,29 @@ def _interp_wind(levels: list[WindAloft], altitude_ft: float) -> Optional[tuple[
     return lv[-1].direction_true, lv[-1].speed_kt
 
 
+def lowest_ceiling(values: Iterable[Optional[float]]) -> Optional[float]:
+    """The most restrictive ceiling in ``values``; ``None`` when none is reported.
+
+    A cruising altitude has to clear *every* deck the flight is planned against -
+    both ends, every enroute sample, and what the TAF forecasts for the window -
+    so the gate always takes the lowest of them.
+    """
+    vals = [v for v in values if v is not None]
+    return min(vals) if vals else None
+
+
+def clears_ceiling(altitude_ft: float, ceiling_ft: Optional[float],
+                   flight_rules: str = "vfr") -> bool:
+    """Whether ``altitude_ft`` is usable under ``ceiling_ft``.
+
+    VFR needs ``VFR_CLOUD_CLEARANCE_FT`` below the deck; IFR is not gated on the
+    ceiling, and no reported ceiling gates nothing.
+    """
+    if flight_rules == "ifr" or ceiling_ft is None:
+        return True
+    return altitude_ft <= ceiling_ft - VFR_CLOUD_CLEARANCE_FT
+
+
 def candidate_altitudes(course_mag: float, flight_rules: str = "vfr") -> list[int]:
     eastbound = course_mag < 180.0
     if flight_rules == "ifr":
@@ -93,9 +128,8 @@ def recommend_altitude(
     if not levels:
         return None
     cm = course_mag if course_mag is not None else course_true
-    cands = candidate_altitudes(cm, flight_rules)
-    if flight_rules != "ifr" and ceiling_ft is not None:
-        cands = [a for a in cands if a <= ceiling_ft - 500]
+    cands = [a for a in candidate_altitudes(cm, flight_rules)
+             if clears_ceiling(a, ceiling_ft, flight_rules)]
     if not cands:
         return None
     # Distance realism: don't suggest climbing higher than the leg can justify.

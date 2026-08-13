@@ -3,6 +3,8 @@ import math
 from app.models import WindAloft
 from app.services.winds_aloft import (
     candidate_altitudes,
+    clears_ceiling,
+    lowest_ceiling,
     recommend_altitude,
     route_wind_component,
 )
@@ -67,6 +69,27 @@ def test_recommend_altitude_vfr_none_when_ceiling_below_lowest_level():
     levels = [WindAloft(altitude_ft=a, direction_true=270, speed_kt=20)
               for a in (3500, 5500, 7500)]
     assert recommend_altitude(levels, course_true=90, cruise_kt=110, ceiling_ft=3000) is None
+
+
+# --- the ceiling gate, on its own ---------------------------------------
+
+def test_lowest_ceiling_takes_the_worst_and_ignores_missing():
+    # A route is flown under the lowest deck anywhere on it; "no ceiling
+    # reported" at one point says nothing about the others.
+    assert lowest_ceiling([4000, None, 2500, 9000]) == 2500
+    assert lowest_ceiling([None, None]) is None
+    assert lowest_ceiling([]) is None
+
+
+def test_clears_ceiling_needs_500_ft_of_clearance():
+    assert clears_ceiling(3500, 4000) is True     # exactly 500 ft below
+    assert clears_ceiling(3500, 3900) is False    # only 400 ft below
+    assert clears_ceiling(9500, None) is True     # nothing reported, nothing to clear
+
+
+def test_clears_ceiling_ifr_ignores_the_deck():
+    assert clears_ceiling(9500, 2000, "ifr") is True
+    assert clears_ceiling(9500, 2000, "vfr") is False
 
 
 def test_recommend_altitude_ifr_not_gated_on_ceiling():
