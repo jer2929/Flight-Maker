@@ -91,6 +91,12 @@ for taxi and approach - not for a single instant:
   Settings, and otherwise shows as an advisory naming the group. Thunderstorm is
   on that list by default, so a PROB30 TSRA is still a NO-GO out of the box -
   turn it off and it becomes a caution instead.
+* That rule lives in **one place** and every view reads it: the route card, the
+  discovery cards and the hour-by-hour strip. They used to disagree - the strip
+  folded PROB groups straight into the hour it was grading, so a `PROB30 2SM`
+  turned a cell red that the route card called advisory, while discovery ignored
+  PROB hazards altogether. In the strip a PROB hour now carries an **amber edge**
+  and names the group in its detail panel, the same signal the TAF strip uses.
 
 ### Aerodromes with no TAF of their own
 When a field doesn't report, the nearest reporting station's METAR/TAF is shown -
@@ -139,6 +145,14 @@ route**, in the order you'd fly over them, with runway, surface, length and the
 modelled wind **at your overfly time**. Grass and private strips are included on
 purpose: these are precautionary-landing options, not destinations. This section
 is situational awareness only and never affects your verdict.
+
+### Why a discovery candidate isn't a GO
+Every non-GO card says so on its face, directly under the badge: the personal
+minimums it busts, the **stacked threats** with the count and what the stack comes
+to (`2 threats → No-go solo`), and any advisory that did *not* count against it.
+A card used to render only the failing limit rows - so a verdict that came from the
+threat stack, which is most MITIGATEs, arrived with a red badge and no explanation
+at all. A clean GO card stays silent.
 
 ### Two-trigger threat stacking (general-audience)
 The decision card stacks "major threats": some are derived automatically from the

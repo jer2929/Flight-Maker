@@ -277,6 +277,9 @@ class HourCondition(BaseModel):
     """One hour of the 24-48 h route timeline."""
 
     time: str                  # ISO UTC, "YYYY-MM-DDTHH:MM" (Zulu - see openmeteo.forecast)
+    # A PROB30/PROB40 group covering this hour, as advisory text. Its ceiling,
+    # visibility and wind never reach the verdict; see timeline._prob_for_hour.
+    prob: Optional[str] = None
     verdict: Verdict
     wind_dir_true: Optional[float] = None
     wind_dir_mag: Optional[float] = None
