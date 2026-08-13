@@ -7,6 +7,8 @@ from app.services.weather import (
     conditions_at,
     hazards_in_window,
     parse_taf_segments,
+    period_label,
+    taf_periods,
     worst_in_window,
 )
 
@@ -200,6 +202,116 @@ def test_worst_in_window_is_none_outside_the_taf():
     segs = parse_taf_segments(TAF_BECMG)
     assert worst_in_window(segs, _q(2) - timedelta(days=2),
                            _q(3) - timedelta(days=2)) is None
+
+
+# --- a base group that has handed over is not weather you fly through ---------
+
+# The reported bug: an FM clears the sky at 1400Z, you pick an ETD of 1400Z, and
+# the card still reports the OVC008 that ran until 1400Z.
+TAF_HANDOVER = (
+    f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM OVC008 "
+    f"FM{_dd(D)}1400 27008KT P6SM SKC"
+)
+
+
+def test_a_base_ending_at_the_window_start_does_not_govern():
+    # MAIN is clipped to end at 1400Z and FM takes over there. Testing the
+    # overlap closed on both ends made both groups govern that instant, so the
+    # layer that had just ended set the ceiling for a flight departing into
+    # clear skies.
+    w = worst_in_window(parse_taf_segments(TAF_HANDOVER), _q(14), _q(15))
+    assert w["ceiling_agl_ft"] is None
+    assert [s["label"] for s in w["governing"]] == ["FM"]
+
+
+def test_a_base_ending_inside_the_window_still_governs():
+    # The fix is a boundary, not a rule that the past stops counting: depart at
+    # 1330Z and you spend half an hour under the OVC008 before it lifts.
+    w = worst_in_window(parse_taf_segments(TAF_HANDOVER), _q(13) + timedelta(minutes=30), _q(15))
+    assert w["ceiling_agl_ft"] == 800
+    # You fly through both groups here, so both are in force; the ceiling is
+    # MAIN's alone, which is what a limit row on it has to be able to say.
+    assert [s["label"] for s in w["governing"]] == ["MAIN", "FM"]
+    assert w["by_field"]["ceiling_agl_ft"]["label"] == "MAIN"
+
+
+def test_a_point_query_at_the_boundary_still_finds_a_base():
+    # A zero-length window has no half-open reading - refusing to match anything
+    # would report "no TAF data" for an instant the TAF plainly covers.
+    w = worst_in_window(parse_taf_segments(TAF_HANDOVER), _q(14), _q(14))
+    assert w is not None
+
+
+# --- which group produced which value ----------------------------------------
+
+
+def test_by_field_names_the_group_behind_each_value():
+    # MAIN's SCT040 is no ceiling, the BECMG lowers it to 1500 and the TEMPO
+    # undercuts that to 800 while also being the only thing carrying 2 SM. A
+    # limit row for the ceiling and one for the visibility must be able to name
+    # the group that produced its own number, not the whole list.
+    w = worst_in_window(parse_taf_segments(TAF_BECMG), _q(19), _q(21))
+    labels = {k: s["label"] for k, s in w["by_field"].items()}
+    assert labels["ceiling_agl_ft"] == "TEMPO"
+    assert labels["visibility_sm"] == "TEMPO"
+    assert labels["gust_kt"] == "TEMPO"
+    assert labels["hazards"] == "TEMPO"
+
+
+def test_by_field_can_name_different_groups_for_different_values():
+    # A window where the base sets the ceiling and the TEMPO sets the wind: the
+    # two values have different causes and must be attributed separately.
+    taf = parse_taf_segments(
+        f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM OVC012 "
+        f"TEMPO {_dd(D)}20/{_dd(D)}23 34022G34KT P6SM OVC030")
+    w = worst_in_window(taf, _q(20), _q(21))
+    labels = {k: s["label"] for k, s in w["by_field"].items()}
+    assert labels["ceiling_agl_ft"] == "MAIN"   # 1200 ft, the TEMPO is higher
+    assert labels["wind_kt"] == "TEMPO"         # 22 kt beats the base's 8
+
+
+def test_by_field_prefers_the_later_group_on_a_tie():
+    # Both groups state 2 SM. Naming the base the TEMPO merely matched would
+    # point the pilot at the wrong line of the TAF.
+    taf = parse_taf_segments(
+        f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT 2SM BR OVC012 "
+        f"TEMPO {_dd(D)}20/{_dd(D)}23 27008KT 2SM BR OVC008")
+    w = worst_in_window(taf, _q(20), _q(21))
+    assert w["by_field"]["visibility_sm"]["label"] == "TEMPO"
+
+
+def test_by_field_is_empty_when_the_window_has_no_values():
+    w = worst_in_window(parse_taf_segments(TAF_HANDOVER), _q(14), _q(15))
+    assert "ceiling_agl_ft" not in w["by_field"]   # SKC - there is no ceiling
+
+
+# --- period_label -------------------------------------------------------------
+
+
+def test_period_label_does_not_print_the_internal_main_token():
+    # "MAIN" is this module's name for the opening group; no TAF contains the
+    # word, so showing it verbatim read as jargon on the card.
+    segs = taf_periods(parse_taf_segments(TAF))
+    labels = [period_label(s) for s in segs]
+    assert labels[0] == "initial group 1200Z-1800Z"
+    assert not any("MAIN" in x for x in labels)
+
+
+def test_period_label_leaves_real_taf_tokens_alone():
+    segs = {s["label"]: s for s in taf_periods(parse_taf_segments(TAF))}
+    assert period_label(segs["FM"]).startswith("FM 1800Z-")
+    assert period_label(segs["TEMPO"]) == "TEMPO 2000Z-2300Z"
+
+
+def test_period_label_marks_a_day_rollover():
+    # A bare "1800Z-0000Z" reads as running backwards; the +1 says which day.
+    main = [s for s in parse_taf_segments(TAF) if s["label"] == "FM"][0]
+    assert period_label(main).endswith("+1")
+
+
+def test_segments_keep_main_as_their_internal_label():
+    # Only the *display* changes - code still keys off "MAIN".
+    assert [s["label"] for s in parse_taf_segments(TAF)] == ["MAIN", "FM", "TEMPO"]
 
 
 # --- PROB is a chance, not a limit ------------------------------------------

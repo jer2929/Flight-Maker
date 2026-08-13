@@ -383,6 +383,7 @@ function buildEtdOptions() {
     // a departure time that no longer exists.
     if (sel.value !== prev) changed = true;
   }
+  syncDiscoveryBtn();
   if (changed) refreshAutoDayNight();
 }
 
@@ -390,6 +391,18 @@ const etdParam = (id = "#etd") => {
   const v = ($(id) || {}).value;
   return !v || v === "now" ? {} : { etd: v };
 };
+
+// "Find flights now" is a claim about the present tense. Once you have picked a
+// departure time it is answering for then, not now.
+const discoveryBtnLabel = () => {
+  const v = ($("#d-etd") || {}).value;
+  return !v || v === "now" ? "Find flights now" : "Find flights";
+};
+
+function syncDiscoveryBtn() {
+  const btn = $("#run-discovery");
+  if (btn && !btn.disabled) btn.textContent = discoveryBtnLabel();
+}
 
 // ---------- Wire ----------
 function wire() {
@@ -418,6 +431,8 @@ function wire() {
     const sel = $(id);
     if (sel) sel.addEventListener("change", rederiveDayNight);
   }
+  const dEtd = $("#d-etd");
+  if (dEtd) dEtd.addEventListener("change", syncDiscoveryBtn);
   for (const id of ["#dep", "#dest", "#circ-aerodrome"]) {
     const el = $(id);
     if (!el) continue;
@@ -1036,7 +1051,12 @@ function rowCheck(c) {
   const state = !c.applicable ? "na" : c.advisory ? "advisory" : c.passed ? "pass" : "fail";
   const mark = { pass: "✓", fail: "✗", advisory: "⚠", na: "–" }[state];
   const loc = c.location ? ` <span class="loc">@ ${c.location}</span>` : "";
-  const src = c.source && c.source !== "-" ? ` <span class="src-mini">${c.source}</span>` : "";
+  // The TAF group behind the value rides along with the source chip, so the
+  // route checklist and the discovery card attribute a limit the same way.
+  const detail = c.source_detail ? ` ${escapeHtml(c.source_detail)}` : "";
+  const src = c.source && c.source !== "-"
+    ? ` <span class="src-mini"${c.source_text ? ` title="${escapeHtml(c.source_text)}"` : ""}>${c.source}${detail}</span>`
+    : "";
   return `<div class="chk ${state}">
     <span class="mark">${mark}</span>
     <span class="lbl">${c.label}</span>
@@ -1480,7 +1500,45 @@ async function runDiscovery() {
     $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
     stampDataTime();
   } catch (e) { $("#discovery-results").innerHTML = `<p class="empty">Error: ${e}</p>`; }
-  finally { btn.disabled = false; btn.textContent = "Find flights now"; }
+  finally { btn.disabled = false; btn.textContent = discoveryBtnLabel(); }
+}
+
+// One failing row as a sentence - the same string, from the same fields, that
+// orchestrator.reason_line builds server-side for `reasons`.
+function reasonLine(c) {
+  if (c.reason_text) return c.reason_text;
+  const where = c.location ? ` at ${c.location}` : "";
+  return `${c.label} ${c.actual_text} exceeds your limit (${c.limit_text})${where}`;
+}
+
+// Where a failing value came from. A bare "Visibility (XC) 2 SM exceeds your
+// limit" left the pilot no way to tell whether that was a METAR, the model, or a
+// TEMPO two hours out, so every failing line names its own source and group -
+// they are not always the same one, which is the point.
+function whySource(c) {
+  if (!c.source || c.source === "-") return "";
+  const detail = c.source_detail ? ` · ${escapeHtml(c.source_detail)}` : "";
+  return `<div class="why-src">from ${escapeHtml(c.source)}${detail}</div>`;
+}
+
+// The raw TAF groups behind the busts, once each. One TEMPO typically breaks
+// four limits at once; repeating its line under every one of them buried the
+// card in six copies of the same string.
+function whyRaw(checks) {
+  const seen = new Map();
+  for (const c of checks) {
+    if (c.source_text && !seen.has(c.source_text)) seen.set(c.source_text, c.source_detail);
+  }
+  if (!seen.size) return "";
+  return [...seen.entries()].map(([text, label]) => {
+    // FM/BECMG/TEMPO/PROB open with their own keyword, so the line says which
+    // group it is. The TAF's opening group has no such token - stacked under a
+    // TEMPO its bare "27010KT P6SM OVC012" is anonymous - so that one is named.
+    const token = (label || "").split(" ")[0].toUpperCase();
+    const named = token && text.toUpperCase().startsWith(token);
+    const tag = named || !label ? "" : `<span class="why-raw-tag">${escapeHtml(label)}</span>`;
+    return `<div class="why-raw">${tag}${escapeHtml(text)}</div>`;
+  }).join("");
 }
 
 // Why a candidate is not a plain GO, stated on the card itself.
@@ -1494,13 +1552,17 @@ async function runDiscovery() {
 function whyBlock(a) {
   const threats = (a.threat_checks || []).filter((t) => t.present);
   const advisories = (a.limit_checks || []).filter((c) => c.advisory);
-  const limits = a.reasons || [];
+  // Rendered from the checks rather than the flattened `reasons` strings: the
+  // provenance is only on the check.
+  const limits = (a.limit_checks || []).filter((c) => !c.passed && c.applicable && !c.advisory);
   if (!limits.length && !threats.length && !advisories.length) return "";
   const heading = a.verdict === "GO" ? "Worth knowing" : `Why ${a.verdict}`;
   const parts = [];
   if (limits.length) {
     parts.push(`<div class="why-group"><span class="why-h">Over your limits</span>
-      <ul class="reasons">${limits.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul></div>`);
+      <ul class="reasons">${limits.map((c) =>
+        `<li>${escapeHtml(reasonLine(c))}${whySource(c)}</li>`).join("")}</ul>
+      ${whyRaw(limits)}</div>`);
   }
   if (threats.length) {
     const stack = `${threats.length} threat${threats.length > 1 ? "s" : ""}` +

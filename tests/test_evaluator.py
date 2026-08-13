@@ -1,5 +1,5 @@
 from app.config import get_default_limits, limits_override
-from app.models import RunwayWind, Source, Verdict, WeatherSummary
+from app.models import LimitCheck, RunwayWind, Source, Verdict, WeatherSummary, WindowForecast
 from app.services import evaluator
 from app.services.evaluator import check_hard_limits, conditions_checks, decision, derive_threats, evaluate, threat_verdict
 
@@ -442,3 +442,113 @@ def test_prob_summary_is_the_single_renderer():
     # Low visibility keeps its fraction rather than rounding to "0 SM" (fmt_amount).
     assert evaluator.prob_summary(visibility_sm=0.5) == "0.5 SM visibility"
     assert evaluator.prob_summary() == ""
+
+
+# --- where did that number come from? ----------------------------------------
+#
+# A failing row used to say "Visibility (XC) 2 SM exceeds your limit" and stop
+# there, stamped with one blanket source for the whole card. On a future ETD -
+# where the value comes from a TAF group and window_checks is suppressed
+# (window_gated) - there was nothing on the card tying the number to the TEMPO
+# that produced it.
+
+
+def _taf_window_weather():
+    """A future-ETD summary: TAF ceiling and visibility, model wind."""
+    return WeatherSummary(
+        wind_dir_true=270, wind_kt=8, visibility_sm=2, ceiling_agl_ft=800,
+        source=Source.TAF, window_gated=True,
+        field_sources={"wind": Source.MODEL, "gust": Source.MODEL,
+                       "ceiling": Source.TAF, "visibility": Source.TAF,
+                       "hazards": Source.TAF},
+        window_forecast=WindowForecast(
+            ceiling_agl_ft=800, visibility_sm=2,
+            governing=["initial group 1200Z-1800Z", "TEMPO 2000Z-2300Z"],
+            by_field={"ceiling_agl_ft": "TEMPO 2000Z-2300Z",
+                      "visibility_sm": "TEMPO 2000Z-2300Z"},
+            by_field_text={"ceiling_agl_ft": "TEMPO 2000/2300 34022G34KT 2SM TSRA BKN008",
+                           "visibility_sm": "TEMPO 2000/2300 34022G34KT 2SM TSRA BKN008"}),
+    )
+
+
+def test_a_taf_sourced_row_names_the_group_and_carries_its_raw_text():
+    rows = {c.key: c for c in conditions_checks(_taf_window_weather(), good_runway(), "day")}
+    vis = rows["visibility"]
+    assert not vis.passed
+    assert vis.source == "TAF"
+    assert vis.source_detail == "TEMPO 2000Z-2300Z"
+    assert "2SM TSRA" in vis.source_text
+    assert rows["ceiling"].source_detail == "TEMPO 2000Z-2300Z"
+
+
+def test_a_model_sourced_row_claims_no_taf_group():
+    """The wind came from the model even though the card's headline source is
+    TAF - stamping the TEMPO on it would blame a group that never said it."""
+    rows = {c.key: c for c in conditions_checks(_taf_window_weather(), good_runway(), "day")}
+    assert rows["wind"].source == "HRDPS"
+    assert rows["wind"].source_detail is None
+    assert rows["wind"].source_text is None
+
+
+def test_rows_fall_back_to_the_summary_source_when_there_is_no_per_field_map():
+    """An observed METAR carries no field_sources; every row is still labelled."""
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=1,
+                        ceiling_agl_ft=8000, source=Source.OBSERVED)
+    rows = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
+    assert rows["visibility"].source == "Observed"
+    assert rows["visibility"].source_detail is None
+
+
+def test_window_rows_carry_the_group_in_a_field_not_spliced_into_the_label():
+    """The label used to read "Ceiling in flight window (MAIN 0000Z-0300Z,
+    TEMPO ...)". Same information, but as data, so both card paths render it the
+    same way and neither has to parse a parenthesis."""
+    wx = _taf_window_weather()
+    wx.window_gated = False           # the "now" path, where these rows are emitted
+    rows = {c.key: c for c in evaluator.window_checks(wx, "day")}
+    assert rows["window_ceiling"].label == "Ceiling in flight window"
+    assert rows["window_visibility"].label == "Visibility in flight window"
+    assert rows["window_visibility"].source_detail == "TEMPO 2000Z-2300Z"
+    assert "TSRA" in rows["window_visibility"].source_text
+
+
+def test_a_now_headline_never_claims_a_window_group():
+    """On the "now" path the headline is an observation of this minute while the
+    window forecast describes later in the flight. The window's TEMPO belongs to
+    the window rows; stamping it on an observed value would point the pilot at
+    the wrong line of the TAF."""
+    wx = _taf_window_weather()
+    wx.window_gated = False                       # the observation path
+    wx.source = Source.OBSERVED
+    wx.field_sources = {}                         # a METAR carries no per-field map
+    rows = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
+    assert rows["visibility"].source == "Observed"
+    assert rows["visibility"].source_detail is None
+    # ...while the window rows, which really are reading the window, still do.
+    wrows = {c.key: c for c in evaluator.window_checks(wx, "day")}
+    assert wrows["window_visibility"].source_detail == "TEMPO 2000Z-2300Z"
+
+
+def test_route_rows_name_the_same_group_the_discovery_card_does():
+    """The route checklist aggregates across both ends *and* the enroute model
+    samples, so its rows never pass through ``_attribute``. They said "TAF" where
+    the discovery card for the same airport said "TAF - TEMPO 2000Z-2300Z" - one
+    value, explained two ways."""
+    from types import SimpleNamespace
+    from app import orchestrator
+
+    ep = lambda ident: SimpleNamespace(                       # noqa: E731
+        airport=SimpleNamespace(ident=ident), weather=_taf_window_weather())
+    rows = [
+        LimitCheck(key="visibility", label="Visibility (XC)", limit_text="≥ 9 SM",
+                   actual_text="2 SM", passed=False, location="CYHM (departure)",
+                   source="TAF"),
+        # Worst ceiling was an enroute model sample: model data has no group.
+        LimitCheck(key="ceiling", label="Ceiling (XC, route)", limit_text="≥ 4,000 ft AGL",
+                   actual_text="1,200 ft AGL", passed=False, location="enroute 2",
+                   source="HRDPS"),
+    ]
+    orchestrator._stamp_route_groups(rows, ep("CYHM"), ep("CYSN"))
+    assert rows[0].source_detail == "TEMPO 2000Z-2300Z"
+    assert "TSRA" in rows[0].source_text
+    assert rows[1].source_detail is None

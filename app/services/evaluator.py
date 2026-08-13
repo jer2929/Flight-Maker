@@ -40,6 +40,47 @@ def _worse(a: Verdict, b: Verdict) -> Verdict:
     return a if _SEVERITY[a] >= _SEVERITY[b] else b
 
 
+def _attribute(check: LimitCheck, weather: WeatherSummary, field: str, *,
+               from_window: bool = False) -> LimitCheck:
+    """Name the TAF group a row's value came from, when it came from a TAF.
+
+    ``WeatherSummary.field_sources`` already carries per-value provenance and
+    ``WindowForecast.by_field`` already carries the group behind each value -
+    both computed, both on the wire, and until now read by nobody. Without this
+    a card said "Visibility (XC) 2 SM exceeds your limit" with no way to tell
+    whether that came from a METAR, the model, or a TEMPO two hours out.
+
+    ``field`` is the condition key ("visibility_sm", "ceiling_agl_ft", ...), not
+    the provenance key - the two maps are keyed differently.
+
+    Only two kinds of row may claim a window group: the window rows themselves
+    (``from_window``), and a headline that *is* the window worst case, i.e. the
+    future-ETD path (``window_gated``). On the "now" path the headline is an
+    observation of this minute while the window describes later, so naming a
+    group there would point at the wrong line of the TAF.
+    """
+    wf = weather.window_forecast
+    if check.source != Source.TAF.value or wf is None:
+        return check
+    if not (from_window or weather.window_gated):
+        return check
+    check.source_detail = wf.by_field.get(field)
+    check.source_text = wf.by_field_text.get(field) or None
+    return check
+
+
+def _field_source(weather: WeatherSummary, key: str) -> str | None:
+    """Provenance for one value, falling back to the summary-wide source.
+
+    A single ``source`` is a lie in the mixed case TAF-over-model precedence
+    creates - a TAF ceiling beside a model wind - so each row reports its own.
+    """
+    src = (weather.field_sources or {}).get(key)
+    if src is not None:
+        return src.value if isinstance(src, Source) else str(src)
+    return weather.source.value if weather.source else None
+
+
 def conditions_checks(
     weather: WeatherSummary, best_runway: RunwayWind | None, mode: str,
     location: str | None = None, ceiling_mode: str = "xc",
@@ -54,48 +95,54 @@ def conditions_checks(
     full_limits = get_limits()
     L = full_limits["hard_limits"]
     w = L["wind"]
-    src = weather.source.value if weather.source else None
+    wind_src = _field_source(weather, "wind")
+    gust_src = _field_source(weather, "gust")
+    ceil_src = _field_source(weather, "ceiling")
+    vis_src = _field_source(weather, "visibility")
+    haz_src = _field_source(weather, "hazards")
     checks: list[LimitCheck] = []
 
     # Sustained wind
-    checks.append(_num_check(
+    checks.append(_attribute(_num_check(
         "wind", "Sustained wind", w["sustained_max_kt"], weather.wind_kt,
-        unit="kt", source=src,
-    ))
+        unit="kt", source=wind_src,
+    ), weather, "wind_kt"))
     # Gust spread
     spread = (weather.gust_kt - weather.wind_kt) if (weather.gust_kt is not None and weather.wind_kt is not None) else None
-    checks.append(_num_check(
+    checks.append(_attribute(_num_check(
         "gust_spread", "Gust spread", w["gust_spread_max_kt"], spread,
-        unit="kt", source=src,
-    ))
+        unit="kt", source=gust_src,
+    ), weather, "gust_kt"))
     # Crosswind (uses gust crosswind if present)
     xw = None
     xw_label = ""
     if best_runway is not None:
         xw = best_runway.crosswind_kt_gust or best_runway.crosswind_kt
         xw_label = f" on RWY {best_runway.runway_ident}"
-    checks.append(_num_check(
+    checks.append(_attribute(_num_check(
         "crosswind", "Crosswind", w["crosswind_max_kt"], xw,
-        unit="kt", source=src, actual_suffix=xw_label,
-    ))
+        unit="kt", source=wind_src, actual_suffix=xw_label,
+    ), weather, "wind_kt"))
     ceil_limit, circuit_limit = _ceiling_limits(mode, ceiling_mode, flight_rules)
-    checks.append(_ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, src,
-                                 ceiling_mode, circuit_limit=circuit_limit))
+    checks.append(_attribute(
+        _ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, ceil_src,
+                       ceiling_mode, circuit_limit=circuit_limit),
+        weather, "ceiling_agl_ft"))
     vis_limit, vis_label = _visibility_limit(mode, ceiling_mode, flight_rules)
-    checks.append(_min_check(
+    checks.append(_attribute(_min_check(
         "visibility", vis_label, vis_limit, weather.visibility_sm,
-        unit="SM", source=src,
-    ))
+        unit="SM", source=vis_src,
+    ), weather, "visibility_sm"))
     # Hazardous weather flags - for IFR, widespread_ifr is expected and not a no-go.
     flags = set(L.get("weather_flags", []))
     if flight_rules == "ifr":
         flags.discard("widespread_ifr")
     present = [h for h in weather.hazards if h in flags]
-    checks.append(LimitCheck(
+    checks.append(_attribute(LimitCheck(
         key="hazards", label="Hazardous weather", limit_text="none",
         actual_text=(", ".join(h.replace("_", " ") for h in present) if present else "none reported"),
-        passed=not present, group="weather", source=src,
-    ))
+        passed=not present, group="weather", source=haz_src,
+    ), weather, "hazards"))
     if location:
         for c in checks:
             c.location = location
@@ -152,20 +199,20 @@ def window_checks(
     if wf is None:
         return []
     checks: list[LimitCheck] = []
-    where = f" ({', '.join(wf.governing)})" if wf.governing else ""
 
     if not weather.window_gated:
         ceil_limit, circuit_limit = _ceiling_limits(mode, ceiling_mode, flight_rules)
         if wf.ceiling_agl_ft is not None:
             c = _ceiling_check(ceil_limit, wf.ceiling_agl_ft, Source.TAF,
                                Source.TAF.value, ceiling_mode, circuit_limit=circuit_limit)
-            c.key, c.label = "window_ceiling", f"Ceiling in flight window{where}"
-            checks.append(c)
+            c.key, c.label = "window_ceiling", "Ceiling in flight window"
+            checks.append(_attribute(c, weather, "ceiling_agl_ft", from_window=True))
         vis_limit, _label = _visibility_limit(mode, ceiling_mode, flight_rules)
         if wf.visibility_sm is not None:
-            checks.append(_min_check(
-                "window_visibility", f"Visibility in flight window{where}",
-                vis_limit, wf.visibility_sm, unit="SM", source=Source.TAF.value))
+            checks.append(_attribute(_min_check(
+                "window_visibility", "Visibility in flight window",
+                vis_limit, wf.visibility_sm, unit="SM", source=Source.TAF.value),
+                weather, "visibility_sm", from_window=True))
 
     checks.extend(prob_checks(
         labels=wf.prob_labels, wind_kt=wf.prob_wind_kt, gust_kt=wf.prob_gust_kt,

@@ -239,3 +239,29 @@ def test_a_prob_thunderstorm_is_advisory_once_you_take_ts_off_the_list():
 def test_an_hour_with_no_prob_carries_none():
     h = _hour3(_taf("TEMPO", "27009KT P6SM SCT040"))
     assert h.prob is None
+
+
+def test_the_strip_and_the_card_label_a_prob_group_identically():
+    """The strip had its own copy of the labeller, missing the "+1" day-rollover
+    suffix the card's version adds. The same group then printed two different
+    ways on one page - "PROB30 1800Z-0300Z" in the strip and
+    "PROB30 1800Z-0300Z+1" on the card - reading as two separate groups."""
+    from app.services.weather import parse_taf_segments, period_label
+
+    base = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    stamp = lambda dt: dt.strftime("%d%H")     # noqa: E731
+    # A PROB group deliberately straddling midnight Z.
+    start = base.replace(hour=22)
+    raw = (f"CYFD {stamp(base)}00Z {stamp(base)}/{stamp(base + timedelta(hours=30))} "
+           f"27008KT P6SM SCT040 "
+           f"PROB30 {stamp(start)}/{stamp(start + timedelta(hours=5))} 2SM BR BKN015")
+    prob = [s for s in parse_taf_segments(raw) if s["label"] == "PROB30"][0]
+    assert period_label(prob).endswith("+1")
+
+    winds = [(50, 5)] * 30
+    segs = parse_taf_segments(raw)
+    hours = build_timeline(_fc(winds, [1] * 30), _fc(winds, [1] * 30),
+                           segs, segs, RWY, RWY, hours=30)
+    labelled = [h for h in hours if h.prob]
+    assert labelled, "expected the PROB group to reach the strip"
+    assert all(period_label(prob) in h.prob for h in labelled)

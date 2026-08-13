@@ -272,3 +272,22 @@ def test_future_etd_bakes_the_window_into_the_headline():
     assert ws.visibility_sm == 2
     keys = {c.key for c in evaluator.window_checks(ws, "day", ceiling_mode="endpoint")}
     assert keys == {"window_prob"}
+
+
+def test_the_window_opens_at_the_etd_not_before_it():
+    """The span used to start 30 min *before* the ETD, as taxi slop. That made a
+    group which had already ended still gate the flight: pick 1400Z with an FM at
+    1400Z clearing the sky and the card reported the layer that ran to 1400Z. You
+    do not fly before you depart. The pad stays on the arrival end, where holding
+    and a diversion are real time spent in the weather."""
+    etd, eta = BASE + timedelta(hours=2), BASE + timedelta(hours=3)
+    lo, hi = orchestrator.flight_span(etd, eta)
+    assert lo == etd
+    assert hi == eta + timedelta(minutes=orchestrator.WINDOW_PAD_MIN)
+
+
+def test_circuits_collapse_to_the_etd_plus_the_pad():
+    etd = BASE + timedelta(hours=2)
+    lo, hi = orchestrator.flight_span(etd)
+    assert lo == etd
+    assert hi == etd + timedelta(minutes=orchestrator.WINDOW_PAD_MIN)

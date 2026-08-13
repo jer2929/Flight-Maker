@@ -307,6 +307,24 @@ def _overlaps(seg: dict, start: datetime, end: datetime) -> bool:
 overlaps = _overlaps   # public alias: the orchestrator scopes highlighting with it
 
 
+def _base_overlaps(seg: dict, start: datetime, end: datetime) -> bool:
+    """``_overlaps`` for a *base* group, which governs ``[start, end)``.
+
+    A base's end has been clipped to the next base's start, so the two share an
+    instant. Testing it closed on both ends makes both groups govern the moment
+    the FM takes over - so an ETD of exactly 1400Z, with an FM at 1400Z clearing
+    the sky, still met the low layer that ended at 1400Z. A group that has handed
+    over is not weather you fly through.
+
+    Overlays keep the closed test: a TEMPO starting exactly when you land is
+    still a TEMPO you may meet, and dropping a hazard on a technicality is the
+    wrong way to be wrong.
+    """
+    if start == end:            # point query - there is no half-open reading
+        return _overlaps(seg, start, end)
+    return seg["start"] <= end and seg["end"] > start
+
+
 def _precip_rank(c: dict) -> tuple:
     """Sort key for 'more significant precip': hazardous > heavy > present."""
     return (bool(c.get("hazards")), bool(c.get("precip_heavy")), bool(c.get("precip")))
@@ -448,7 +466,7 @@ def worst_in_window(segments: list[dict], start: datetime,
         start, end = end, start
     periods = taf_periods(segments)
     bases = sorted((s for s in periods
-                    if s["kind"] == "base" and _overlaps(s, start, end)),
+                    if s["kind"] == "base" and _base_overlaps(s, start, end)),
                    key=lambda s: s["start"])
     if not bases:
         return None
@@ -476,7 +494,25 @@ def worst_in_window(segments: list[dict], start: datetime,
     eff["prob"] = prob
     eff["prob_periods"] = prob_periods
     eff["governing"] = sorted(_binding(governing, eff), key=lambda s: s["start"])
+    # Which group produced which value, so a failing limit can name its cause
+    # rather than the whole list of groups the flight passes through.
+    eff["by_field"] = _by_field(governing, eff)
     return eff
+
+
+BINDING_KEYS = ("wind_kt", "gust_kt", "visibility_sm", "ceiling_agl_ft")
+
+
+def _produced(seg: dict, eff: dict, field: str) -> bool:
+    """Whether ``seg`` is where the folded window value for ``field`` came from.
+
+    ``hazards`` is a set rather than a single number, so a group qualifies by
+    contributing any of the hazards that survived the fold.
+    """
+    if field == "hazards":
+        return bool(set(seg["cond"].get("hazards") or []) & set(eff.get("hazards") or []))
+    v = seg["cond"].get(field)
+    return v is not None and v == eff.get(field)
 
 
 def _binding(periods: list[dict], eff: dict) -> list[dict]:
@@ -487,9 +523,46 @@ def _binding(periods: list[dict], eff: dict) -> list[dict]:
     Keep the ones a value can be traced to; fall back to all of them rather than
     claim nothing when the window is entirely "no data".
     """
-    keys = ("wind_kt", "gust_kt", "visibility_sm", "ceiling_agl_ft")
-    eff_haz = set(eff.get("hazards") or [])
-    out = [s for s in periods
-           if any(s["cond"].get(k) is not None and s["cond"][k] == eff.get(k) for k in keys)
-           or (set(s["cond"].get("hazards") or []) & eff_haz)]
+    fields = BINDING_KEYS + ("hazards",)
+    out = [s for s in periods if any(_produced(s, eff, f) for f in fields)]
     return out or periods
+
+
+def _by_field(periods: list[dict], eff: dict) -> dict[str, dict]:
+    """``field -> the group that produced it``, for naming a limit's cause.
+
+    :func:`_binding` answers "which groups had a hand in this window"; this
+    answers the narrower question the decision card actually asks - *this*
+    visibility came from *that* TEMPO. Where two groups share the worst value the
+    latest-starting one wins, so a TEMPO is named ahead of the base it undercut.
+    """
+    out: dict[str, dict] = {}
+    for field in BINDING_KEYS + ("hazards",):
+        hits = [s for s in periods if _produced(s, eff, field)]
+        if hits:
+            out[field] = max(hits, key=lambda s: s["start"])
+    return out
+
+
+def period_label(seg: dict) -> str:
+    """A TAF group as the pilot reads it: ``TEMPO 1900Z-2100Z``.
+
+    ``MAIN`` is this module's internal name for the opening group - the TAF
+    itself has no such token, so printing it verbatim reads as jargon. Every
+    other label (FM/BECMG/TEMPO/PROB30) is a real word in the raw text and is
+    left alone.
+
+    The ``+N`` suffix marks a day rollover: a TAF period routinely runs past
+    midnight Z, and a bare ``1700Z-1700Z`` reads as a zero-length window rather
+    than a whole day.
+
+    The one labeller in the codebase - the route card, the discovery cards and
+    the hour-by-hour strip all call it, so the same group cannot be described
+    two different ways on one page.
+    """
+    label = seg.get("label", "")
+    name = "initial group" if label == "MAIN" else label
+    days = (seg["end"].date() - seg["start"].date()).days
+    tail = f"+{days}" if days > 0 else ""
+    z = "%H%MZ"
+    return f"{name} {seg['start'].strftime(z)}-{seg['end'].strftime(z)}{tail}".strip()
