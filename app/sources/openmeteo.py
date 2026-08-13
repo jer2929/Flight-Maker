@@ -58,11 +58,21 @@ def _hourly_vars() -> list[str]:
     for lvl in PRESSURE_CLOUD_LEVELS_FT:
         vars_.append(f"cloud_cover_{lvl}")
         vars_.append(f"relative_humidity_{lvl}")
+        # Temperature at the same levels: cloud plus a sub-zero temperature is
+        # the airframe-icing signature (see ``services.airmass``). One extra
+        # field per level on a request that already carries cloud and humidity.
+        vars_.append(f"temperature_{lvl}")
     return vars_
 
 
 async def forecast(lat: float, lon: float, days: int = 2) -> dict:
-    """HRDPS hourly forecast for a point (winds in knots, local timezone)."""
+    """HRDPS hourly forecast for a point (winds in knots, hours in UTC).
+
+    Deliberately ``timezone=UTC`` rather than ``auto``. Aviation runs on Zulu, so
+    the hour labels reaching the pilot are Zulu with no conversion layer to get
+    wrong - and a route whose two ends sit in different time zones no longer has
+    two hourly arrays that disagree about what index ``i`` means.
+    """
     settings = get_settings()
     key = f"hrdps:{lat:.3f},{lon:.3f}:{days}"
     cached = cache.get(key)
@@ -76,7 +86,7 @@ async def forecast(lat: float, lon: float, days: int = 2) -> dict:
         "models": settings.openmeteo_model,
         "hourly": ",".join(_hourly_vars()),
         "windspeed_unit": "kn",
-        "timezone": "auto",
+        "timezone": "UTC",
     }
     async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
         resp = await client.get(settings.openmeteo_base, params=params)
@@ -111,7 +121,7 @@ async def forecast_many(points: list[tuple[float, float]], days: int = 2,
     params = {
         "latitude": lats, "longitude": lons, "forecast_days": days,
         "models": settings.openmeteo_model, "hourly": ",".join(vars_),
-        "windspeed_unit": "kn", "timezone": "auto",
+        "windspeed_unit": "kn", "timezone": "UTC",
     }
     async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
         resp = await client.get(settings.openmeteo_base, params=params)
@@ -187,7 +197,10 @@ _WIND_VARS = ["windspeed_10m", "winddirection_10m", "windgusts_10m"]
 
 
 def _current_index(hourly: dict, utc_offset_seconds: int) -> int:
-    """Index of the current local hour in an hourly ``time`` array."""
+    """Index of the current hour in an hourly ``time`` array.
+
+    The offset is 0 for the UTC series we request; the parameter stays so a
+    response carrying a real offset is still indexed correctly."""
     times = hourly.get("time", [])
     if not times:
         return 0
@@ -274,7 +287,7 @@ async def _ensemble_fetch(points: list[tuple[float, float]], days: int,
     params = {
         "latitude": lats, "longitude": lons, "forecast_days": days,
         "models": ",".join(models), "hourly": ",".join(_WIND_VARS),
-        "windspeed_unit": "kn", "timezone": "auto",
+        "windspeed_unit": "kn", "timezone": "UTC",
     }
     async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
         resp = await client.get(settings.openmeteo_base, params=params)

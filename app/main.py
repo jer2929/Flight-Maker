@@ -18,12 +18,14 @@ from app import orchestrator
 from app.config import (
     WEB_DIR,
     cruise_override,
+    get_cruise_kt,
     get_default_limits,
     get_limits,
     get_settings,
     limits_override,
 )
 from app.services import solar
+from app.services.geo import flight_time_hr, haversine_nm
 from app.services.evaluator import THREAT_LABELS
 from app.sources import airports as ap
 
@@ -113,13 +115,23 @@ def _parse_etd(raw: str | None) -> datetime | None:
 async def daynight(
     ident: str = Query(...),
     at: str = Query(default=None, pattern=_ETD_PATTERN),
+    dest: str = Query(default=None),
+    tas: float = Query(default=None, gt=0, le=1000),
 ):
-    """Is the given time day or night at this aerodrome?
+    """Is this flight a day flight or a night flight?
 
     "Night" is the CARs 101.01 definition - between the end of evening civil
     twilight and the beginning of morning civil twilight - so the UI's day/night
     toggle can select itself from the ETD instead of defaulting to day and
     quietly assessing a 0200Z departure against daytime minimums.
+
+    Both ends count. A flight that leaves in daylight and lands after evening
+    civil twilight *is* a night flight, and the toggle drives which personal
+    minimums are applied - so answering from the departure alone handed a night
+    arrival the day ceiling and visibility limits. The ETA is the great-circle
+    distance over the pilot's cruise TAS: no winds aloft, no upstream call, which
+    is accurate enough to place an arrival on the correct side of twilight and
+    cheap enough to run on every keystroke.
 
     ``at`` goes through the same ``_parse_etd`` clamp the route uses, so a tab
     left open overnight gets the toggle for the flight that would actually be
@@ -131,12 +143,33 @@ async def daynight(
     if airport is None:
         return JSONResponse({"error": f"unknown aerodrome {ident}"}, status_code=404)
     when = _parse_etd(at) or datetime.now(timezone.utc)
-    night = solar.is_night(airport.lat, airport.lon, when)
+    dep_night = solar.is_night(airport.lat, airport.lon, when)
     nxt = solar.next_transition(airport.lat, airport.lon, when)
+
+    # The destination, when the pilot has named one we recognise. An unknown or
+    # absent destination simply leaves the answer on the departure.
+    dest_airport = ap.get_airport(dest) if dest else None
+    dest_night = None
+    eta = None
+    if dest_airport is not None and dest_airport.ident != airport.ident:
+        with cruise_override(tas):
+            distance = haversine_nm(airport.lat, airport.lon,
+                                    dest_airport.lat, dest_airport.lon)
+            eta = when + timedelta(hours=flight_time_hr(distance, get_cruise_kt()))
+        dest_night = solar.is_night(dest_airport.lat, dest_airport.lon, eta)
+
+    night = bool(dep_night or dest_night)
     return JSONResponse({
         "ident": airport.ident,
         "at": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "mode": "night" if night else "day",
+        "dep_mode": "night" if dep_night else "day",
+        "dest_ident": dest_airport.ident if dest_airport else None,
+        "dest_mode": None if dest_night is None else ("night" if dest_night else "day"),
+        "eta": eta.strftime("%Y-%m-%dT%H:%M:%SZ") if eta else None,
+        # Which end made it a night flight, so the UI can say so rather than
+        # flipping the toggle for a reason the pilot cannot see.
+        "night_at": ("departure" if dep_night else "destination") if night else None,
         "sun_elevation_deg": round(solar.sun_elevation_deg(airport.lat, airport.lon, when), 2),
         # None during polar day/night, where there is no transition to name.
         "next_transition": nxt[0].strftime("%Y-%m-%dT%H:%M:%SZ") if nxt else None,

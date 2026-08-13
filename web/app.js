@@ -286,6 +286,15 @@ const zHM = (iso) => {
   const d = new Date(iso);
   return isNaN(d) ? "" : `${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z`;
 };
+// Parse a timeline timestamp as UTC. The backend's hourly times are Zulu but
+// carry no "Z" suffix ("2026-08-13T04:00"), and a bare ISO string without one is
+// parsed as *browser-local* - which silently shifted every hour label by the
+// viewer's own offset. Returns null on an unparseable value.
+const utcDate = (t) => {
+  if (!t) return null;
+  const d = new Date(/[Zz]|[+-]\d{2}:?\d{2}$/.test(t) ? t : t + "Z");
+  return isNaN(d) ? null : d;
+};
 
 // Quarter-hour granularity for the first few hours, because that is the
 // resolution people actually plan a departure at - the old list jumped straight
@@ -348,6 +357,7 @@ function etdOptionList(now = new Date()) {
 function buildEtdOptions() {
   const now = new Date();
   const opts = etdOptionList(now);
+  let changed = false;
   for (const id of ETD_IDS) {
     const sel = $(id);
     if (!sel) continue;
@@ -368,7 +378,12 @@ function buildEtdOptions() {
     // Past its own ETD: reset, but say so rather than changing it behind you.
     const row = sel.closest(".ac, .control") || sel.parentElement;
     if (row) row.classList.toggle("etd-lapsed", !!stale);
+    // Setting .value in script fires no "change", so a rebuild that dropped a
+    // lapsed ETD back to "Now" used to leave the day/night toggle answering for
+    // a departure time that no longer exists.
+    if (sel.value !== prev) changed = true;
   }
+  if (changed) refreshAutoDayNight();
 }
 
 const etdParam = (id = "#etd") => {
@@ -396,15 +411,32 @@ function wire() {
     }
   }));
 
-  // A new ETD or a new departure aerodrome is a different flight, so the manual
-  // override lapses and day/night is derived again.
+  // A new ETD, or either end of the route, is a different flight - so the manual
+  // override lapses and day/night is derived again. The destination is in here
+  // because a day departure can still be a night landing, and that decides which
+  // personal minimums the whole assessment runs against.
   for (const id of ETD_IDS) {
     const sel = $(id);
-    if (sel) sel.addEventListener("change", () => { MODE_MANUAL = false; refreshAutoDayNight(); });
+    if (sel) sel.addEventListener("change", rederiveDayNight);
   }
-  for (const id of ["#dep", "#circ-aerodrome"]) {
+  for (const id of ["#dep", "#dest", "#circ-aerodrome"]) {
     const el = $(id);
-    if (el) el.addEventListener("change", () => { MODE_MANUAL = false; refreshAutoDayNight(); });
+    if (!el) continue;
+    el.addEventListener("change", rederiveDayNight);
+    // `change` on a text input only fires on blur, so typing a full identifier
+    // and going straight to the ETD dropdown left the toggle describing the
+    // previous aerodrome. Debounced so it fires once, on the finished code.
+    let typing = null;
+    el.addEventListener("input", () => {
+      clearTimeout(typing);
+      typing = setTimeout(rederiveDayNight, 350);
+    });
+  }
+  // The aircraft's TAS moves the ETA, which can move the arrival across
+  // twilight. Cheap to re-derive; wrong to leave stale.
+  for (const id of ["#ac-model", "#ac-tas"]) {
+    const el = $(id);
+    if (el) el.addEventListener("change", rederiveDayNight);
   }
   $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
   $("#run-route").addEventListener("click", runRoute);
@@ -412,11 +444,13 @@ function wire() {
   $("#save-minimums").addEventListener("click", saveMinimums);
   $("#reset-minimums").addEventListener("click", resetMinimums);
   // VFR/IFR tab on the minimums card swaps which weather-minimums set is shown.
+  // It deliberately no longer rebuilds the hazard checkboxes: that rebuild was
+  // what dropped the widespread-IMC tick on the way back to VFR, and the list
+  // is the same under both rule sets anyway.
   $$(".rule-tab").forEach((b) => b.addEventListener("click", () => {
     const rule = b.dataset.rule;
     $$(".rule-tab").forEach((x) => x.classList.toggle("active", x === b));
     $$(".rule-pane").forEach((p) => p.classList.toggle("hidden", p.dataset.rule !== rule));
-    buildWxFlags();
   }));
   autocomplete("dep", "dep-list");
   autocomplete("dest", "dest-list");
@@ -433,8 +467,7 @@ function wire() {
     $$("[data-ftype]").forEach((x) => x.classList.toggle("active", x === b));
     applyFlightType(b.dataset.ftype);
     // Circuits assess a different aerodrome, so re-derive day/night for it.
-    MODE_MANUAL = false;
-    refreshAutoDayNight();
+    rederiveDayNight();
   }));
 }
 
@@ -468,15 +501,30 @@ const currentFlightRules = () => ($$(".seg-btn[data-rules]").find((b) => b.class
 // about it.
 let MODE_MANUAL = false;
 
-// Which aerodrome and time the current tab is actually planning from.
+// Something about the flight changed, so any manual day/night choice lapses -
+// it was made about a different flight - and the toggle is derived again.
+function rederiveDayNight() {
+  MODE_MANUAL = false;
+  refreshAutoDayNight();
+}
+
+// Which aerodrome(s) and time the current tab is actually planning from.
+// A cross-country carries its destination too: the toggle drives which personal
+// minimums are applied, and a leg that lands after evening civil twilight is a
+// night flight however bright it was on departure.
 function autoDayNightContext() {
   const tab = ($$(".tab.active")[0] || {}).dataset?.tab;
   if (tab === "discovery") return { ident: baseIdent(), etd: ($("#d-etd") || {}).value };
   if (tab === "route") {
-    const ident = currentFlightType() === "circuits"
-      ? ($("#circ-aerodrome").value.trim() || baseIdent())
-      : ($("#dep").value.trim() || baseIdent());
-    return { ident, etd: ($("#etd") || {}).value };
+    if (currentFlightType() === "circuits") {
+      return { ident: $("#circ-aerodrome").value.trim() || baseIdent(),
+               etd: ($("#etd") || {}).value };
+    }
+    return {
+      ident: $("#dep").value.trim() || baseIdent(),
+      dest: $("#dest").value.trim(),
+      etd: ($("#etd") || {}).value,
+    };
   }
   return null;  // My Minimums - the flight controls are hidden there
 }
@@ -490,25 +538,46 @@ function setMode(mode, auto) {
   if (seg) seg.classList.toggle("auto", !!auto);
 }
 
+// Requests are numbered so a slow earlier answer can never overwrite a newer
+// one. Changing the destination and then the ETD fires two lookups; without
+// this the first to *return* wins, and the toggle settles on the flight you had
+// already moved on from.
+let DAYNIGHT_SEQ = 0;
+
 async function refreshAutoDayNight() {
   if (MODE_MANUAL) return;
   const ctx = autoDayNightContext();
   if (!ctx || !ctx.ident) return;
   const p = new URLSearchParams({ ident: ctx.ident });
   if (ctx.etd && ctx.etd !== "now") p.set("at", ctx.etd);
+  // A destination only helps once it is long enough to be an identifier; the
+  // server ignores one it doesn't know, so a half-typed code is harmless.
+  if (ctx.dest && ctx.dest.length >= 3) p.set("dest", ctx.dest);
+  const tas = currentTas();
+  if (tas && tas > 0) p.set("tas", Math.round(tas));
+  const seq = ++DAYNIGHT_SEQ;
   try {
     const r = await fetch(`/api/daynight?${p}`);
     if (!r.ok) return;                       // unknown aerodrome mid-typing
     const d = await r.json();
-    if (MODE_MANUAL) return;                 // clicked while the request was in flight
+    if (MODE_MANUAL || seq !== DAYNIGHT_SEQ) return;  // superseded while in flight
     setMode(d.mode, true);
     const note = $("#mode-note");
-    if (note) {
-      note.textContent = d.next_transition
-        ? `Auto from civil twilight · ${d.next_transition_to === "night" ? "night" : "day"} from ${zHM(d.next_transition)}`
-        : "Auto from civil twilight";
-    }
+    if (note) note.textContent = dayNightNote(d);
   } catch { /* leave the toggle as it stands */ }
+}
+
+// Why the toggle sits where it does. When the destination is what made it a
+// night flight, say so - otherwise a pilot looking at a sunlit departure sees
+// the toggle flip to Night for no visible reason.
+function dayNightNote(d) {
+  if (d.night_at === "destination" && d.dest_ident) {
+    return `Auto from civil twilight · night landing at ${d.dest_ident}, ETA ${zHM(d.eta)}`;
+  }
+  if (d.next_transition) {
+    return `Auto from civil twilight · ${d.next_transition_to === "night" ? "night" : "day"} from ${zHM(d.next_transition)}`;
+  }
+  return "Auto from civil twilight";
 }
 
 function switchTab(name) {
@@ -971,7 +1040,7 @@ function rowCheck(c) {
   return `<div class="chk ${state}">
     <span class="mark">${mark}</span>
     <span class="lbl">${c.label}</span>
-    <span class="act">${c.actual_text}${loc}${src}${c.advisory_link ? ` <a href="${escapeHtml(c.advisory_link)}" target="_blank" rel="noopener">${escapeHtml(c.advisory_link_label || "chart")} ↗</a>` : ""}</span>
+    <span class="act">${c.actual_text}${loc}${src}</span>
     <span class="lim">${c.limit_text}</span></div>`;
 }
 function rowThreat(t) {
@@ -1349,15 +1418,15 @@ function renderTimeline(timeline, windows) {
   const inWindow = (t) => windows.some((w) => t >= w.start && t <= w.end);
   const byDay = {};
   timeline.forEach((h) => { (byDay[h.time.slice(0, 10)] ||= []).push(h); });
-  let html = `<div class="timeline-wrap"><h3>Hour-by-hour (full decision card; worse of departure &amp; destination)</h3>
-    <div class="legend"><span class="go">GO</span><span class="mit">MITIGATE</span><span class="nogo">NO-GO</span><span>· dimmed = night · outlined = best window · ⛈ storm 🧊 freezing ❄ snow 🌧 rain</span></div>`;
+  let html = `<div class="timeline-wrap"><h3>Hour-by-hour, Zulu (full decision card; worse of departure &amp; destination)</h3>
+    <div class="legend"><span class="go">GO</span><span class="mit">MITIGATE</span><span class="nogo">NO-GO</span><span>· all times Zulu · dimmed = night · outlined = best window · ⛈ storm 🧊 freezing ❄ snow 🌧 rain</span></div>`;
   for (const day of Object.keys(byDay).sort()) {
-    const label = new Date(day + "T12:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-    html += `<div class="tl-day">${label}</div><div class="tl-row">`;
+    const label = (utcDate(day + "T12:00") || new Date()).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+    html += `<div class="tl-day">${label} (Z)</div><div class="tl-row">`;
     for (const h of byDay[day]) {
       const hour = h.time.slice(11, 13);
       const title = [
-        `${h.time.replace("T", " ")}  ${h.verdict}`,
+        `${h.time.replace("T", " ")}Z  ${h.verdict}`,
         h.wind_kt != null ? `wind ${windDir(h.wind_dir_mag, h.wind_dir_true)}/${Math.round(h.wind_kt)}${(h.gust_kt && h.gust_kt > h.wind_kt) ? "G" + Math.round(h.gust_kt) : ""} kt${h.wind_source ? " from " + h.wind_source : ""}` : "",
         h.crosswind_kt != null ? `xwind ${h.crosswind_kt} kt${h.crosswind_runway ? " on RWY " + h.crosswind_runway : ""}` : "",
         h.ceiling_agl_ft != null ? `ceiling ${(Math.round(h.ceiling_agl_ft / 100) * 100).toLocaleString()} ft` : "",
@@ -1445,29 +1514,60 @@ const threatMeta = () => CONFIG.threats || [];
 const threatsOfKind = (kind) => threatMeta().filter((t) => t.kind === kind);
 const threatLabel = (key) => (threatMeta().find((t) => t.key === key) || {}).label || labelOf(key);
 
+// Which hazards are ticked, held here rather than read back off the checkboxes.
+//
+// The tick state used to live only in the DOM, and the widespread-IMC checkbox
+// was removed whenever the IFR pane was showing. Going VFR → IFR → VFR therefore
+// destroyed it: the rebuild seeded itself from a DOM that no longer contained
+// the control, so it came back unticked while the readout - which reads the
+// saved profile - still said "8 of 8". Saving from that DOM then deleted the
+// flag from the profile for good. A control that isn't on screen must never be
+// able to change a setting, so the set is the source of truth and the
+// checkboxes are just its view.
+let WX_FLAGS_SELECTED = null;
+
+function wxFlagsSelected() {
+  if (WX_FLAGS_SELECTED === null) WX_FLAGS_SELECTED = new Set(effectiveLimits().weather_flags);
+  return WX_FLAGS_SELECTED;
+}
+
 function buildWxFlags() {
-  const ruleTabIfr = ($$(".rule-tab").find(b => b.classList.contains("active")) || {}).dataset?.rule === "ifr";
-  const ifr = currentFlightRules() === "ifr" || ruleTabIfr;
-  const flags = (CONFIG.weather_flag_options || []).filter((f) => !ifr || f !== "widespread_ifr");
-  const prev = new Set($$(".wxflag").filter((c) => c.checked).map((c) => c.value));
-  $("#wxflags").innerHTML = flags
-    .map((f) => `<label class="control checkbox"><input type="checkbox" class="wxflag" value="${f}"${prev.has(f) ? " checked" : ""}> ${wxLabel(f)}</label>`)
+  const selected = wxFlagsSelected();
+  // widespread_ifr is a shared setting and the backend already ignores it on
+  // IFR flights, so it stays on screen under both - with a note saying so.
+  const note = { widespread_ifr: "not applied on IFR flights" };
+  $("#wxflags").innerHTML = (CONFIG.weather_flag_options || [])
+    .map((f) => `<label class="control checkbox"><input type="checkbox" class="wxflag" value="${f}"${selected.has(f) ? " checked" : ""}> ${wxLabel(f)}${note[f] ? ` <span class="hint">(${note[f]})</span>` : ""}</label>`)
     .join("");
+  // Read the set through the accessor at event time, never capture it: saving
+  // and resetting both replace it wholesale, and a captured reference would
+  // leave these handlers quietly updating a set nobody reads any more.
+  $$(".wxflag").forEach((c) => c.addEventListener("change", () => {
+    const set = wxFlagsSelected();
+    if (c.checked) set.add(c.value);
+    else set.delete(c.value);
+  }));
 }
 
 // Per-flight extra threats (all kind:"per_flight" from the config), e.g.
 // terrain-critical and unfamiliar/complex airspace. single_pilot_ifr_no_autopilot
-// only applies when IFR is selected.
+// only applies when IFR is selected - and because that one *is* hidden under VFR,
+// its tick is held outside the DOM for the same reason as the weather flags
+// above, so an IFR → VFR → IFR round trip no longer silently clears it.
+const THREATS_SELECTED = new Set();
+
 function renderExtraThreats() {
   const ifr = currentFlightRules() === "ifr";
   const items = threatsOfKind("per_flight")
     .map((t) => t.key)
     .filter((k) => ifr || k !== "single_pilot_ifr_no_autopilot");
-  const wasChecked = new Set($$(".threat").filter((c) => c.checked).map((c) => c.value));
   $("#threats-list").innerHTML = items
-    .map((t) => `<label><input type="checkbox" class="threat" value="${t}"${wasChecked.has(t) ? " checked" : ""}> ${threatLabel(t)}</label>`)
+    .map((t) => `<label><input type="checkbox" class="threat" value="${t}"${THREATS_SELECTED.has(t) ? " checked" : ""}> ${threatLabel(t)}</label>`)
     .join("");
-  buildWxFlags();
+  $$(".threat").forEach((c) => c.addEventListener("change", () => {
+    if (c.checked) THREATS_SELECTED.add(c.value);
+    else THREATS_SELECTED.delete(c.value);
+  }));
 }
 
 function buildConservatism() {
@@ -1571,8 +1671,11 @@ function fillProfileForm() {
     const el = $("#" + f.id);
     if (el) { el.value = grp[f.key]; ($("#" + f.id + "-out") || {}).textContent = `${grp[f.key]} ${f.unit}`; }
   }
-  const active = new Set(eff.weather_flags);
-  $$(".wxflag").forEach((c) => (c.checked = active.has(c.value)));
+  // Re-seed the tick set from the saved profile, then paint the checkboxes from
+  // it - so Save and Reset both land in the controls and in the state behind
+  // them, and the two can never drift apart.
+  WX_FLAGS_SELECTED = new Set(eff.weather_flags);
+  $$(".wxflag").forEach((c) => (c.checked = WX_FLAGS_SELECTED.has(c.value)));
   const imc = $("#set-imc-threat");
   if (imc) imc.checked = !!eff.imc_as_threat;
   const night = $("#set-night-threat");
@@ -1594,8 +1697,15 @@ function readProfileForm() {
     if (grpDefault === undefined || v === grpDefault) continue;
     (mins[f.group] ||= {})[f.key] = v;
   }
-  const checked = $$(".wxflag").filter((c) => c.checked).map((c) => c.value);
-  if (checked.length !== d.weather_flags.length) mins.weather_flags = checked;
+  // Saved from the tick set, in the config's own order. Comparing *membership*
+  // against the defaults, not just the count: swapping one hazard for another
+  // leaves the length unchanged, and that used to be saved as "no change".
+  const selected = wxFlagsSelected();
+  const checked = (CONFIG.weather_flag_options || []).filter((f) => selected.has(f));
+  if (checked.length !== d.weather_flags.length
+      || d.weather_flags.some((f) => !selected.has(f))) {
+    mins.weather_flags = checked;
+  }
 
   // IMC-as-threat: only persist when it differs from the default (off).
   const imcEl = $("#set-imc-threat");
@@ -1821,8 +1931,16 @@ function srcChip(source) {
   const k = { Observed: "OBSERVED", TAF: "TAF", HRDPS: "HRDPS" }[source] || "";
   return `<span class="src ${k}">${source}</span>`;
 }
+// A timeline range, in Zulu. The timeline's own times are UTC without a "Z"
+// suffix (Open-Meteo is queried with timezone=UTC), so they are parsed as UTC
+// explicitly - `new Date("2026-08-13T04:00")` would read them as browser-local
+// and print a range hours away from the flight.
 function fmtRange(a, b) {
-  const f = (t) => new Date(t).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  const f = (t) => {
+    const d = utcDate(t);
+    if (!d) return t;
+    return `${d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })} ${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z`;
+  };
   return `${f(a)} → ${f(b)}`;
 }
 function escapeHtml(s) {

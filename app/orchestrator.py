@@ -30,6 +30,7 @@ from app.models import (
     WindAloft,
     WindowForecast,
 )
+from app.services import airmass
 from app.services import cfs_links, hazards as hz
 from app.services import magvar
 from app.services import solar
@@ -146,9 +147,10 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
         arr = hourly.get(name, [])
         return arr[i] if i < len(arr) else None
 
+    elevation_ft = openmeteo.field_elevation_ft(fc)
     ceiling = openmeteo.cloud_base_to_ceiling_ft(at("cloud_base"))
     if ceiling is None:  # GEM lacks cloud_base -> infer from saturated layers
-        ceiling = openmeteo.derive_ceiling_ft(hourly, i, openmeteo.field_elevation_ft(fc))
+        ceiling = openmeteo.derive_ceiling_ft(hourly, i, elevation_ft)
     return {
         "ceiling_ft": ceiling,
         "vis_sm": openmeteo.visibility_to_sm(at("visibility")),
@@ -158,6 +160,10 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
         "llj_kt": at("windspeed_925hPa"),
         "freezing_ft": (round(at("freezing_level_height") * 3.28084)
                         if at("freezing_level_height") is not None else None),
+        # Model-derived air mass: where cloud sits below freezing, and how sheared
+        # / gusty the low levels are. Advisory only - see ``services.airmass``.
+        "icing_bands": airmass.icing_bands(hourly, i),
+        "turbulence": airmass.turbulence_index(hourly, i, elevation_ft),
     }
 
 
@@ -1059,6 +1065,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     llj_kt = max(lljs) if lljs else None
     frz = [e.get("freezing_ft") for e in enroute if e.get("freezing_ft") is not None]
     freezing_ft = min(frz) if frz else None
+    # Air mass along the corridor: icing bands merged into their union, the
+    # single most significant turbulence index. Same shape as llj/freezing above.
+    route_icing = airmass.worst_icing([e.get("icing_bands") or [] for e in enroute])
+    route_turb = airmass.worst_turbulence([e.get("turbulence") for e in enroute])
     enroute_ceiling = min([c for c in ceiling_points if c is not None], default=None)
     enroute_vis = min([v for v in vis_points if v is not None], default=None)
     # Lowering ceilings: from the model trend OR observed in recent METAR history.
@@ -1124,7 +1134,15 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         lowering_ceiling=lowering,
         freezing_level_ft=freezing_ft,
         personal_vis_sm=vis_limit,
-        gfa=hz.gfa_links(dep.lat, dep.lon),
+        gfa_region=hz.gfa_region(dep.lat, dep.lon),
+        icing_bands=route_icing,
+        turbulence=route_turb,
+        # Surface up to cruise plus a 2,000 ft allowance: you climb through
+        # everything below the cruise level, and an icing layer just above it is
+        # one deviation away. An area product entirely outside that slab - the
+        # FL240-FL400 turbulence SIGMET - has nothing to do with this flight.
+        planned_low_ft=0.0,
+        planned_high_ft=(cruise_alt + 2000.0) if cruise_alt else 10000.0,
     )
 
     # What the TAF forecasts across the flight, at each end. On a future ETD the
