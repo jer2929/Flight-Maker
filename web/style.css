@@ -314,6 +314,12 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
   background: rgba(31,138,76,.12); border: 1px solid var(--go); border-radius: 10px;
   padding: 10px 14px; margin: 6px 0; font-size: .9rem;
 }
+/* The ETD nudge - one specific better departure time for this flight. Coloured
+   by the verdict it actually reaches, not always green: a nudge that only gets
+   you from NO-GO to MITIGATE is worth saying and is not a green outcome. */
+.etd-nudge { margin-bottom: 14px; }
+.etd-nudge.MITIGATE { background: rgba(201,138,0,.12); border-color: var(--mitigate); }
+.etd-nudge .nudge-why { margin-top: 6px; font-size: .82rem; color: var(--muted); }
 .legend { font-size: .78rem; color: var(--muted); margin: 8px 0; display: flex; gap: 14px; flex-wrap: wrap; }
 .legend span::before { content: "■ "; }
 .legend .go::before { color: var(--go); } .legend .mit::before { color: var(--mitigate); } .legend .nogo::before { color: var(--nogo); }

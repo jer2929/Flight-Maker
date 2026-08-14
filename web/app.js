@@ -992,6 +992,7 @@ function renderRoute(r) {
       <span>📏 ${r.distance_nm} nm · course ${dirM(r.bearing_mag, r.bearing_true)}</span>
       <span>⏱ ${fmtHrMin(r.flight_time_hr)}</span>
       ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud">⬆ Best alt ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
+      ${daylightSpan(r.daylight_margin)}
       ${r.enroute_ceiling_ft != null ? `<span>☁ Enroute ceiling ${fmtCeil(r.enroute_ceiling_ft)}</span>` : ""}
       ${r.cloud_at_cruise ? `<span class="warn">⚠️ Cloud below planned cruise altitude</span>` : ""}
       ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${windDir(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
@@ -1004,17 +1005,26 @@ function renderRoute(r) {
   $("#route-enroute").innerHTML = enrouteBlock(r);
   loadRadar(r);
 
+  // The nudge leads, because "when instead" is the question a non-GO raises and
+  // the window list answers a broader one. It renders above whichever of the
+  // three window states applies - including the failed-fetch state, where the
+  // backend returns no nudge at all and this contributes nothing.
+  let windowsHtml;
   if (r.best_windows.length) {
-    $("#route-windows").innerHTML = `<div class="timeline-wrap"><h3>Best windows (next ${CONFIG.timeline_hours} h) - wind, ceiling &amp; visibility</h3>` +
-      r.best_windows.map((w) => `<div class="window-card">🟢 <strong>${fmtRange(w.start, w.end)}</strong> - ${w.summary}</div>`).join("") + `</div>`;
+    windowsHtml = `<h3>Best windows (next ${CONFIG.timeline_hours} h) - wind, ceiling &amp; visibility</h3>` +
+      r.best_windows.map((w) => `<div class="window-card">🟢 <strong>${fmtRange(w.start, w.end)}</strong> - ${w.summary}</div>`).join("");
   } else if ((r.timeline || []).length) {
-    $("#route-windows").innerHTML = `<div class="timeline-wrap"><div class="empty">No clearly favourable window in the next ${CONFIG.timeline_hours} h.</div></div>`;
+    // Windows are filtered to those long enough to hold this flight, so say so:
+    // otherwise a pilot who saw a window on a shorter leg wonders where it went.
+    windowsHtml = `<div class="empty">No clearly favourable window long enough for this flight in the next ${CONFIG.timeline_hours} h.</div>`;
   } else {
     // No timeline means no hourly forecast came back - "no favourable window" is
     // a statement about the weather, and there is no weather here to make it
     // about. This is the sentence that used to be wrong.
-    $("#route-windows").innerHTML = `<div class="timeline-wrap"><div class="empty fetch-empty">⚠ Best windows unavailable - the hourly forecast did not download, so none could be searched for. This is <strong>not</strong> "no good window": pull the data again.</div></div>`;
+    windowsHtml = `<div class="empty fetch-empty">⚠ Best windows unavailable - the hourly forecast did not download, so none could be searched for. This is <strong>not</strong> "no good window": pull the data again.</div>`;
   }
+  $("#route-windows").innerHTML =
+    `<div class="timeline-wrap">${etdNudgeCard(r.etd_suggestion)}${windowsHtml}</div>`;
   renderTimeline(r.timeline, r.best_windows);
 }
 
@@ -1509,6 +1519,56 @@ function notamItems(a) {
   }).join("");
 }
 window.toggleNotams = (id) => $("#notams-" + id).classList.toggle("hidden");
+
+// ---------- "When instead?" ----------
+//
+// The best-windows list answers "when is the weather good in the next 48 h".
+// A pilot looking at a MITIGATE has a narrower question: how far am I from a
+// GO, and is the good spell long enough for my leg. The backend answers it
+// against the ETD actually picked (services/timeline.etd_nudge), and only when
+// the hour-by-hour strip agrees with the card about that ETD - so this card
+// speaks for the strip, and says so, rather than promising a verdict the card
+// might not give.
+// A time offset, read aloud: "45 min", "3 h", "1 h 15 min". fmtHrMin is the
+// wrong shape here - it prints a flight time, where "1 h 0 min" is a duration
+// nobody says out loud but every leg has, so it always carries the minutes.
+function fmtDelta(min) {
+  const h = Math.floor(min / 60), m = min % 60;
+  if (!h) return `${m} min`;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+function etdNudgeCard(s) {
+  if (!s) return "";
+  const dir = s.delta_min >= 0 ? "later" : "earlier";
+  const mag = fmtDelta(Math.abs(s.delta_min));
+  const why = s.reason
+    ? `<div class="nudge-why">Stops applying: ${escapeHtml(s.reason)}</div>` : "";
+  return `<div class="window-card etd-nudge ${cls(s.verdict)}">
+    🕑 <strong>Depart ${mag} ${dir} (${zDayTime(s.etd_utc)})</strong> and the
+    hour-by-hour forecast turns ${s.verdict} - ${s.hours_available} h available.
+    ${why}</div>`;
+}
+
+// Daylight left at the destination on arrival. The app already computes civil
+// twilight to choose day or night minimums; this is that instant, stated, plus
+// the departure time that would still land inside it. The latest ETD only
+// appears when the margin is tight enough for it to be a decision.
+function daylightSpan(m) {
+  if (!m) return "";
+  const late = m.margin_min < 0;
+  const state = late
+    ? `lands ${fmtDelta(Math.abs(m.margin_min))} after dark`
+    : `${fmtDelta(m.margin_min)} of daylight left`;
+  // Bare Zulu, like the ETD and ETA it sits beside in this strip. The latest
+  // departure is always within hours of the dusk it is derived from, so the
+  // weekday the nudge card carries would be noise here.
+  const latest = m.margin_min < 60
+    ? ` · latest ETD ${zHM(m.latest_etd_utc)}` : "";
+  const title = "End of evening civil twilight at the destination (CARs 101.01). "
+    + "The latest ETD keeps the same 30 min arrival allowance the flight window uses.";
+  return `<span class="${m.margin_min < 30 ? "warn" : ""}" title="${title}">🌇 Last light ${zHM(m.dusk_utc)} · ${state}${latest}</span>`;
+}
 
 function renderTimeline(timeline, windows) {
   // An empty grid used to be drawn as no grid at all, silently - the same blank
@@ -2342,17 +2402,17 @@ function wxPopHas(a, kind) {
   const w = a.weather || {};
   return kind === "TAF" ? !!w.raw_taf : !!(a.model_hours || []).length;
 }
-// A timeline range, in Zulu. The timeline's own times are UTC without a "Z"
-// suffix (Open-Meteo is queried with timezone=UTC), so they are parsed as UTC
-// explicitly - `new Date("2026-08-13T04:00")` would read them as browser-local
-// and print a range hours away from the flight.
+// One timeline instant as "Mon 0430Z". The timeline's own times are UTC without
+// a "Z" suffix (Open-Meteo is queried with timezone=UTC), so they go through
+// utcDate explicitly - `new Date("2026-08-13T04:00")` would read them as
+// browser-local and print a time hours away from the flight.
+function zDayTime(t) {
+  const d = utcDate(t);
+  if (!d) return t;
+  return `${d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })} ${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z`;
+}
 function fmtRange(a, b) {
-  const f = (t) => {
-    const d = utcDate(t);
-    if (!d) return t;
-    return `${d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })} ${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z`;
-  };
-  return `${f(a)} → ${f(b)}`;
+  return `${zDayTime(a)} → ${zDayTime(b)}`;
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

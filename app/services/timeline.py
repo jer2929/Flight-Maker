@@ -8,12 +8,15 @@ decision card is applied to each hour.
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta, timezone
 
-from app.models import BestWindow, HourCondition, Runway, Source, Verdict, WeatherSummary
+from app.models import (
+    BestWindow, EtdSuggestion, HourCondition, Runway, Source, Verdict, WeatherSummary,
+)
 from app.services import magvar
 from app.services import weather as wx
-from app.services.evaluator import evaluate, gating_hazards, prob_summary
+from app.services.evaluator import SEVERITY, evaluate, gating_hazards, prob_summary
 from app.services.runway import best_runway
 from app.sources import openmeteo
 
@@ -362,15 +365,24 @@ def build_timeline(
     return timeline
 
 
-def best_windows(timeline: list[HourCondition], daylight_only: bool, limit: int = 3) -> list[BestWindow]:
+def best_windows(timeline: list[HourCondition], daylight_only: bool, limit: int = 3,
+                 min_hours: int = 1) -> list[BestWindow]:
     """Maximal runs of GO hours (falling back to MITIGATE if no GO), ranked by
-    soonest then longest."""
+    soonest then longest.
+
+    ``min_hours`` drops runs shorter than the flight they are meant to hold: a
+    one-hour hole in the weather is not a window for a two-hour leg. It defaults
+    to 1, which keeps every run, so a caller that doesn't know the flight time
+    gets the old behaviour.
+    """
+    need = max(1, min_hours)
+
     def eligible(allow_mitigate: bool) -> list[BestWindow]:
         runs: list[BestWindow] = []
         run: list[HourCondition] = []
 
         def flush():
-            if len(run) >= 1:
+            if len(run) >= need:
                 runs.append(BestWindow(
                     start=run[0].time, end=run[-1].time, hours=len(run),
                     summary=_summarise(run),
@@ -390,6 +402,100 @@ def best_windows(timeline: list[HourCondition], daylight_only: bool, limit: int 
     runs = eligible(False) or eligible(True)
     runs.sort(key=lambda w: (w.start, -w.hours))
     return runs[:limit]
+
+
+def hour_dt(h: HourCondition) -> datetime:
+    """The UTC instant an hour cell describes. ``HourCondition.time`` is the
+    model's own Zulu stamp (openmeteo is asked for ``timezone=UTC``)."""
+    return datetime.strptime(h.time, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
+
+
+def _run_from(timeline: list[HourCondition], j: int, verdict: Verdict,
+              daylight_only: bool) -> int:
+    """How many consecutive hours from ``j`` are at least as good as ``verdict``
+    (and in daylight, when that's required)."""
+    n = 0
+    for h in timeline[j:]:
+        if SEVERITY[h.verdict] > SEVERITY[verdict]:
+            break
+        if daylight_only and not h.daylight:
+            break
+        n += 1
+    return n
+
+
+def etd_nudge(timeline: list[HourCondition], etd_utc: datetime, flight_time_hr: float,
+              verdict_now: Verdict, daylight_only: bool,
+              now: datetime | None = None) -> EtdSuggestion | None:
+    """A better departure time for *this* flight, or None.
+
+    ``best_windows`` answers "when is the weather good in the next 48 h".
+    This answers the question a pilot staring at a MITIGATE actually has: how
+    far am I from a GO, and is the good spell long enough for my leg.
+
+    Four things it deliberately refuses to do:
+
+    * **Speak without a forecast.** An empty timeline means nothing was
+      searched, so there is no finding to report - the page must keep saying the
+      forecast did not download rather than "no better time".
+    * **Promise what the card won't give.** The route verdict is the worse of
+      several things this strip cannot see - SIGMETs, the endpoint cards, static
+      route hazards. When the card is already worse than its own ETD hour,
+      moving the clock is not known to fix it, so say nothing.
+    * **Offer a hole.** The suggested hour has to open a run at least as long as
+      the flight.
+    * **Offer the past.** Hours behind the current clock are not departures.
+    """
+    if not timeline:
+        return None
+    now = now or datetime.now(timezone.utc)
+    if etd_utc.tzinfo is None:
+        etd_utc = etd_utc.replace(tzinfo=timezone.utc)
+
+    stamps = [hour_dt(h) for h in timeline]
+    # The hour the pilot's ETD falls in: the last one at or before it, else the
+    # first the strip carries (a "Now" ETD can sit just ahead of the top of the
+    # hour the timeline starts on).
+    idx = 0
+    for i, t in enumerate(stamps):
+        if t <= etd_utc:
+            idx = i
+    from_verdict = timeline[idx].verdict
+    if from_verdict != verdict_now or from_verdict == Verdict.GO:
+        return None
+
+    need = max(1, math.ceil(flight_time_hr))
+    best: tuple[tuple[int, int], int, int] | None = None  # (rank, j, hours)
+    for j, h in enumerate(timeline):
+        if SEVERITY[h.verdict] >= SEVERITY[from_verdict]:
+            continue
+        if stamps[j] < now:
+            continue
+        if daylight_only and not h.daylight:
+            continue
+        hours = _run_from(timeline, j, h.verdict, daylight_only)
+        if hours < need:
+            continue
+        # Nearest to the pilot's ETD wins; a tie between an earlier and a later
+        # hour goes to the better verdict, then to the earlier one.
+        rank = (abs(j - idx), SEVERITY[h.verdict])
+        if best is None or rank < best[0] or (rank == best[0] and j < best[1]):
+            best = (rank, j, hours)
+    if best is None:
+        return None
+
+    _, j, hours = best
+    target = timeline[j]
+    # What stops applying at the suggested time, in the strip's own words.
+    gone = [r for r in timeline[idx].reasons if r not in set(target.reasons)]
+    return EtdSuggestion(
+        etd_utc=target.time,
+        delta_min=round((stamps[j] - etd_utc).total_seconds() / 60),
+        verdict=target.verdict,
+        from_verdict=from_verdict,
+        hours_available=hours,
+        reason=", ".join(gone[:2]) or None,
+    )
 
 
 def _summarise(run: list[HourCondition]) -> str:

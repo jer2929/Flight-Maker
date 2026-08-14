@@ -16,6 +16,7 @@ from app.models import (
     AirportAssessment,
     AltitudeRecommendation,
     Airport,
+    DaylightMargin,
     LimitCheck,
     NearbyStation,
     Notam,
@@ -617,6 +618,23 @@ def _zhm(dt: datetime) -> str:
 
 def _window_label(etd: datetime, eta: datetime) -> str:
     return f"{_zhm(etd)}-{_zhm(eta)}"
+
+
+def _daylight_margin(dusk: datetime, eta: datetime, flight_hr: float) -> DaylightMargin:
+    """Daylight left at the destination on arrival, and the latest ETD that
+    still lands in it.
+
+    ``latest_etd`` carries the same ``WINDOW_PAD_MIN`` the flight window uses at
+    its arrival end, so the departure this recommends leaves the identical
+    allowance for holding and an approach that every other span in the app does.
+    Pure arithmetic on a twilight already computed.
+    """
+    return DaylightMargin(
+        dusk_utc=dusk.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        margin_min=round((dusk - eta).total_seconds() / 60),
+        latest_etd_utc=(dusk - timedelta(hours=flight_hr)
+                        - timedelta(minutes=WINDOW_PAD_MIN)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
 
 
 def _window_hazards(dep_segs: list[dict], dest_segs: list[dict],
@@ -1366,7 +1384,15 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # Record it so the page can say which of the two it is.
     if not timeline:
         fetch_health.record(fetch_health.HRDPS)
-    windows = tl.best_windows(timeline, daylight_only=(mode == "day"))
+    # Windows have to be long enough to hold the flight - a one-hour hole is not
+    # a window for a two-hour leg - and the nudge answers "how far am I from a
+    # GO" against the ETD the pilot actually picked, which the window list does
+    # not. Both read the timeline that was just built; neither costs a fetch.
+    daylight_only = mode == "day"
+    windows = tl.best_windows(timeline, daylight_only=daylight_only,
+                              min_hours=math.ceil(flight_hr))
+    etd_suggestion = tl.etd_nudge(timeline, etd_utc, flight_hr, verdict_now,
+                                  daylight_only=daylight_only)
 
     # En-route corridor. Built last, and deliberately NOT fed into all_checks,
     # ceiling_points, vis_points or route_ws: these are precautionary-landing
@@ -1390,12 +1416,17 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
             "does not apply")
     if beyond:
         notes.append(f"ETD is beyond the {settings.timeline_hours} h forecast horizon")
+    # How much daylight is left at the destination when you get there - the
+    # subtraction every VFR pilot does by hand, off the twilight the app already
+    # computes to pick day or night minimums. Only for a day flight: "margin to
+    # last light" means nothing once you have chosen to fly at night.
+    dusk = solar.end_of_daylight(dest.lat, dest.lon, eta_utc) if mode == "day" else None
+    daylight_margin = _daylight_margin(dusk, eta_utc, flight_hr) if dusk else None
     # A day departure can still be a night arrival. Say so rather than silently
     # overriding the day/night selection - which set of minimums to fly is the
     # pilot's call, but they should not learn about it in the circuit.
     if mode == "day" and solar.is_night(dest.lat, dest.lon, eta_utc):
-        dusk = solar.last_transition(dest.lat, dest.lon, eta_utc)
-        when = f" ({_zhm(dusk[0])})" if dusk and dusk[1] else ""
+        when = f" ({_zhm(dusk)})" if dusk else ""
         notes.append(
             f"ETA {_zhm(eta_utc)} is after evening civil twilight at {dest.ident}"
             f"{when} - the arrival is a night landing")
@@ -1433,6 +1464,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         airmets=[_advisory("AIRMET", t, from_awc=False) for t in airmets[:8]],
         pireps=[_advisory("PIREP", t, from_awc=False) for t in pireps[:8]],
         timeline=timeline, best_windows=windows,
+        etd_suggestion=etd_suggestion, daylight_margin=daylight_margin,
         window=window,
         enroute_airports=enroute_airports,
         enroute_airports_total=len(corridor),

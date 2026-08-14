@@ -14,7 +14,11 @@ from __future__ import annotations
 from app.config import get_limits
 from app.models import LimitCheck, RunwayWind, Source, ThreatCheck, Verdict, WeatherSummary
 
-_SEVERITY = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
+# How bad each verdict is, for "which of these two is worse" comparisons.
+# Public because the timeline needs the same ordering to decide whether one hour
+# is an improvement on another, and a second copy of it would be a second thing
+# to keep in step.
+SEVERITY = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
 
 THREAT_LABELS = {
     "night_operations": "Night operations",
@@ -37,7 +41,7 @@ def threat_result_label(count: int) -> str:
 
 
 def _worse(a: Verdict, b: Verdict) -> Verdict:
-    return a if _SEVERITY[a] >= _SEVERITY[b] else b
+    return a if SEVERITY[a] >= SEVERITY[b] else b
 
 
 def _attribute(check: LimitCheck, weather: WeatherSummary, field: str, *,
