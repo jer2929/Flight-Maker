@@ -155,3 +155,28 @@ def last_transition(lat: float, lon: float, before: datetime,
             return _bisect(lat, lon, cur_t, next_t), state
         next_t = cur_t
     return None
+
+
+def end_of_daylight(lat: float, lon: float, when: datetime,
+                    horizon_h: int = 48) -> datetime | None:
+    """The end of evening civil twilight for the daylight period ``when`` sits
+    in - "last light" as a pilot means it.
+
+    Two cases, because the answer is behind you as often as ahead:
+
+    * ``when`` is in **daylight**: the next flip is into night, and that is the
+      answer.
+    * ``when`` is already **night**: last light has passed, so the answer is the
+      most recent flip into night. A 20-minutes-late arrival should report *how
+      far past* last light it is, not skip to tomorrow evening.
+
+    ``None`` during polar day or polar night, where there is no last light to
+    name - the same case ``next_transition`` returns None for.
+    """
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    if not is_night(lat, lon, when):
+        nxt = next_transition(lat, lon, when, horizon_h)
+        return nxt[0] if nxt and nxt[1] else None
+    prev = last_transition(lat, lon, when, horizon_h)
+    return prev[0] if prev and prev[1] else None
