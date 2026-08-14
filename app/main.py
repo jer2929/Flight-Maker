@@ -25,7 +25,7 @@ from app.config import (
     get_settings,
     limits_override,
 )
-from app.services import solar
+from app.services import fetch_health, solar
 from app.services.geo import flight_time_hr, haversine_nm
 from app.services.evaluator import THREAT_LABELS
 from app.sources import airports as ap
@@ -193,12 +193,17 @@ async def route(
     s = get_settings()
     dep = dep or s.origin
     manual = [t for t in threats.split(",") if t]
-    with limits_override(_parse_prefs(prefs)), cruise_override(tas):
+    with limits_override(_parse_prefs(prefs)), cruise_override(tas), \
+            fetch_health.collect() as health:
         result = await orchestrator.assess_route(dep, dest, mode, manual,
                                                  flight_rules=flight_rules,
                                                  etd=_parse_etd(etd))
     if result is None:
         return JSONResponse({"error": "unknown departure or destination"}, status_code=404)
+    # Which upstreams failed while building this. A missing product degrades the
+    # card to an empty space, which reads exactly like good news - so it ships
+    # with the answer and the page says so out loud.
+    result.data_health = health
     return JSONResponse(result.model_dump())
 
 
@@ -214,12 +219,13 @@ async def circuits(
     s = get_settings()
     ident = (aerodrome or s.origin).upper()
     manual = [t for t in threats.split(",") if t]
-    with limits_override(_parse_prefs(prefs)):
+    with limits_override(_parse_prefs(prefs)), fetch_health.collect() as health:
         result = await orchestrator.assess_circuits(ident, mode, manual,
                                                     flight_rules=flight_rules,
                                                     etd=_parse_etd(etd))
     if result is None:
         return JSONResponse({"error": "unknown aerodrome"}, status_code=404)
+    result.data_health = health
     return JSONResponse(result.model_dump())
 
 
@@ -283,14 +289,20 @@ async def suggest(
     s = get_settings()
     radius = radius or s.default_radius_nm
     manual = [t for t in threats.split(",") if t]
-    with limits_override(_parse_prefs(prefs)), cruise_override(tas):
+    with limits_override(_parse_prefs(prefs)), cruise_override(tas), \
+            fetch_health.collect() as health:
         results = await orchestrator.suggest(
             radius, mode, manual, surface, min_length_ft, into_wind,
             go_only=go_only, max_time_min=max_time_min, max_crosswind=max_crosswind,
             min_width_ft=min_width_ft, sort=sort, flight_rules=flight_rules,
             origin_ident=base or None, etd=_parse_etd(etd),
         )
-    return JSONResponse([r.model_dump() for r in results])
+    # An object rather than the bare array this used to return: the worst case
+    # here is a scan that comes back with *no* cards because the forecast never
+    # downloaded, and a bare array has nowhere to say so. The browser reads
+    # ``payload.results``.
+    return JSONResponse({"results": [r.model_dump() for r in results],
+                         "data_health": health.model_dump()})
 
 
 @app.get("/api/airport/{ident}")

@@ -48,6 +48,11 @@
   </svg>
   <header>
     <h1 class="brand">
+      <!-- The logo is the way home: it returns to My Minimums, which is where
+           the app opens and where the profile everything else is gated against
+           lives. -->
+      <a href="#" id="brand-home" class="brand-home" aria-label="Home - My Minimums"
+         title="Home - My Minimums">
       <svg class="logo" viewBox="0 0 250 54" role="img" aria-label="Minima">
         <title>Minima</title>
         <defs>
@@ -62,6 +67,7 @@
         <line x1="150" y1="46" x2="240" y2="12" class="logo-climb"
               marker-end="url(#logo-arrow)" />
       </svg>
+      </a>
     </h1>
     <div class="aircraft" id="aircraft" title="Your aircraft sets the true airspeed used for time & groundspeed">
       <div class="aircraft-row">
@@ -150,6 +156,9 @@
       <button id="run-route" class="primary">Assess route</button>
     </div>
 
+    <!-- "Some of this didn't download" - sits above the verdict, because a card
+         built on a failed fetch is the one thing you must read before the badge. -->
+    <div id="route-data-health"></div>
     <div id="route-verdict"></div>
     <div id="route-checklist"></div>
     <div id="route-mitigation"></div>
@@ -227,6 +236,7 @@
       </div>
       <button id="run-discovery" class="primary">Find flights now</button>
     </div>
+    <div id="discovery-data-health"></div>
     <div id="discovery-results" class="results"></div>
   </section>
 

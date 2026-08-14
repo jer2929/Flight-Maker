@@ -24,6 +24,7 @@ from app.models import (
     TafPeriod,
     FlightWindow,
     EnrouteAirport,
+    ForecastHour,
     Source,
     Verdict,
     WeatherSummary,
@@ -32,6 +33,7 @@ from app.models import (
 )
 from app.services import airmass
 from app.services import cfs_links, hazards as hz
+from app.services import fetch_health
 from app.services import magvar
 from app.services import solar
 from app.services import trends
@@ -245,6 +247,74 @@ def _window_indices(fc: dict | None, lo: datetime, hi: datetime) -> list[int]:
     i0 = _index_for_utc(fc, lo)[0]
     i1 = _index_for_utc(fc, hi)[0]
     return list(range(min(i0, i1), max(i0, i1) + 1))
+
+
+# How far either side of the flight the HRDPS popover reads. A discovery card
+# reports one merged worst-case line; this is the trend around it - is the wind
+# building or dying, is the ceiling lifting - which is the question a planned
+# ETD raises and a single number cannot answer.
+MODEL_CONTEXT_HRS = 3
+
+
+def _model_hours(fc: dict | None, etd: datetime, eta: datetime,
+                 airport: Airport) -> list[ForecastHour]:
+    """Raw model hours spanning the flight plus ``MODEL_CONTEXT_HRS`` either side.
+
+    Deliberately the *model alone*, with no TAF overlay and no verdict: the chip
+    the pilot taps to open this says HRDPS, so this is what HRDPS says. The TAF
+    has its own chip, and its own popover, next to it.
+
+    Hours past the model's horizon are dropped rather than shown. ``_index_for_utc``
+    clamps to the last hour it has, so keeping them would print the same forecast
+    under three different timestamps and pass it off as three hours of data.
+    """
+    if not (fc or {}).get("hourly", {}).get("time"):
+        return []
+    lo = etd - timedelta(hours=MODEL_CONTEXT_HRS)
+    hi = eta + timedelta(hours=MODEL_CONTEXT_HRS)
+    times = fc["hourly"]["time"]
+    offset = fc.get("utc_offset_seconds", 0)
+    win_lo, win_hi = flight_span(etd, eta)
+    out: list[ForecastHour] = []
+    for i in _window_indices(fc, lo, hi):
+        if i >= len(times):
+            continue
+        when = _parse_model_time(times[i], offset)
+        # An hour outside the range we asked for is one ``_index_for_utc``
+        # clamped to the end of the series - the model has nothing for that time
+        # and printing its last hour under that label would be a lie.
+        if when is None or not (lo - timedelta(hours=1) <= when <= hi + timedelta(hours=1)):
+            continue
+        c = tl.model_conditions(fc, i)
+        out.append(ForecastHour(
+            time=times[i],
+            in_window=win_lo <= when <= win_hi,
+            wind_dir_true=c.get("wind_dir_true"),
+            wind_dir_mag=_mag(c.get("wind_dir_true"), airport.lat, airport.lon),
+            wind_kt=c.get("wind_kt"), gust_kt=c.get("gust_kt"),
+            ceiling_agl_ft=c.get("ceiling_agl_ft"),
+            visibility_sm=c.get("visibility_sm"),
+            cloud_cover_pct=c.get("cloud_cover_pct"),
+            precip=c.get("precip"), precip_mm=c.get("precip_mm"),
+            hazards=list(c.get("hazards") or []),
+        ))
+    return out
+
+
+def _parse_model_time(t: str, offset_s: int = 0) -> datetime | None:
+    """An Open-Meteo hourly label ("2026-08-13T04:00") as an aware UTC datetime.
+
+    The series carries no "Z", so it is parsed explicitly rather than left to be
+    read as the server's local time. ``offset_s`` is the forecast's own
+    ``utc_offset_seconds`` - zero for every request this app makes (they ask for
+    ``timezone=UTC``), but subtracted anyway so the inverse of ``_index_for_utc``
+    is exact rather than exact-by-coincidence.
+    """
+    try:
+        naive = datetime.strptime(t[:16], "%Y-%m-%dT%H:%M")
+    except (ValueError, TypeError):
+        return None
+    return naive.replace(tzinfo=timezone.utc) - timedelta(seconds=offset_s or 0)
 
 
 def _window_forecast(taf_win: dict | None) -> WindowForecast | None:
@@ -738,7 +808,8 @@ async def _gather_area(fn, points: list[tuple[float, float]]) -> list[str]:
     The points are queried concurrently and merged in point order, so the result is
     identical to querying them one at a time - just without paying for each round
     trip in sequence."""
-    per_point = await asyncio.gather(*(_safe(fn(p), []) for p in points))
+    per_point = await asyncio.gather(
+        *(_safe(fn(p), [], fetch_health.AREA) for p in points))
     seen: set[str] = set()
     out: list[str] = []
     for texts in per_point:
@@ -972,36 +1043,48 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     (metars, tafs, awc_hist, cfps_hist, notams, raw_isig,
      cfps_sigmets, airmets, pireps, dep_fc, dest_fc, corridor_fcs,
      *mid_fcs) = await asyncio.gather(
-        _safe(cfps.metars(all_sites), {}),
-        _safe(cfps.tafs(all_sites), {}),
+        _safe(cfps.metars(all_sites), {}, fetch_health.METAR),
+        _safe(cfps.tafs(all_sites), {}, fetch_health.TAF),
         # METAR history for trends: aviationweather.gov (multi-hour), CFPS fallback.
         # ``None`` (not {}) is the failure default, so "the service did not answer"
         # stays distinguishable from "it answered, there is nothing there" - the
         # card says which. Skipped entirely for a distant ETD (`show_obs`), which
         # also takes the flakiest upstream out of the path for those requests.
+        # Neither is labelled here: history has a *fallback*, so only losing both
+        # is a failure worth reporting - see `hist_failed` below.
         _safe(awc.metar_history(sites, 6), None) if show_obs else _noop({}),
         _safe(cfps.metar_history(sites), None) if show_obs else _noop({}),
-        _safe(cfps.notams(sites), {}),
+        _safe(cfps.notams(sites), {}, fetch_health.NOTAM),
         # SIGMETs: aviationweather.gov international SIGMETs (covers Canadian FIRs),
         # filtered to those whose area is near the route, unioned with CFPS below.
-        _safe(awc.isigmets(), []),
+        _safe(awc.isigmets(), [], fetch_health.AREA),
         _gather_area(cfps.sigmets, area_pts),
         _gather_area(cfps.airmets, area_pts),
         _gather_area(cfps.pireps, area_pts),
-        _safe(openmeteo.forecast(dep.lat, dep.lon, days), {}),
-        _safe(openmeteo.forecast(dest.lat, dest.lon, days), {}),
+        _safe(openmeteo.forecast(dep.lat, dep.lon, days), {}, fetch_health.HRDPS),
+        _safe(openmeteo.forecast(dest.lat, dest.lon, days), {}, fetch_health.HRDPS),
         # Corridor fields: one batched request, wind variables only (the cards
         # show nothing else, and 20 points x the full variable list is a very
         # long URL for data we'd discard).
         _safe(openmeteo.forecast_many([(a.lat, a.lon) for a, _t, _x in corridor],
-                                      days, hourly=openmeteo.WIND_ONLY_VARS), []),
+                                      days, hourly=openmeteo.WIND_ONLY_VARS), [],
+              fetch_health.HRDPS),
         # Enroute sampling points, previously fetched one at a time in a loop.
-        *(_safe(openmeteo.forecast(mlat, mlon, days), {}) for mlat, mlon in mids),
+        *(_safe(openmeteo.forecast(mlat, mlon, days), {}, fetch_health.HRDPS)
+          for mlat, mlon in mids),
     )
+    # The two endpoint forecasts are the backbone of every hour on this page: the
+    # timeline, the best windows and the enroute picture are all read off them. A
+    # 200 with an unusable body raises nothing, so the emptiness is checked
+    # directly rather than left to look like a clear sky.
+    if not dep_fc or not dest_fc:
+        fetch_health.record(fetch_health.HRDPS)
     # Both upstreams failing is what used to render as an empty panel that looked
     # exactly like "no trend to report" - the reason trends seemed to come and go
     # between two runs of the same route. Track it so the card can say so.
     hist_failed = show_obs and awc_hist is None and cfps_hist is None
+    if hist_failed:
+        fetch_health.record(fetch_health.HISTORY)
     awc_hist, cfps_hist = awc_hist or {}, cfps_hist or {}
     metar_hist = {s: (awc_hist.get(s) or cfps_hist.get(s, [])) for s in sites}
     # The international SIGMET feed is global, so keep only entries whose plotted
@@ -1044,7 +1127,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
                 # Same observation horizon as the endpoint cards: past it, this
                 # station's METAR and trends are dropped too, leaving its TAF -
                 # the only forecast the field has - to stand on its own.
-                hist = ((await _safe(awc.metar_history([c.ident], 6), {})).get(c.ident, []) or [m]) if show_obs else []
+                hist = ((await _safe(awc.metar_history([c.ident], 6), {},
+                                     fetch_health.HISTORY)).get(c.ident, []) or [m]) if show_obs else []
                 tnotes = trends.analyze([wx.parse_metar(r) for r in reversed(hist)])[0] if hist else []
                 # This station's TAF is the only forecast this field has, so it
                 # gets the same period split and flight-window highlight as an
@@ -1276,6 +1360,12 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         dep_lat=dep.lat, dep_lon=dep.lon, dest_lat=dest.lat, dest_lon=dest.lon,
         static_hazards=static_hazards,
     )
+    # An empty timeline has exactly one cause - no hourly forecast came back -
+    # and it used to render as "No clearly favourable window in the next 48 h",
+    # which reads as a finding about the weather rather than a missing download.
+    # Record it so the page can say which of the two it is.
+    if not timeline:
+        fetch_health.record(fetch_health.HRDPS)
     windows = tl.best_windows(timeline, daylight_only=(mode == "day"))
 
     # En-route corridor. Built last, and deliberately NOT fed into all_checks,
@@ -1429,16 +1519,23 @@ async def suggest(
                                 get_cruise_kt()) if candidates else 0.0
     days = days_for(int((etd_utc - now).total_seconds() // 3600) + int(max_leg_hr) + 25)
     metars, tafs, notams, origin_fc, fcs, ens = await asyncio.gather(
-        _safe(cfps.metars(cfps_sites), {}),
-        _safe(cfps.tafs(cfps_sites), {}),
-        _safe(cfps.notams(cfps_sites), {}),
-        _safe(openmeteo.forecast(origin.lat, origin.lon, days), {}),
-        _safe(openmeteo.forecast_many(cand_points, days), []),
+        _safe(cfps.metars(cfps_sites), {}, fetch_health.METAR),
+        _safe(cfps.tafs(cfps_sites), {}, fetch_health.TAF),
+        _safe(cfps.notams(cfps_sites), {}, fetch_health.NOTAM),
+        _safe(openmeteo.forecast(origin.lat, origin.lon, days), {}, fetch_health.HRDPS),
+        _safe(openmeteo.forecast_many(cand_points, days), [], fetch_health.HRDPS),
         # The multi-model wind blend is a current-hour product - it has nothing
-        # to say about a future ETD.
+        # to say about a future ETD. Unlabelled: it is a refinement over the
+        # single-model wind, which is still there when the blend does not answer.
         _safe(openmeteo.ensemble_wind_many(cand_points, days), []) if is_now
         else asyncio.sleep(0, result=[]),
     )
+    # Every candidate's wind, ceiling and cruising altitude is read off these,
+    # so an empty answer where candidates exist is a missing download, not a
+    # scan that found nothing. Checked directly - a 200 with an unusable body
+    # raises nothing for ``_safe`` to catch.
+    if candidates and (not origin_fc or not fcs):
+        fetch_health.record(fetch_health.HRDPS)
     levels_now = _winds_aloft_at(origin_fc, None if is_now else etd_utc) if origin_fc else []
     fc_by_ident = {a.ident: (fcs[i] if i < len(fcs) else None) for i, (a, _) in enumerate(candidates)}
     ens_by_ident = {a.ident: (ens[i] if i < len(ens) else None) for i, (a, _) in enumerate(candidates)}
@@ -1525,6 +1622,15 @@ async def suggest(
             continue
         if max_time_min is not None and a.flight_time_hr * 60 > max_time_min:
             continue
+        # The span this card was assessed for. Every candidate leaves at the
+        # same ETD and arrives at its own ETA, so the card carries both rather
+        # than making the pilot re-read the dropdown and do the arithmetic.
+        a.etd_utc = etd_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        a.eta_utc = eta.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Raw model hours either side of the leg, for the HRDPS chip's popover.
+        # Built only for cards that survived the filters - the ones the pilot
+        # will actually be able to open.
+        a.model_hours = _model_hours(cand_fc, etd_utc, eta, airport)
         results.append(a)
     results.sort(key=_sort_key(sort))
     return results
@@ -1539,10 +1645,19 @@ def days_for(hours: int) -> int:
     return max(2, (hours + 23) // 24 + 1)
 
 
-async def _safe(coro, default):
+async def _safe(coro, default, label: str | None = None):
+    """Await ``coro``, degrading to ``default`` if it fails - and saying so.
+
+    The degrade-to-default half is what keeps one dead upstream from taking down
+    a whole assessment. The ``label`` half is what stops that empty default from
+    being read as good news: it records the product that went missing, so the
+    page can show "this failed to download, pull it again" instead of rendering
+    the gap as fact. See ``services.fetch_health``.
+    """
     try:
         return await coro
     except Exception:
+        fetch_health.record(label)
         return default
 
 
@@ -1579,13 +1694,17 @@ async def assess_circuits(
     is_reporting = bool(_REPORTING_RE.match(aerodrome_ident))
     sites = [aerodrome_ident] if is_reporting else []
     metar_d, taf_d, notam_d, fc_d, ens_d = await asyncio.gather(
-        _safe(cfps.metars(sites), {}) if sites else asyncio.sleep(0, result={}),
-        _safe(cfps.tafs(sites), {}) if sites else asyncio.sleep(0, result={}),
-        _safe(cfps.notams([aerodrome_ident]), {}),
-        _safe(openmeteo.forecast(airport.lat, airport.lon, days), {}),
+        _safe(cfps.metars(sites), {}, fetch_health.METAR) if sites else asyncio.sleep(0, result={}),
+        _safe(cfps.tafs(sites), {}, fetch_health.TAF) if sites else asyncio.sleep(0, result={}),
+        _safe(cfps.notams([aerodrome_ident]), {}, fetch_health.NOTAM),
+        _safe(openmeteo.forecast(airport.lat, airport.lon, days), {}, fetch_health.HRDPS),
+        # Unlabelled: a refinement over the single-model wind, not a source of
+        # its own - see the same call in ``suggest``.
         _safe(openmeteo.ensemble_wind_now(airport.lat, airport.lon, days), None)
         if is_now else asyncio.sleep(0, result=None),
     )
+    if not fc_d:
+        fetch_health.record(fetch_health.HRDPS)
     metar = metar_d.get(aerodrome_ident)
     taf = taf_d.get(aerodrome_ident)
     # Use ensemble only when there is no METAR.
@@ -1593,7 +1712,8 @@ async def assess_circuits(
 
     # Same observation horizon as the route cards - see `show_obs` there.
     show_obs = etd_utc <= now + timedelta(hours=OBS_RELEVANT_HRS)
-    awc_hist = await _safe(awc.metar_history([aerodrome_ident], 6), None) if show_obs else {}
+    awc_hist = await _safe(awc.metar_history([aerodrome_ident], 6), None,
+                           fetch_health.HISTORY) if show_obs else {}
     history = (awc_hist or {}).get(aerodrome_ident, [])
 
     return _assess_endpoint(

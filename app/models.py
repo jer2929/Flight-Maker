@@ -22,6 +22,25 @@ class Source(str, Enum):
     NONE = "-"
 
 
+class DataHealth(BaseModel):
+    """Which upstream products failed to download while building this answer.
+
+    Every upstream call in the orchestrator degrades to an empty default when it
+    fails (``orchestrator._safe``), and an empty default is indistinguishable
+    from good news: a dropped Open-Meteo request produced an empty hourly
+    forecast, which produced an empty timeline, which the page rendered as "No
+    clearly favourable window in the next 48 h" - a confident claim about
+    weather nobody had actually fetched.
+
+    So the failures are collected (``services.fetch_health``) and ride back with
+    the assessment. ``failed`` holds pilot-readable product names, deduplicated -
+    one outage hits a dozen call sites and is still one thing that went wrong.
+    """
+
+    ok: bool = True
+    failed: list[str] = []
+
+
 class Airport(BaseModel):
     ident: str
     name: str
@@ -255,6 +274,31 @@ class WeatherSummary(BaseModel):
     window_gated: bool = False
 
 
+class ForecastHour(BaseModel):
+    """One raw model hour around a discovery candidate's flight.
+
+    The discovery card reports a single merged worst-case line, which answers
+    "can I go" but not "what is the weather actually doing" - so the HRDPS chip
+    opens onto these, a few hours either side of the leg. Deliberately *not*
+    ``HourCondition``: there is no verdict here, no runway solution and no TAF
+    overlay, just what the model says, which is exactly what the chip claims to
+    be showing.
+    """
+
+    time: str                   # "YYYY-MM-DDTHH:MM" UTC (see openmeteo.forecast)
+    in_window: bool = False     # you are airborne during this hour
+    wind_dir_true: Optional[float] = None
+    wind_dir_mag: Optional[float] = None
+    wind_kt: Optional[float] = None
+    gust_kt: Optional[float] = None
+    ceiling_agl_ft: Optional[float] = None
+    visibility_sm: Optional[float] = None
+    cloud_cover_pct: Optional[float] = None
+    precip: Optional[str] = None
+    precip_mm: Optional[float] = None
+    hazards: list[str] = []
+
+
 class AirportAssessment(BaseModel):
     airport: Airport
     distance_nm: float
@@ -287,6 +331,19 @@ class AirportAssessment(BaseModel):
     # between two runs of the same route.
     history_unavailable: bool = False
     nearby_station: Optional[NearbyStation] = None   # when this field has no METAR
+    # Discovery only: the span this card was assessed for. Each candidate leaves
+    # at the same ETD and arrives at its own ETA, so the card says both rather
+    # than making the pilot re-derive "when was I planning this again?" from the
+    # dropdown at the top of the page.
+    etd_utc: Optional[str] = None
+    eta_utc: Optional[str] = None
+    # Discovery only: raw model hours either side of the flight, for the HRDPS
+    # chip's popover. Empty everywhere else.
+    model_hours: list[ForecastHour] = []
+    # Which upstream products failed while building this card (circuits, which
+    # returns a bare AirportAssessment). Route/discovery carry it at the top
+    # level instead.
+    data_health: Optional[DataHealth] = None
 
 
 class HourCondition(BaseModel):
@@ -383,3 +440,6 @@ class RouteAssessment(BaseModel):
     enroute_airports: list[EnrouteAirport] = []
     enroute_airports_total: int = 0
     enroute_corridor_nm: float = 5.0
+    # Which upstream products failed while building this assessment. An empty
+    # timeline means "the forecast did not download", not "no good window".
+    data_health: Optional[DataHealth] = None

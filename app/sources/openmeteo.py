@@ -10,10 +10,8 @@ from __future__ import annotations
 import math
 from datetime import datetime
 
-import httpx
-
 from app.config import get_settings
-from app.sources import cache
+from app.sources import _http, cache
 
 # Pressure level -> approximate altitude (ft, standard atmosphere).
 PRESSURE_LEVELS_FT: dict[str, float] = {
@@ -88,10 +86,7 @@ async def forecast(lat: float, lon: float, days: int = 2) -> dict:
         "windspeed_unit": "kn",
         "timezone": "UTC",
     }
-    async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
-        resp = await client.get(settings.openmeteo_base, params=params)
-        resp.raise_for_status()
-        data = resp.json()
+    data = await _http.get_json(settings.openmeteo_base, params)
     cache.put(key, data, settings.openmeteo_cache_ttl)
     return data
 
@@ -123,10 +118,7 @@ async def forecast_many(points: list[tuple[float, float]], days: int = 2,
         "models": settings.openmeteo_model, "hourly": ",".join(vars_),
         "windspeed_unit": "kn", "timezone": "UTC",
     }
-    async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
-        resp = await client.get(settings.openmeteo_base, params=params)
-        resp.raise_for_status()
-        data = resp.json()
+    data = await _http.get_json(settings.openmeteo_base, params)
     out = data if isinstance(data, list) else [data]
     cache.put(key, out, settings.openmeteo_cache_ttl)
     return out
@@ -289,10 +281,9 @@ async def _ensemble_fetch(points: list[tuple[float, float]], days: int,
         "models": ",".join(models), "hourly": ",".join(_WIND_VARS),
         "windspeed_unit": "kn", "timezone": "UTC",
     }
-    async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
-        resp = await client.get(settings.openmeteo_base, params=params)
-        resp.raise_for_status()
-        data = resp.json()
+    # attempts=1: both callers below already retry this with a smaller model set,
+    # so a built-in retry would turn one blend into four requests.
+    data = await _http.get_json(settings.openmeteo_base, params, attempts=1)
     return data if isinstance(data, list) else [data]
 
 

@@ -6,12 +6,7 @@ Canadian reporting stations. Falls back gracefully when unreachable.
 """
 from __future__ import annotations
 
-import asyncio
-
-import httpx
-
-from app.config import get_settings
-from app.sources import cache
+from app.sources import _http, cache
 
 _METAR_URL = "https://aviationweather.gov/api/data/metar"
 _ISIGMET_URL = "https://aviationweather.gov/api/data/isigmet"
@@ -24,20 +19,11 @@ async def _get_json(url: str, params: dict, attempts: int = 2):
     """GET with one retry. This endpoint fails transiently often enough that a
     single slow response used to be the difference between a card showing METAR
     trends and showing nothing at all - with nothing to say which had happened.
+
+    The retry itself now lives in ``_http.get_json``, shared with the CFPS and
+    Open-Meteo clients, which flap the same way.
     """
-    last: Exception | None = None
-    for i in range(attempts):
-        try:
-            async with httpx.AsyncClient(timeout=get_settings().request_timeout,
-                                         headers=_HEADERS) as client:
-                resp = await client.get(url, params=params)
-                resp.raise_for_status()
-                return resp.json()
-        except Exception as exc:  # timeout, 5xx, 429, malformed JSON
-            last = exc
-            if i + 1 < attempts:
-                await asyncio.sleep(1.0)
-    raise last
+    return await _http.get_json(url, params, headers=_HEADERS, attempts=attempts)
 
 
 async def isigmets() -> list[dict]:

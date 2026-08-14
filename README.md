@@ -154,6 +154,27 @@ A card used to render only the failing limit rows - so a verdict that came from 
 threat stack, which is most MITIGATEs, arrived with a red badge and no explanation
 at all. A clean GO card stays silent.
 
+### Reading a discovery card for a future ETD
+
+A discovery card compresses a whole flight into one line - one wind, one ceiling,
+one visibility, worst case anywhere across the leg. That is the right input to a
+go/no-go and the wrong amount of information for planning a departure hours out,
+where the question is which way it is *moving*. So two things go on the card:
+
+- **Planned ETD beside every aerodrome name.** `Planned ETD 1800Z → ETA 1845Z`.
+  Every candidate leaves at the ETD you picked and arrives at its own ETA, so a
+  list of twenty aerodromes reads without scrolling back to the dropdown.
+  Omitted on a **Now** scan, where the answer is "now".
+- **The provenance chip opens.** The blue **TAF** and yellow **HRDPS** chips are
+  buttons - hover on a mouse, tap on a phone. TAF opens the full forecast split
+  into its FM/BECMG/TEMPO/PROB periods, with **the periods you fly through in
+  green**, exactly as the route endpoint cards draw it. HRDPS opens the model
+  hour by hour from three hours before your ETD to three hours after that
+  candidate's ETA, with the airborne hours green. The HRDPS view is the raw
+  model - no TAF overlay, no verdict - because that is what the chip claims to
+  be showing. `Observed` chips stay plain: the card already prints that METAR in
+  full underneath.
+
 ### Two-trigger threat stacking (general-audience)
 The decision card stacks "major threats": some are derived automatically from the
 forecast (actual IMC, convective, icing, strong/gusty winds, turbulence/shear),
@@ -247,6 +268,37 @@ gate. Where a field has no TAF of its own, the nearest reporting station's TAF i
 split and highlighted the same way. The raw TAF is kept underneath to cross-check
 against.
 
+### When a fetch fails
+
+Every upstream call degrades to an empty default rather than failing the whole
+assessment - one dead service should not cost you the rest of the card. The
+trap is that an empty default looks exactly like good news: a dropped HRDPS
+request gave an empty hourly forecast, which gave an empty timeline, which the
+route page printed as *"No clearly favourable window in the next 48 h"* - a
+confident claim about weather nobody had downloaded. Pulling the data again
+fixed it, which was the tell.
+
+So the app now does three things about it:
+
+1. **Retries once.** A single dropped connection or slow response is retried
+   inside the upstream clients (`app/sources/_http.py`) before it counts as a
+   failure at all.
+2. **Reports what is missing.** Anything that still fails is recorded by product
+   name (`app/services/fetch_health.py`) and rides back with the answer as
+   `data_health`. The page draws a red **"Failed to fetch some data"** banner
+   above the verdict, listing which products are missing, with a **Pull the data
+   again** button.
+3. **Refuses to state a finding it did not compute.** With no hourly forecast,
+   the best-windows and hour-by-hour sections say the forecast did not download -
+   explicitly *not* "no good window". A 500 or a dropped request on any of the
+   three weather endpoints raises the same banner rather than an unexplained
+   empty list.
+
+Two upstreams stay deliberately quiet, because they degrade into a *smaller*
+card rather than a wrong one: the multi-model wind blend (the single-model wind
+is still there behind it), and the GFA/radar panels, which have carried their
+own "couldn't be loaded" fallbacks since they were added.
+
 > **Known gaps:** SIGMET/AIRMET/PIREP are scoped by severity and altitude band
 > (see *Icing and turbulence*), but still applied whenever they're active, without
 > scoping to their own validity *times*. They're typically ≤6 h products, so the
@@ -321,9 +373,10 @@ app/
   config.py          settings + limits loader
   models.py          pydantic models
   orchestrator.py    assembles live data into route assessment / discovery
-  sources/           cfps, openmeteo (HRDPS), airports, cache
+  sources/           cfps, openmeteo (HRDPS), airports, cache,
+                     _http (one GET, retried once)
   services/          geo, runway, winds_aloft, weather (+TAF segments),
-                     timeline, evaluator
+                     timeline, evaluator, fetch_health (what failed to download)
 data/                limits.yaml + bundled airport/runway seed
 scripts/             refresh_airport_data.py (+ ensure_airport_data bootstrap)
 web/                 single-page dashboard (Route + Discovery tabs)
