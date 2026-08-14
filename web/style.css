@@ -219,6 +219,62 @@ select, input[type=text], .route-inputs input {
 .src.TAF { color: #8fbcff; border-color: var(--accent); }
 .src.HRDPS { color: #f5c451; border-color: var(--mitigate); }
 
+/* A chip you can open. Same pill as the plain one - it must still read as a
+   provenance label first - with a caret to say there is more behind it. */
+button.src-pop {
+  font: inherit; font-size: .68rem; background: transparent; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 3px;
+  /* Fingers are wider than 12px of chip. Padding grows the hit area without
+     growing the pill, so a phone can hit it without magnifying the row. */
+  padding: 3px 8px;
+}
+button.src-pop:hover, button.src-pop[aria-expanded="true"] { filter: brightness(1.25); }
+button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.src-pop-caret { font-size: .6em; opacity: .8; }
+
+/* The popover itself. On <body>, absolutely positioned by script, so it escapes
+   the card's rounded overflow and sits above the sticky header. */
+.wx-pop {
+  position: absolute; z-index: 2000; max-width: min(520px, calc(100vw - 16px));
+  max-height: min(70vh, 560px); overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; box-shadow: 0 12px 32px rgba(0,0,0,.5);
+}
+.wx-pop-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.wx-pop-head .hint { flex: 1 1 auto; font-size: .76rem; }
+.wx-pop-x {
+  background: none; border: 0; color: var(--muted); cursor: pointer;
+  font-size: 1.1rem; line-height: 1; padding: 0 2px;
+}
+.wx-pop-x:hover { color: var(--ink); }
+.wx-pop-foot { margin-top: 8px; font-size: .74rem; }
+.wx-pop details.taf { margin: 0; }
+
+/* Hourly model rows. Same green as the TAF's in-window periods, because it means
+   the same thing: you are airborne during this. */
+.wx-hours { display: grid; gap: 2px; font-size: .78rem; }
+.wx-h {
+  display: grid; grid-template-columns: 46px 92px 76px 62px 1fr;
+  gap: 6px; padding: 3px 5px; border-radius: 5px; align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+.wx-h-hd { color: var(--muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; }
+.wx-h.in { background: rgba(31,138,76,.16); border-left: 3px solid var(--go); padding-left: 5px; }
+.wx-h.in span { color: var(--go-ink); }
+.wx-h-x { color: var(--muted); }
+@media (max-width: 560px) {
+  .wx-h { grid-template-columns: 42px 84px 68px 54px; }
+  .wx-h-x { grid-column: 1 / -1; padding-left: 42px; }
+}
+
+/* The ETD this card was assessed for, beside the aerodrome it applies to. */
+.planned-etd {
+  margin-left: 8px; font-size: .74rem; font-weight: 600; white-space: nowrap;
+  color: #8fbcff; border: 1px solid var(--accent); border-radius: 999px;
+  padding: 1px 8px; vertical-align: middle;
+}
+.planned-etd .pe-arrow { opacity: .7; }
+
 /* big route verdict banner */
 .verdict-banner { max-width: 1000px; margin: 14px auto; padding: 14px 18px; border-radius: 12px; font-weight: 700; }
 .verdict-banner.GO { background: rgba(31,138,76,.18); border: 1px solid var(--go); color: #6ee7a0; }
@@ -354,6 +410,29 @@ details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem
    nothing at all. */
 .trends-na { margin: 8px 0; padding: 6px 10px; font-size: .8rem; color: var(--muted);
              border-left: 3px solid var(--line); border-radius: 6px; }
+
+/* An upstream that did not answer at all. Loud on purpose: `.trends-na` is muted
+   because a missing trend costs you a nicety, while a missing forecast makes the
+   whole page quietly wrong - it renders as clear skies and an empty timeline.
+   This sits above the verdict and is meant to stop you before you read it. */
+.fetch-fail {
+  margin: 12px 0; padding: 12px 14px; border-radius: 10px;
+  border: 1px solid var(--nogo); border-left: 6px solid var(--nogo);
+  background: rgba(192, 57, 43, .12);
+}
+.fetch-fail-title { font-weight: 700; color: #ff9b8f; margin-bottom: 4px; }
+.fetch-fail p { margin: 0; font-size: .88rem; }
+.fetch-fail .reasons { margin: 6px 0 0; font-size: .86rem; }
+.fetch-fail-detail { color: var(--muted); font-family: ui-monospace, monospace; font-size: .8rem; }
+.fetch-retry {
+  margin-top: 10px; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--nogo); background: var(--nogo); color: #fff;
+  font-size: .88rem; font-weight: 600;
+}
+.fetch-retry:hover { filter: brightness(1.12); }
+/* The in-place version, where a section would otherwise render an empty state
+   that reads as a finding ("no favourable window") rather than a missing pull. */
+.empty.fetch-empty { color: #ff9b8f; }
 .age.stale { color: #ff9b8f; font-weight: 600; }
 .age.fresh { color: #6fcf97; font-weight: 600; }
 details.mhist { margin: 6px 0; font-size: .82rem; }
@@ -394,6 +473,10 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 
 /* SVG logo */
 .brand { font-size: 0; line-height: 1; }
+/* The logo is a link home (My Minimums), so it looks and focuses like one. */
+.brand-home { display: block; cursor: pointer; border-radius: 6px; text-decoration: none; }
+.brand-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.brand-home:hover .logo-word { fill: #ffffff; }
 .logo { display: block; height: 44px; width: auto; overflow: visible; }
 .logo-word { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; font-size: 38px; font-weight: 700; fill: var(--ink); }
 .logo-bar { stroke: var(--muted); stroke-width: 2; fill: none; }

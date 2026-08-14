@@ -9,10 +9,8 @@ import asyncio
 import json
 import re
 
-import httpx
-
 from app.config import get_settings
-from app.sources import cache
+from app.sources import _http, cache
 
 _NOTAM_NUM = re.compile(r"\b([A-Z]\d{3,4}/\d{2})\b")
 
@@ -54,10 +52,8 @@ async def _fetch(alpha: str, sites: list[str]) -> list[dict]:
     settings = get_settings()
     params = [("alpha", alpha)] + [("site", s) for s in sites]
     async with _limiter:
-        async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
-            resp = await client.get(settings.cfps_base, params=params)
-            resp.raise_for_status()
-            data = resp.json().get("data", [])
+        body = await _http.get_json(settings.cfps_base, params)
+    data = body.get("data", []) if isinstance(body, dict) else []
     cache.put(key, data, settings.cfps_cache_ttl)
     return data
 
@@ -203,10 +199,8 @@ async def _area_texts(alpha: str, point: tuple[float, float] | None) -> list[str
     if point:
         params.append(("point", f"{point[0]},{point[1]}"))
     async with _limiter:
-        async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
-            resp = await client.get(settings.cfps_base, params=params)
-            resp.raise_for_status()
-            data = resp.json().get("data", [])
+        body = await _http.get_json(settings.cfps_base, params)
+    data = body.get("data", []) if isinstance(body, dict) else []
     texts = [_text(i) for i in data]
     cache.put(key, texts, settings.cfps_cache_ttl)
     return texts
@@ -302,10 +296,7 @@ async def gfa(site: str, debug: bool = False) -> dict:
         if cached is not None:
             return cached
     params = [("site", site), ("image", "GFA/CLDWX"), ("image", "GFA/TURBC")]
-    async with httpx.AsyncClient(timeout=settings.request_timeout) as client:
-        resp = await client.get(settings.cfps_base, params=params)
-        resp.raise_for_status()
-        raw = resp.json()
+    raw = await _http.get_json(settings.cfps_base, params)
     data = raw.get("data", []) if isinstance(raw, dict) else []
     region = None
     for it in data:

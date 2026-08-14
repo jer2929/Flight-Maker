@@ -222,7 +222,18 @@ function buildAircraftPicker() {
 
 // ---------- Init ----------
 async function init() {
-  CONFIG = await fetch("/api/config").then((r) => r.json());
+  // Everything below is built from CONFIG - threats, sliders, default limits - so
+  // a failed config fetch used to leave a shell with no controls and no
+  // explanation. Say what happened and offer the retry.
+  try {
+    const res = await fetch("/api/config");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    CONFIG = await res.json();
+  } catch (e) {
+    setHealth("discovery-data-health", fetchFailedBanner(String(e), "init"));
+    setHealth("route-data-health", fetchFailedBanner(String(e), "init"));
+    return;
+  }
   $("#radius").value = CONFIG.default_radius_nm;
   $("#radius").max = CONFIG.max_radius_nm;
 
@@ -392,6 +403,13 @@ const etdParam = (id = "#etd") => {
   return !v || v === "now" ? {} : { etd: v };
 };
 
+// Whether an ETD control is still on "Now". Drives the copy that only makes
+// sense once you have planned a departure ("Planned ETD 1800Z").
+const isNowEtd = (id = "#etd") => {
+  const v = ($(id) || {}).value;
+  return !v || v === "now";
+};
+
 // "Find flights now" is a claim about the present tense. Once you have picked a
 // departure time it is answering for then, not now.
 const discoveryBtnLabel = () => {
@@ -449,6 +467,16 @@ function wire() {
     if (el) el.addEventListener("change", rederiveDayNight);
   }
   $$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
+  // The logo is the way home. My Minimums is where the app opens and where the
+  // profile every verdict is gated against lives, so that is "home".
+  const brand = $("#brand-home");
+  if (brand) {
+    brand.addEventListener("click", (e) => { e.preventDefault(); switchTab("settings"); });
+    brand.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); switchTab("settings"); }
+    });
+  }
+  wireWxPopovers();
   $("#run-route").addEventListener("click", runRoute);
   $("#run-discovery").addEventListener("click", runDiscovery);
   $("#save-minimums").addEventListener("click", saveMinimums);
@@ -577,6 +605,7 @@ async function refreshAutoDayNight() {
 }
 
 function switchTab(name) {
+  closeWxPop();   // it lives on <body>, so it would otherwise outlive its card
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   $("#tab-route").classList.toggle("hidden", name !== "route");
   $("#tab-discovery").classList.toggle("hidden", name !== "discovery");
@@ -887,13 +916,18 @@ async function runRoute() {
   try {
     const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam(), ...tasParam(), ...etdParam() });
     const res = await fetch(`/api/route?${params}`);
-    if (!res.ok) { $("#route-verdict").innerHTML = `<div class="empty">Unknown departure or destination.</div>`; return; }
+    // A 404 means those idents aren't in the dataset - a real answer. Anything
+    // else (500, gateway timeout, dropped connection) is a failed fetch, and
+    // reporting it as "unknown departure" sent the pilot to fix a typo that was
+    // never there.
+    if (res.status === 404) { $("#route-verdict").innerHTML = `<div class="empty">Unknown departure or destination.</div>`; return; }
+    if (!res.ok) { setHealth("route-data-health", fetchFailedBanner(`HTTP ${res.status}`, "runRoute")); return; }
     const data = await res.json();
     renderRoute(data);
     stampDataTime();
     loadGfa(dep, dest, (data.window || {}).etd_utc);
   } catch (e) {
-    $("#route-verdict").innerHTML = `<div class="empty">Error: ${e}</div>`;
+    setHealth("route-data-health", fetchFailedBanner(String(e), "runRoute"));
   } finally { btn.disabled = false; btn.textContent = "Assess route"; }
 }
 
@@ -904,17 +938,19 @@ async function runCircuits() {
   try {
     const params = new URLSearchParams({ aerodrome, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam(), ...etdParam() });
     const res = await fetch(`/api/circuits?${params}`);
-    if (!res.ok) { $("#route-verdict").innerHTML = `<div class="empty">Unknown aerodrome.</div>`; return; }
+    if (res.status === 404) { $("#route-verdict").innerHTML = `<div class="empty">Unknown aerodrome.</div>`; return; }
+    if (!res.ok) { setHealth("route-data-health", fetchFailedBanner(`HTTP ${res.status}`, "runRoute")); return; }
     renderCircuits(await res.json());
     stampDataTime();
   } catch (e) {
-    $("#route-verdict").innerHTML = `<div class="empty">Error: ${e}</div>`;
+    setHealth("route-data-health", fetchFailedBanner(String(e), "runRoute"));
   } finally { btn.disabled = false; btn.textContent = "Assess circuits"; }
 }
 
 function renderCircuits(r) {
   const v = r.verdict;
   const frLabel = currentFlightRules() === "ifr" ? " · IFR" : " · VFR";
+  setHealth("route-data-health", dataHealthBanner(r.data_health, "runRoute"));
   $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.airport.ident} circuits: ${v} now${frLabel}</div>`;
   $("#route-checklist").innerHTML = checklistGroups(r, "(circuit minimums)");
   $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
@@ -934,7 +970,7 @@ function clearRoute() {
   // route-self-check is a standing pre-check rendered on load - never cleared here,
   // so the pilot's ticked items survive a route assessment.
   if (typeof destroyRadar === "function") destroyRadar();  // tear down any live Leaflet map
-  ["route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-gfa", "route-radar", "route-endpoints", "route-enroute", "route-windows", "route-timeline"]
+  ["route-data-health", "route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-gfa", "route-radar", "route-endpoints", "route-enroute", "route-windows", "route-timeline"]
     .forEach((id) => ($("#" + id).innerHTML = ""));
 }
 
@@ -945,6 +981,7 @@ function renderRoute(r) {
   const when = win && !win.is_now ? `at ${zHM(win.etd_utc)}` : "now";
   const notes = (win && win.notes.length)
     ? `<small>${win.notes.map(escapeHtml).join(" · ")}</small>` : "";
+  setHealth("route-data-health", dataHealthBanner(r.data_health, "runRoute"));
   $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.departure.airport.ident} → ${r.destination.airport.ident}: ${v} ${when}${frLabel}${notes}</div>`;
   $("#route-checklist").innerHTML = checklist(r);
   $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
@@ -970,8 +1007,13 @@ function renderRoute(r) {
   if (r.best_windows.length) {
     $("#route-windows").innerHTML = `<div class="timeline-wrap"><h3>Best windows (next ${CONFIG.timeline_hours} h) - wind, ceiling &amp; visibility</h3>` +
       r.best_windows.map((w) => `<div class="window-card">🟢 <strong>${fmtRange(w.start, w.end)}</strong> - ${w.summary}</div>`).join("") + `</div>`;
-  } else {
+  } else if ((r.timeline || []).length) {
     $("#route-windows").innerHTML = `<div class="timeline-wrap"><div class="empty">No clearly favourable window in the next ${CONFIG.timeline_hours} h.</div></div>`;
+  } else {
+    // No timeline means no hourly forecast came back - "no favourable window" is
+    // a statement about the weather, and there is no weather here to make it
+    // about. This is the sentence that used to be wrong.
+    $("#route-windows").innerHTML = `<div class="timeline-wrap"><div class="empty fetch-empty">⚠ Best windows unavailable - the hourly forecast did not download, so none could be searched for. This is <strong>not</strong> "no good window": pull the data again.</div></div>`;
   }
   renderTimeline(r.timeline, r.best_windows);
 }
@@ -1308,6 +1350,52 @@ function enrouteRow(e) {
     </div></div>`;
 }
 
+// ---------- "Some of this didn't download" ----------
+//
+// Every upstream call degrades to an empty default rather than failing the whole
+// assessment, which is right - but an empty default renders exactly like good
+// news. A dropped HRDPS request produced an empty timeline, which this page
+// printed as "No clearly favourable window in the next 48 h": a confident claim
+// about weather nobody had fetched. Pulling the data again fixed it, which is
+// the tell. So the backend now reports what failed (`data_health`) and this
+// draws it, loudly, above the verdict - with the button that fixes it.
+//
+// `retry` is the name of the global function to re-run, not the function itself:
+// the banner is built as an HTML string like everything else on the page, and
+// the click is wired through `window.<name>`.
+function dataHealthBanner(health, retry) {
+  if (!health || health.ok !== false) return "";
+  const failed = health.failed || [];
+  const list = failed.length
+    ? `<ul class="reasons">${failed.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>`
+    : "";
+  return `<div class="fetch-fail" role="alert">
+    <div class="fetch-fail-title">⚠ Failed to fetch some data</div>
+    <p>These did not download, so anything below was assessed without them - and
+       a missing forecast looks the same on the page as a clear sky. Pull the
+       data again before you use this.</p>
+    ${list}
+    <button type="button" class="fetch-retry" onclick="${retry}()">Pull the data again</button>
+  </div>`;
+}
+
+// The same banner for a request that never landed at all - a dropped connection,
+// a 500, a body that wasn't JSON. `detail` is the browser's own reason, kept
+// because "Failed to fetch" and "500" send you to different places.
+function fetchFailedBanner(detail, retry) {
+  return `<div class="fetch-fail" role="alert">
+    <div class="fetch-fail-title">⚠ Failed to fetch</div>
+    <p>The request did not complete, so nothing below is current.
+       ${detail ? `<span class="fetch-fail-detail">${escapeHtml(detail)}</span>` : ""}</p>
+    <button type="button" class="fetch-retry" onclick="${retry}()">Pull the data again</button>
+  </div>`;
+}
+
+function setHealth(hostId, html) {
+  const el = $("#" + hostId);
+  if (el) el.innerHTML = html;
+}
+
 function trendsBlock(a) {
   const t = a.trends || [];
   // An empty panel used to mean both "nothing is trending" and "the observation
@@ -1423,7 +1511,12 @@ function notamItems(a) {
 window.toggleNotams = (id) => $("#notams-" + id).classList.toggle("hidden");
 
 function renderTimeline(timeline, windows) {
-  if (!timeline.length) { $("#route-timeline").innerHTML = ""; return; }
+  // An empty grid used to be drawn as no grid at all, silently - the same blank
+  // space you'd get from a page that simply hadn't got there yet. Say why.
+  if (!timeline.length) {
+    $("#route-timeline").innerHTML = `<div class="timeline-wrap"><div class="empty fetch-empty">⚠ Hour-by-hour forecast unavailable - the HRDPS data did not download. Pull the data again.</div></div>`;
+    return;
+  }
   const inWindow = (t) => windows.some((w) => t >= w.start && t <= w.end);
   const byDay = {};
   timeline.forEach((h) => { (byDay[h.time.slice(0, 10)] ||= []).push(h); });
@@ -1473,6 +1566,8 @@ function renderTimeline(timeline, windows) {
 async function runDiscovery() {
   const btn = $("#run-discovery"); btn.disabled = true; btn.textContent = "Checking…";
   $("#discovery-results").innerHTML = "";
+  setHealth("discovery-data-health", "");
+  closeWxPop();
   try {
     const p = {
       radius: $("#radius").value, mode: currentMode(), threats: threatsParam(), base: baseIdent(),
@@ -1485,10 +1580,25 @@ async function runDiscovery() {
     if (t > 0) p.max_time_min = t;
     Object.assign(p, prefsParam(), tasParam(), etdParam("#d-etd"));
     const params = new URLSearchParams(p);
-    const data = await fetch(`/api/suggest?${params}`).then((r) => r.json());
-    $("#discovery-results").innerHTML = data.length ? data.map(discoveryCard).join("") : `<p class="empty">No airports match within radius + filters.</p>`;
+    const res = await fetch(`/api/suggest?${params}`);
+    // This used to go straight to .json(): a 500 surfaced as "Error: SyntaxError"
+    // in the results list, which reads like a bug in the app rather than a
+    // failed download you can retry.
+    if (!res.ok) { setHealth("discovery-data-health", fetchFailedBanner(`HTTP ${res.status}`, "runDiscovery")); return; }
+    const payload = await res.json();
+    const data = payload.results || [];
+    setHealth("discovery-data-health", dataHealthBanner(payload.data_health, "runDiscovery"));
+    // Keyed by ident so the weather popovers can read the assessment itself,
+    // rather than the card having to carry a copy of it in an attribute.
+    DISCOVERY_BY_IDENT = Object.fromEntries(data.map((a) => [a.airport.ident, a]));
+    // "Nothing matched your filters" is a real answer; "nothing came back
+    // because the forecast failed" is not, and the banner above says which.
+    $("#discovery-results").innerHTML = data.length
+      ? data.map(discoveryCard).join("")
+      : (payload.data_health && payload.data_health.ok === false
+          ? "" : `<p class="empty">No airports match within radius + filters.</p>`);
     stampDataTime();
-  } catch (e) { $("#discovery-results").innerHTML = `<p class="empty">Error: ${e}</p>`; }
+  } catch (e) { setHealth("discovery-data-health", fetchFailedBanner(String(e), "runDiscovery")); }
   finally { btn.disabled = false; btn.textContent = discoveryBtnLabel(); }
 }
 
@@ -1579,15 +1689,25 @@ function whyBlock(a) {
   return `<div class="why ${cls(a.verdict)}"><div class="why-title">${heading}</div>${parts.join("")}</div>`;
 }
 
+// The ETD you picked, beside the airport it applies to. Every candidate leaves
+// at the same ETD and arrives at its own ETA - so the card carries both, and you
+// can read a list of twenty and see when each one is for without scrolling back
+// up to the dropdown. Omitted on a "Now" scan, where the answer is "now".
+function plannedEtd(a) {
+  if (!a.etd_utc || isNowEtd("#d-etd")) return "";
+  const eta = a.eta_utc ? ` <span class="pe-arrow">→</span> ETA ${zHM(a.eta_utc)}` : "";
+  return `<span class="planned-etd" title="Assessed for this window - your ETD, and this aerodrome's own ETA">Planned ETD ${zHM(a.etd_utc)}${eta}</span>`;
+}
+
 function discoveryCard(a) {
   const w = a.weather || {}, rw = a.best_runway;
   return `<div class="card ${cls(a.verdict)}">
-    <div class="card-head"><h3>${a.airport.ident} · ${a.airport.name}${a.access_note ? ` <span class="ppr">${a.access_note}</span>` : ""}</h3><span class="badge ${cls(a.verdict)}">${a.verdict}</span></div>
+    <div class="card-head"><h3>${a.airport.ident} · ${a.airport.name}${a.access_note ? ` <span class="ppr">${a.access_note}</span>` : ""}${plannedEtd(a)}</h3><span class="badge ${cls(a.verdict)}">${a.verdict}</span></div>
     ${whyBlock(a)}
     <div class="meta">
       <span>${a.distance_nm} nm · ${dirM(null, a.bearing_true)}</span>
       <span>⏱ ${fmtHrMin(a.flight_time_hr)}</span>
-      <span>${srcChip(w.source)}</span>
+      <span>${srcChip(w.source, a)}</span>
       <span>💨 ${windStr(w)}</span>
       ${ceilChip(w)}
       ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
@@ -1600,6 +1720,181 @@ function discoveryCard(a) {
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
   </div>`;
 }
+
+// ---------- Discovery: the forecast behind the chip ----------
+//
+// A discovery card compresses a whole flight window into one line - one wind,
+// one ceiling, one visibility, worst case across the leg. That is the right
+// input to a go/no-go decision and the wrong amount of information for planning
+// a departure four hours out, where what you want to know is which way it is
+// moving. So the provenance chip opens onto its own source: the blue TAF chip
+// shows the TAF split into its periods, the yellow HRDPS chip the model hour by
+// hour. Green means the same thing in both, and the same thing it means on the
+// route page: you are airborne during this.
+//
+// Hover on a pointer device, tap on a touch one - one element, reused, appended
+// to <body> so it can escape the card's overflow and stacking context.
+let DISCOVERY_BY_IDENT = {};
+// `pinned` is what a click buys you on a mouse: hover already opened the thing,
+// so the click has to mean "keep it open while I read it" rather than toggling
+// it shut the instant the pointer that opened it arrives.
+let WX_POP = { el: null, anchor: null, pinned: false };
+const CAN_HOVER = () => window.matchMedia && window.matchMedia("(hover: hover)").matches;
+
+function wxPopEl() {
+  if (!WX_POP.el) {
+    const el = document.createElement("div");
+    el.className = "wx-pop";
+    el.setAttribute("role", "dialog");
+    el.hidden = true;
+    // Clicks inside are for reading, not for dismissing.
+    el.addEventListener("click", (e) => e.stopPropagation());
+    document.body.appendChild(el);
+    WX_POP.el = el;
+  }
+  return WX_POP.el;
+}
+
+function closeWxPop() {
+  if (!WX_POP.el || WX_POP.el.hidden) return;
+  WX_POP.el.hidden = true;
+  if (WX_POP.anchor) WX_POP.anchor.setAttribute("aria-expanded", "false");
+  WX_POP.anchor = null;
+  WX_POP.pinned = false;
+}
+
+function openWxPop(anchor) {
+  const a = DISCOVERY_BY_IDENT[anchor.dataset.pop];
+  if (!a) return;
+  const el = wxPopEl();
+  el.innerHTML = anchor.dataset.popKind === "TAF" ? tafPopBody(a) : modelPopBody(a);
+  el.hidden = false;
+  if (WX_POP.anchor && WX_POP.anchor !== anchor) WX_POP.anchor.setAttribute("aria-expanded", "false");
+  WX_POP.anchor = anchor;
+  anchor.setAttribute("aria-expanded", "true");
+  positionWxPop(anchor, el);
+}
+
+// Below the chip by default, flipped above when it would run off the bottom, and
+// clamped to the viewport horizontally - on a phone that makes it a near
+// full-width sheet rather than something hanging off the right edge.
+function positionWxPop(anchor, el) {
+  const margin = 8;
+  el.style.left = "0px"; el.style.top = "0px";   // measure unconstrained
+  const r = anchor.getBoundingClientRect();
+  const box = el.getBoundingClientRect();
+  const maxLeft = window.innerWidth - box.width - margin;
+  const left = Math.max(margin, Math.min(r.left, maxLeft));
+  const below = r.bottom + margin;
+  const flip = below + box.height > window.innerHeight && r.top - box.height - margin > 0;
+  const top = flip ? r.top - box.height - margin : below;
+  el.style.left = `${left + window.scrollX}px`;
+  el.style.top = `${top + window.scrollY}px`;
+}
+
+// The TAF, split into the periods this candidate's flight passes through. Reuses
+// `tafBlock`, so a discovery popover and a route endpoint card render the same
+// TAF the same way - including the green in-window rows and the amber PROB edge.
+function tafPopBody(a) {
+  const w = a.weather || {};
+  return `<div class="wx-pop-head">
+      <strong>TAF ${escapeHtml(a.airport.ident)}</strong>
+      <span class="hint">${w.taf_valid_from ? `valid ${zHM(w.taf_valid_from)}-${zHM(w.taf_valid_to)}` : ""}</span>
+      ${wxPopClose()}
+    </div>
+    ${tafBlock(w, wxPopWindowLabel(a))}`;
+}
+
+// The model, hour by hour, either side of the leg. Deliberately raw HRDPS with
+// no TAF laid over it and no verdict attached: the chip says HRDPS, so this is
+// what HRDPS says. The hours you are airborne for are green.
+function modelPopBody(a) {
+  const hours = a.model_hours || [];
+  const rows = hours.map((h) => {
+    const gust = (h.gust_kt != null && h.wind_kt != null && h.gust_kt > h.wind_kt)
+      ? "G" + Math.round(h.gust_kt) : "";
+    const wind = h.wind_kt == null ? "-"
+      : `${windDir(h.wind_dir_mag, h.wind_dir_true)}/${Math.round(h.wind_kt)}${gust}`;
+    const extra = [precipText(h), (h.hazards || []).join(", ")].filter(Boolean).join(" · ");
+    return `<div class="wx-h ${h.in_window ? "in" : ""}">
+      <span class="wx-h-t">${escapeHtml(h.time.slice(11, 16))}Z</span>
+      <span class="wx-h-w">${wind}</span>
+      <span class="wx-h-c">${h.ceiling_agl_ft != null ? fmtCeil(h.ceiling_agl_ft) : cloudWord(h)}</span>
+      <span class="wx-h-v">${h.visibility_sm != null ? h.visibility_sm + " SM" : "-"}</span>
+      <span class="wx-h-x">${escapeHtml(extra)}</span>
+    </div>`;
+  }).join("");
+  return `<div class="wx-pop-head">
+      <strong>HRDPS ${escapeHtml(a.airport.ident)}</strong>
+      <span class="hint">${escapeHtml(wxPopWindowLabel(a))}</span>
+      ${wxPopClose()}
+    </div>
+    <div class="wx-hours">
+      <div class="wx-h wx-h-hd"><span>Zulu</span><span>Wind</span><span>Ceiling</span><span>Vis</span><span></span></div>
+      ${rows || `<div class="empty">No model hours available.</div>`}
+    </div>
+    <div class="hint wx-pop-foot">Green = airborne during this hour. Model only -
+      no TAF overlay, no verdict. Hours are Zulu.</div>`;
+}
+
+// No ceiling reported is not the same as no cloud, so say which the model means.
+function cloudWord(h) {
+  if (h.cloud_cover_pct == null) return "-";
+  return h.cloud_cover_pct < 55 ? "no ceiling" : "-";
+}
+
+// The span the green marks, named the same way the route cards name it.
+function wxPopWindowLabel(a) {
+  if (!a.etd_utc) return "your flight";
+  return `your flight (${zHM(a.etd_utc)}-${zHM(a.eta_utc)})`;
+}
+
+const wxPopClose = () =>
+  `<button type="button" class="wx-pop-x" onclick="closeWxPop()" aria-label="Close">×</button>`;
+
+// Delegated once, on the results container - the cards are re-rendered from
+// scratch on every scan, so per-chip listeners would have to be re-bound each
+// time and would leak the ones belonging to cards that no longer exist.
+function wireWxPopovers() {
+  const host = $("#discovery-results");
+  if (!host) return;
+  const chipOf = (e) => e.target.closest && e.target.closest(".src-pop");
+  host.addEventListener("click", (e) => {
+    const chip = chipOf(e);
+    if (!chip) return;
+    e.preventDefault(); e.stopPropagation();
+    // Already pinned on this chip → the click means "I'm done". Otherwise open
+    // and pin, which on a mouse turns the hover preview into something that
+    // stays put while you read it, and on a touch screen is the whole gesture.
+    if (WX_POP.pinned && WX_POP.anchor === chip) { closeWxPop(); return; }
+    openWxPop(chip);
+    WX_POP.pinned = true;
+  });
+  // Pointer devices get a preview on hover; touch devices report no hover and
+  // use the tap above, so this never fights the click on a phone.
+  host.addEventListener("mouseover", (e) => {
+    const chip = chipOf(e);
+    if (chip && CAN_HOVER() && !WX_POP.pinned) openWxPop(chip);
+  });
+  host.addEventListener("mouseout", (e) => {
+    const chip = chipOf(e);
+    if (!chip || !CAN_HOVER() || WX_POP.pinned) return;
+    // Moving from the chip into the popover itself must not close it.
+    const to = e.relatedTarget;
+    if (to && WX_POP.el && WX_POP.el.contains(to)) return;
+    closeWxPop();
+  });
+  host.addEventListener("focusin", (e) => { const c = chipOf(e); if (c) openWxPop(c); });
+  document.addEventListener("click", closeWxPop);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeWxPop(); });
+  // Anchored to a chip that moves with the page - reposition rather than let it
+  // drift away from what it is describing.
+  window.addEventListener("scroll", () => {
+    if (WX_POP.anchor && WX_POP.el && !WX_POP.el.hidden) positionWxPop(WX_POP.anchor, WX_POP.el);
+  }, { passive: true });
+  window.addEventListener("resize", closeWxPop);
+}
+window.closeWxPop = closeWxPop;
 
 // ---------- My Minimums & profile (settings) ----------
 const WX_LABELS = {
@@ -2025,10 +2320,27 @@ function fmtHrMin(hr) {
   const total = Math.round(hr * 60), h = Math.floor(total / 60), m = total % 60;
   return h ? `${h} h ${m} min` : `${m} min`;
 }
-function srcChip(source) {
+// The provenance chip. With a discovery assessment passed in, the TAF (blue) and
+// HRDPS (yellow) chips become buttons that open the forecast behind the value -
+// a card reports one merged worst-case line, and "what is the weather actually
+// doing around my ETD" is the next question it raises. Observed (a METAR, which
+// the card already prints in full at the bottom) stays a plain chip.
+function srcChip(source, a) {
   if (!source || source === "-") return `<span class="src">-</span>`;
   const k = { Observed: "OBSERVED", TAF: "TAF", HRDPS: "HRDPS" }[source] || "";
+  if (a && (k === "TAF" || k === "HRDPS") && wxPopHas(a, k)) {
+    return `<button type="button" class="src ${k} src-pop" data-pop="${escapeHtml(a.airport.ident)}" data-pop-kind="${k}"
+      aria-haspopup="dialog" aria-expanded="false"
+      title="${k === "TAF" ? "See the full TAF" : "See the hourly HRDPS forecast"}">${source}<span class="src-pop-caret" aria-hidden="true">▾</span></button>`;
+  }
   return `<span class="src ${k}">${source}</span>`;
+}
+
+// Whether there is anything behind the chip worth opening. A chip that opens an
+// empty box is worse than one that doesn't open.
+function wxPopHas(a, kind) {
+  const w = a.weather || {};
+  return kind === "TAF" ? !!w.raw_taf : !!(a.model_hours || []).length;
 }
 // A timeline range, in Zulu. The timeline's own times are UTC without a "Z"
 // suffix (Open-Meteo is queried with timezone=UTC), so they are parsed as UTC
