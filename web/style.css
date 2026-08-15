@@ -233,21 +233,41 @@ select, input[type=text], .route-inputs input {
 /* At-a-glance decision checklist */
 .checklist { display: grid; gap: var(--sp-5); }
 .cl-group h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-lg); display: flex; align-items: center; gap: var(--sp-2); }
+/* One rule row: mark | rule | the actual condition | your limit.
+   Every track is a length or an fr - none may be `auto`. That is the whole fix:
+   each .chk is its own grid container, and an auto track sizes to its own row's
+   content, so every row stole a different amount from the 1fr and no two rows
+   shared a column edge. With fixed + fr tracks, any .chk in a container of the
+   same width resolves the same edges - including the rows inside
+   <details class="cl-more">, whose content box is exactly as wide as .cl-group.
+   (Subgrid cannot do this job: the .cl-group -> <details> -> .chk chain is cut
+   by the ::details-content box the browser inserts.)
+   minmax(0, ...) is required - the default min-width:auto on a grid item lets one
+   long unbreakable token blow a track out and re-introduce the per-row variance. */
 .chk {
-  display: grid; grid-template-columns: 20px 1fr auto auto; gap: 10px; align-items: baseline;
-  padding: 5px 8px; border-radius: var(--r-sm); font-size: .88rem; border-left: 3px solid transparent;
+  display: grid; grid-template-columns: var(--chk-cols);
+  gap: 2px var(--sp-3); align-items: baseline;
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--row-pad-x);
+  border-left: var(--state-bar) solid transparent;
+  border-radius: var(--r-sm); font-size: var(--fs-md);
 }
-.chk:nth-child(even) { background: rgba(255,255,255,.02); }
 .chk .mark { font-weight: 700; text-align: center; }
-.chk .lbl { color: var(--ink); }
-.chk .act { color: var(--muted); text-align: right; }
-.chk .lim { color: var(--muted); font-size: .8rem; min-width: 86px; text-align: right; }
+.chk .lbl { color: var(--ink); overflow-wrap: break-word; }
+.chk .act { color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: break-word; }
+.chk .lim { color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+/* Provenance, on a second line under the value it annotates rather than crammed
+   into the same cell - which is what made the value column's content swing by 30
+   characters row to row. Starts at column 3 so number and source read as one
+   cluster and the rule name keeps a clean column of its own. */
+.chk .sub { grid-column: 3 / -1; color: var(--muted); font-size: var(--fs-xs); }
 .chk.pass { border-left-color: var(--go); } .chk.pass .mark { color: var(--go-ink); }
-.chk.fail { border-left-color: var(--nogo); background: rgba(192,57,43,.08); } .chk.fail .mark { color: var(--nogo-ink); }
-.chk.fail .lbl { font-weight: 600; }
+.chk.fail { border-left-color: var(--nogo); background: rgba(192,57,43,.10); } .chk.fail .mark { color: var(--nogo-ink); }
 .chk.advisory { border-left-color: var(--mitigate); } .chk.advisory .mark { color: var(--mit-ink); }
 .chk.na { opacity: .5; }
 .chk a { color: var(--accent); }
+/* The settings readout reuses this chassis, but its right column holds
+   "default 12,000 ft" rather than "≤ 9 kt". One token, one override. */
+#minimums-readout { --chk-lim: 10rem; }
 
 /* NOTAM expansion */
 .notam-btn { cursor: pointer; color: var(--accent); }
@@ -408,9 +428,12 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
    set the control's width - between them, choosing an ETD redrew the whole
    thing. Only the active half moves now. */
 
-/* checklist location + source chips */
-.chk .act .loc { color: var(--taf-ink); }
-.chk .act .src-mini { font-size: .68rem; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 0 5px; }
+/* Checklist provenance, on the .sub line. Deliberately quiet: the pill border
+   made a source label as loud as the number it annotates, and it reads as a
+   control rather than the footnote it is. */
+.chk .sub .loc { color: var(--taf-ink); }
+.chk .sub .src-mini { color: var(--muted); border: 0; padding: 0; font-size: inherit; letter-spacing: .02em; }
+.chk .sub .src-mini[title] { cursor: help; }
 
 /* runway lines + components */
 .rwy-lines { font-size: .86rem; margin: 8px 0; display: grid; gap: 3px; }
@@ -744,13 +767,17 @@ details.enroute > summary { cursor: pointer; color: var(--accent); font-size: .9
 .er-head { font-size: .9rem; }
 .er-meta { color: var(--muted); font-size: .82rem; display: flex; gap: 14px; flex-wrap: wrap; margin-top: 3px; }
 
-/* Checklist: passing rows collapse so failures lead */
-.cl-more { margin-top: 4px; }
+/* Checklist: passing rows collapse so failures lead. The summary and the
+   all-clear line share the rows' text inset so the group reads as one column. */
+.cl-more { margin-top: var(--sp-1); }
 .cl-more > summary {
-  cursor: pointer; color: var(--muted); font-size: .82rem;
-  padding: 4px 6px; list-style: none;
+  cursor: pointer; color: var(--muted); font-size: var(--fs-sm);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--row-inset); list-style: none;
 }
 .cl-more > summary::-webkit-details-marker { display: none; }
 .cl-more > summary::before { content: "▸ "; }
 .cl-more[open] > summary::before { content: "▾ "; }
-.cl-clean { color: var(--go-ink); font-size: .88rem; padding: 4px 6px; }
+.cl-clean {
+  color: var(--go-ink); font-size: var(--fs-md);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--row-inset);
+}

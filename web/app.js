@@ -1204,21 +1204,28 @@ const labelVerdict = (label) => /no-go/i.test(label) ? "NOGO" : /mitigate/i.test
 function rowCheck(c) {
   const state = !c.applicable ? "na" : c.advisory ? "advisory" : c.passed ? "pass" : "fail";
   const mark = { pass: "✓", fail: "✗", advisory: "⚠", na: "–" }[state];
-  const loc = c.location ? ` <span class="loc">@ ${c.location}</span>` : "";
-  // The TAF group behind the value rides along with the source chip, so the
-  // route checklist and the discovery card attribute a limit the same way.
-  const detail = c.source_detail ? ` ${escapeHtml(c.source_detail)}` : "";
-  const src = c.source && c.source !== "-"
-    ? ` <span class="src-mini"${c.source_text ? ` title="${escapeHtml(c.source_text)}"` : ""}>${c.source}${detail}</span>`
-    : "";
+  // Where the value came from goes on a second, muted line under it rather than
+  // inside the value cell. Three things of different weights in one cell made
+  // that column's content swing by 30 characters row to row, which is what you
+  // saw as a ragged edge. The TAF group still rides along with the source chip,
+  // and the raw TAF line is still the chip's tooltip.
+  const bits = [];
+  if (c.location) bits.push(`<span class="loc">@ ${escapeHtml(c.location)}</span>`);
+  if (c.source && c.source !== "-") {
+    const detail = c.source_detail ? ` ${escapeHtml(c.source_detail)}` : "";
+    bits.push(`<span class="src-mini"${c.source_text ? ` title="${escapeHtml(c.source_text)}"` : ""}>${escapeHtml(c.source)}${detail}</span>`);
+  }
+  const sub = bits.length ? `<span class="sub">${bits.join(" ")}</span>` : "";
   return `<div class="chk ${state}">
     <span class="mark">${mark}</span>
-    <span class="lbl">${c.label}</span>
-    <span class="act">${c.actual_text}${loc}${src}</span>
-    <span class="lim">${c.limit_text}</span></div>`;
+    <span class="lbl">${escapeHtml(c.label)}</span>
+    <span class="act">${escapeHtml(c.actual_text)}</span>
+    <span class="lim">${escapeHtml(c.limit_text)}</span>${sub}</div>`;
 }
 function rowThreat(t) {
-  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${t.label}</span><span class="act">${t.present ? "present" : "-"}</span><span class="lim"></span></div>`;
+  // Same four cells as rowCheck, so threat rows share the checklist's columns.
+  // The empty limit cell is deliberate: it holds the column open.
+  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${escapeHtml(t.label)}</span><span class="act">${t.present ? "present" : "-"}</span><span class="lim"></span></div>`;
 }
 
 // ---------- Wind-vs-runway diagram ----------
