@@ -126,7 +126,7 @@ body > .panel {
   max-width: calc(var(--page) - 2 * var(--gutter));
   margin-block: var(--sp-4);
 }
-h2 { margin: 0 0 12px; font-size: 1.05rem; }
+h2 { margin: 0 0 var(--sp-3); font-size: var(--fs-xl); }
 .hint { color: var(--muted); font-weight: 400; font-size: .85rem; }
 .checks-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 fieldset { border: 1px solid var(--line); border-radius: var(--r-md); }
@@ -207,7 +207,7 @@ select, input[type=text], .route-inputs input {
 .card.MITIGATE { border-left-color: var(--mitigate); }
 .card.NOGO { border-left-color: var(--nogo); }
 .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-.card-head h3 { margin: 0; font-size: 1.05rem; }
+.card-head h3 { margin: 0; font-size: var(--fs-xl); }
 .badge { font-weight: 700; padding: 3px 10px; border-radius: var(--r-pill); font-size: .8rem; }
 .badge.GO { background: rgba(31,138,76,.2); color: var(--go-ink); }
 .badge.MITIGATE { background: rgba(201,138,0,.2); color: var(--mit-ink); }
@@ -303,7 +303,7 @@ select, input[type=text], .route-inputs input {
 .notam a { color: var(--accent); font-weight: 700; margin-right: 6px; white-space: nowrap; }
 .notam-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
 .notam-text { white-space: pre-wrap; }
-.notam-status { font-size: .68rem; font-weight: 700; padding: 1px 7px; border-radius: var(--r-pill);
+.notam-status { font-size: var(--fs-2xs); font-weight: 700; padding: 1px 7px; border-radius: var(--r-pill);
   text-transform: uppercase; letter-spacing: .03em; }
 .notam-status.active { background: rgba(46,160,67,.18); color: var(--go-ink); border: 1px solid #2ea043; }
 .notam-status.upcoming { background: rgba(201,138,0,.15); color: var(--mit-ink); border: 1px solid #c98a00; }
@@ -311,7 +311,7 @@ select, input[type=text], .route-inputs input {
 .notam-when { font-size: .72rem; color: var(--muted); }
 
 /* source chips */
-.src { font-size: .68rem; padding: 1px 6px; border-radius: var(--r-pill); border: 1px solid var(--line); }
+.src { font-size: var(--fs-2xs); padding: 1px 6px; border-radius: var(--r-pill); border: 1px solid var(--line); }
 .blend { font-size: .66rem; padding: 1px 6px; border-radius: var(--r-pill); border: 1px solid var(--accent);
   color: var(--taf-ink); margin-left: 4px; cursor: help; }
 .src.OBSERVED { color: var(--go-ink); border-color: var(--go); }
@@ -321,7 +321,7 @@ select, input[type=text], .route-inputs input {
 /* A chip you can open. Same pill as the plain one - it must still read as a
    provenance label first - with a caret to say there is more behind it. */
 button.src-pop {
-  font: inherit; font-size: .68rem; background: transparent; cursor: pointer;
+  font: inherit; font-size: var(--fs-2xs); background: transparent; cursor: pointer;
   display: inline-flex; align-items: center; gap: 3px;
   /* Fingers are wider than 12px of chip. Padding grows the hit area without
      growing the pill, so a phone can hit it without magnifying the row. */
@@ -357,7 +357,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
   gap: 6px; padding: 3px 5px; border-radius: var(--r-sm); align-items: baseline;
   font-variant-numeric: tabular-nums;
 }
-.wx-h-hd { color: var(--muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; }
+.wx-h-hd { color: var(--muted); font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: .04em; }
 .wx-h.in { background: rgba(31,138,76,.16); border-left: 3px solid var(--go); padding-left: 5px; }
 .wx-h.in span { color: var(--go-ink); }
 .wx-h-x { color: var(--muted); }
@@ -547,7 +547,7 @@ details.runways summary { cursor: pointer; color: var(--accent); }
    whether a bulletin is yours, on the collapsed line so you need not open it. */
 .adv-chip { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: var(--r-pill);
   background: rgba(255,255,255,.07); border: 1px solid var(--line); color: var(--muted);
-  font-family: system-ui, sans-serif; font-size: .68rem; white-space: nowrap; }
+  font-family: system-ui, sans-serif; font-size: var(--fs-2xs); white-space: nowrap; }
 /* Fetched but set aside. Muted, and never with the amber bar - these are not
    warnings, they are the proof that something was looked at. */
 .adv-aside { margin-top: 8px; font-size: .8rem; }
@@ -647,7 +647,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .secondary:hover { border-color: var(--ink); color: var(--ink); }
 
 /* Settings panel typography */
-.set-title { margin: 0 0 8px; font-size: 1.05rem; }
+.set-title { margin: 0 0 var(--sp-2); font-size: var(--fs-xl); }
 .set-intro { color: var(--muted); font-size: .86rem; margin: 0 0 16px; }
 .set-group { border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; margin-bottom: 16px; }
 .set-group legend { color: var(--muted); font-size: .84rem; padding: 0 6px; }
