@@ -149,6 +149,15 @@ select, input[type=text], .route-inputs input {
 }
 .tab.active { background: var(--accent); color: white; }
 .tab-pane { max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter); }
+/* One owner for the gaps between stacked blocks, instead of eleven different
+   per-block margins. Block layout, not flex: several #route-* mounts are empty
+   until a run fills them, and :empty removes those entirely - a flex `gap` would
+   space them anyway and leave holes where nothing rendered. */
+.tab-pane > *           { margin-block: 0 var(--sp-5); }
+.tab-pane > :last-child { margin-bottom: 0; }
+.tab-pane > :empty      { display: none; }
+/* This mount stacks two cards; the outer gap is the pane's job, not theirs. */
+#route-etd-suggestion > :last-child { margin-bottom: 0; }
 .primary {
   background: var(--accent); color: white; border: none; padding: 10px 18px;
   border-radius: var(--r-md); cursor: pointer; font-size: .95rem;
@@ -171,7 +180,7 @@ select, input[type=text], .route-inputs input {
 .ac-item .nm { color: var(--muted); font-size: .8rem; }
 .ac-item.active .nm { color: #dbeafe; }
 
-.results { display: grid; gap: 12px; margin: 14px 0 24px; }
+.results { display: grid; gap: var(--sp-3); margin: 0; }
 .two-col { grid-template-columns: 1fr 1fr; }
 @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
 /* A card carries a verdict bar, so it pays for the bar out of its own left
@@ -222,8 +231,8 @@ select, input[type=text], .route-inputs input {
 .control.checkbox { flex-direction: row; align-items: center; gap: 6px; }
 
 /* At-a-glance decision checklist */
-.checklist { display: grid; gap: 16px; }
-.cl-group h3 { margin: 0 0 8px; font-size: .95rem; display: flex; align-items: center; gap: 8px; }
+.checklist { display: grid; gap: var(--sp-5); }
+.cl-group h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-lg); display: flex; align-items: center; gap: var(--sp-2); }
 .chk {
   display: grid; grid-template-columns: 20px 1fr auto auto; gap: 10px; align-items: baseline;
   padding: 5px 8px; border-radius: var(--r-sm); font-size: .88rem; border-left: 3px solid transparent;
@@ -363,14 +372,14 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 /* The ETD nudge - one specific better departure time for this flight. Coloured
    by the verdict it actually reaches, not always green: a nudge that only gets
    you from NO-GO to MITIGATE is worth saying and is not a green outcome. */
-.etd-nudge { margin-bottom: 14px; }
+.etd-nudge { margin: 0 0 var(--sp-3); }
 .etd-nudge.MITIGATE { background: rgba(201,138,0,.12); border-color: var(--mitigate); }
 .etd-nudge .nudge-why { margin-top: 6px; font-size: .82rem; color: var(--muted); }
 /* "Waiting would buy you..." - deliberately quieter than the nudge above it.
    This fires on flights that are already legal, so it must never carry a
    verdict colour: green would imply the flight is only good if you wait, and
    amber would imply something is wrong with going now. Neither is true. */
-.etd-options { margin-bottom: 14px; }
+.etd-options { margin: 0 0 var(--sp-3); }
 .etd-options > small { color: var(--muted); font-size: .8rem; }
 .etd-option {
   background: rgba(255,255,255,.05); border-color: rgba(255,255,255,.18);
@@ -672,8 +681,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .preset input { margin: 0; }
 .preset-desc { margin: 0; }
 
-/* My Minimums panel as a div (not details) */
-.mm-panel { margin-top: 16px; }
+/* My Minimums panel as a div (not details). The pane owns its outer spacing. */
 
 /* checks-grid fieldset children */
 .checks-grid fieldset { border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; }
