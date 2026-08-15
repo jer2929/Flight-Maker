@@ -61,7 +61,7 @@ header p { margin: 4px 0 0; color: var(--muted); }
 .clock-label { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
 .clock-val { font-size: .9rem; font-weight: 600; color: var(--ink); white-space: nowrap; }
 .clock-val.live { color: var(--accent); }
-@media (max-width: 520px) {
+@media (max-width: 560px) {
   .clock-label { font-size: .62rem; }
   .clock-val { font-size: .78rem; }
 }
@@ -85,7 +85,7 @@ header p { margin: 4px 0 0; color: var(--muted); }
 .aircraft-sel { max-width: 130px; }
 .aircraft-tas { width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
 .aircraft-unit { color: var(--muted); font-size: .78rem; }
-@media (max-width: 640px) {
+@media (max-width: 560px) {
   .aircraft-label { min-width: 0; }
   .aircraft-sel { max-width: 96px; font-size: .74rem; }
 }
@@ -182,7 +182,12 @@ select, input[type=text], .route-inputs input {
 
 .results { display: grid; gap: var(--sp-3); margin: 0; }
 .two-col { grid-template-columns: 1fr 1fr; }
-@media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+@media (max-width: 780px) {
+  .two-col { grid-template-columns: 1fr; }
+  /* This one had no collapse at all: at 375px each fieldset was ~150px wide and
+     every self-assessment label wrapped to three lines. */
+  .checks-grid { grid-template-columns: 1fr; }
+}
 /* A card carries a verdict bar, so it pays for the bar out of its own left
    padding - that is what keeps its text on the same x as a bar-less panel's. */
 .card {
@@ -348,6 +353,16 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 @media (max-width: 560px) {
   .wx-h { grid-template-columns: 42px 84px 68px 54px; }
   .wx-h-x { grid-column: 1 / -1; padding-left: 42px; }
+  /* Four columns do not fit a phone. Same tracks, re-slotted: the rule name takes
+     the full width on line 1, then the value and its limit sit side by side on
+     line 2 - so the two numbers you compare stay adjacent, and both still line up
+     down the page. */
+  :root { --chk-lim: 6.5rem; }
+  .chk { grid-template-columns: var(--chk-mark) minmax(0, 1fr) var(--chk-lim); }
+  .chk .lbl { grid-column: 2 / -1; }
+  .chk .act { grid-column: 2; font-weight: 600; }
+  .chk .lim { grid-column: 3; text-align: right; }
+  .chk .sub { grid-column: 2 / -1; }
 }
 
 /* The ETD this card was assessed for, beside the aerodrome it applies to. */
@@ -766,7 +781,7 @@ details.taf summary { cursor: pointer; color: var(--accent); }
 .taf-p.in .taf-k, .taf-p.in .taf-t, .taf-p.in .taf-x { color: var(--go-ink); }
 .taf-p .taf-x { word-break: break-word; }
 .taf-raw { margin-top: 6px; opacity: .6; }
-@media (max-width: 520px) {
+@media (max-width: 560px) {
   .taf-p { grid-template-columns: 52px 92px 1fr; font-size: .72rem; }
 }
 
