@@ -1089,7 +1089,10 @@ function clearRoute() {
   // route-self-check is a standing pre-check rendered on load - never cleared here,
   // so the pilot's ticked items survive a route assessment.
   if (typeof destroyRadar === "function") destroyRadar();  // tear down any live Leaflet map
-  ["route-data-health", "route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-gfa", "route-radar", "route-endpoints", "route-enroute", "route-windows", "route-timeline"]
+  // Circuits fills only some of these, so every mount a route run can write has
+  // to be listed - otherwise route-then-circuits leaves the previous flight's
+  // panel on screen under the new verdict.
+  ["route-data-health", "route-verdict", "route-summary", "route-etd-suggestion", "route-checklist", "route-advisories", "route-mitigation", "route-endpoints", "route-enroute", "route-gfa", "route-radar", "route-windows", "route-timeline"]
     .forEach((id) => ($("#" + id).innerHTML = ""));
 }
 
@@ -1122,7 +1125,7 @@ function renderRoute(r) {
       ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${windDir(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
     </div>`;
 
-  $("#route-summary").innerHTML += advisoriesBlock(r);
+  $("#route-advisories").innerHTML = advisoriesBlock(r);
   $("#route-endpoints").innerHTML =
     endpointCard(r.departure, "Departure", winLabel(win)) +
     endpointCard(r.destination, "Destination", winLabel(win));

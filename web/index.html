@@ -160,18 +160,27 @@
          built on a failed fetch is the one thing you must read before the badge. -->
     <div id="route-data-health"></div>
     <div id="route-verdict"></div>
+    <!-- The trip facts say *which* flight the verdict is about - distance, ETD to
+         ETA, cruise altitude, daylight - so they frame it rather than trailing
+         its reasoning three blocks below. -->
+    <div id="route-summary"></div>
     <!-- "When should I leave instead?" is the question the go/no-go raises, so
          the answer sits directly under it. This used to render at the top of the
          best-windows list, four blocks further down the page, where a pilot who
          had read the verdict had already stopped scrolling. -->
     <div id="route-etd-suggestion"></div>
     <div id="route-checklist"></div>
+    <!-- The SIGMETs/AIRMETs/PIREPs the Weather rows were built from, directly
+         under those rows: this panel is their evidence, not a trip fact. It used
+         to be appended onto the end of #route-summary. -->
+    <div id="route-advisories"></div>
     <div id="route-mitigation"></div>
-    <div id="route-summary"></div>
-    <div id="route-gfa"></div>
-    <div id="route-radar"></div>
+    <!-- Conditions at each end come before the pictures of them. Two ~400px map
+         panels used to sit here and pushed the endpoint cards below the fold. -->
     <div id="route-endpoints" class="results two-col"></div>
     <div id="route-enroute"></div>
+    <div id="route-gfa"></div>
+    <div id="route-radar"></div>
     <div id="route-windows"></div>
     <div id="route-timeline"></div>
   </section>
