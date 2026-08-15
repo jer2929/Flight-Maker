@@ -237,3 +237,26 @@ def test_cruise_override_ignores_missing_or_nonpositive():
     for bad in (None, 0, -5):
         with cruise_override(bad):
             assert get_cruise_kt() == default
+
+
+# ---- density altitude advisory threshold -----------------------------------
+
+def test_density_altitude_threshold_merges_and_clamps():
+    base = get_default_limits()
+    assert base["hard_limits"]["density_altitude"]["advisory_above_field_ft"] == 500
+
+    merged = merge_limits(base, {"density_altitude": {"advisory_above_field_ft": 1200}})
+    assert merged["hard_limits"]["density_altitude"]["advisory_above_field_ft"] == 1200
+
+    # Clamped at both ends of the (0, 5000) range.
+    hi = merge_limits(base, {"density_altitude": {"advisory_above_field_ft": 99999}})
+    assert hi["hard_limits"]["density_altitude"]["advisory_above_field_ft"] == 5000
+    lo = merge_limits(base, {"density_altitude": {"advisory_above_field_ft": -100}})
+    assert lo["hard_limits"]["density_altitude"]["advisory_above_field_ft"] == 0
+
+
+def test_density_altitude_unknown_leaf_is_dropped():
+    base = get_default_limits()
+    merged = merge_limits(base, {"density_altitude": {"nonsense_key": 3}})
+    assert "nonsense_key" not in merged["hard_limits"]["density_altitude"]
+    assert merged["hard_limits"]["density_altitude"]["advisory_above_field_ft"] == 500

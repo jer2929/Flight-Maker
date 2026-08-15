@@ -26,6 +26,14 @@ hard_limits:
     - moderate_turbulence_low # below 3000 ft
     - low_level_wind_shear    # LLWS / WS
     - widespread_ifr
+  # ADVISORY ONLY - this one never gates a verdict, unlike everything above it.
+  # Density altitude this far above aerodrome elevation gets an amber row telling
+  # you to open the performance chart; it is never a NO-GO, because the go/no-go
+  # on a density altitude belongs to whoever has the aircraft's numbers in front
+  # of them. NAV CANADA broadcasts DA on ATIS/AWOS at 200 ft AAE; 500 is the more
+  # conservative default here. Computed from an observed METAR only.
+  density_altitude:
+    advisory_above_field_ft: 500
   recent_experience:
     min_hours_last_30_days: 5
   fuel_reserve_hr:

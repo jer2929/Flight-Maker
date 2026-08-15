@@ -253,6 +253,12 @@ class WeatherSummary(BaseModel):
     visibility_sm: Optional[float] = None
     ceiling_agl_ft: Optional[float] = None
     hazards: list[str] = []  # e.g. ["thunderstorm", "freezing_rain"]
+    # Observed temperature and altimeter setting. Populated ONLY on the "now"
+    # path, from a METAR - a forecast carries neither, and a METAR read at a
+    # future ETD describes the wrong moment. Density altitude is derived from
+    # these, so the None case is what keeps that row honest.
+    temp_c: Optional[float] = None
+    altimeter_inhg: Optional[float] = None
     source: Source = Source.NONE       # where wind/conditions came from
     as_of: Optional[str] = None        # observation/model time (ISO)
     model_vs_obs_wind_kt: Optional[float] = None  # confidence hint when both exist
@@ -299,6 +305,27 @@ class ForecastHour(BaseModel):
     hazards: list[str] = []
 
 
+class DensityAltitude(BaseModel):
+    """What the air at this aerodrome performs like, versus what it measures.
+
+    Hangs off the *assessment* rather than off ``WeatherSummary`` because it
+    needs field elevation, which is a property of the aerodrome and not of the
+    weather. Present only when a live METAR supplied both a temperature and an
+    altimeter setting; ``None`` otherwise, which is what stops the card
+    inventing a number for a departure hours away.
+    """
+
+    field_elevation_ft: float
+    pressure_altitude_ft: float
+    density_altitude_ft: float
+    # DA minus field elevation - the quantity the advisory threshold is on, and
+    # the one NAV CANADA broadcasts ("density altitude 1500 feet" is AAE).
+    above_field_ft: float
+    isa_temp_c: float
+    oat_c: float
+    altimeter_inhg: float
+
+
 class AirportAssessment(BaseModel):
     airport: Airport
     distance_nm: float
@@ -316,6 +343,7 @@ class AirportAssessment(BaseModel):
     variation_deg: Optional[float] = None
     limit_checks: list[LimitCheck] = []
     threat_checks: list[ThreatCheck] = []
+    density_altitude: Optional[DensityAltitude] = None
     notam_count: int = 0
     notams: list[Notam] = []
     cfs_url: Optional[str] = None

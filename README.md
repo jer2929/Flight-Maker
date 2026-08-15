@@ -139,6 +139,37 @@ this one has no terrain-wave, convective or frontal reasoning in it. What it doe
 is replace "go and read a chart" with a description of the air plus *confirm on the
 GFA panel below*, and stay silent on the days there is nothing to say.
 
+### Density altitude
+The one performance limiter none of the other rows can see. A day comfortably
+inside every wind, ceiling and visibility minimum can still cost a normally
+aspirated trainer a large slice of its climb rate and stretch its takeoff roll well
+past the POH numbers - and nothing about the wind or the cloud tells you that. It
+comes straight off the observation:
+
+```
+PA = field elevation + (29.92 − altimeter) × 1000
+DA = PA + 120 × (OAT − ISA temperature at that PA)
+```
+
+NAV CANADA broadcasts density altitude on ATIS/AWOS once it exceeds aerodrome
+elevation by **200 ft**; this app is quieter, and advises at **500 ft** by default
+(tunable in *My Minimums*, 0–5,000 ft). The row names the absolute density altitude
+first - the number you take to the performance chart - then how far above field
+elevation it is, then the temperature and ISA deviation that produced it, so you can
+check it against the METAR printed on the same card.
+
+It is **always and only an advisory**: amber, never red, never a threat, and
+structurally incapable of moving your verdict - it's appended after the decision is
+made. The go/no-go on a density altitude belongs to whoever has the aircraft's
+numbers in front of them.
+
+Computed from an **observed METAR only** - it needs a real temperature and a real
+altimeter setting. On a planned ETD, or at a field with no METAR of its own, there
+is no row at all rather than a plausible-looking number derived from the wrong time
+or the wrong aerodrome. Field elevation comes from the airport database, never from
+the model's grid-cell elevation, which can be out by hundreds of feet - the same
+order as the thing being measured.
+
 ### En-route aerodromes
 A collapsed-by-default list of every aerodrome within **5 nm of the straight
 route**, in the order you'd fly over them, with runway, surface, length and the
@@ -376,7 +407,8 @@ app/
   sources/           cfps, openmeteo (HRDPS), airports, cache,
                      _http (one GET, retried once)
   services/          geo, runway, winds_aloft, weather (+TAF segments),
-                     timeline, evaluator, fetch_health (what failed to download)
+                     timeline, evaluator, density (density altitude),
+                     fetch_health (what failed to download)
 data/                limits.yaml + bundled airport/runway seed
 scripts/             refresh_airport_data.py (+ ensure_airport_data bootstrap)
 web/                 single-page dashboard (Route + Discovery tabs)

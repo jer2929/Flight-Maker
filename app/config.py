@@ -136,6 +136,12 @@ _NUMERIC_LIMITS: dict[str, dict[str, tuple[float, float]]] = {
         "night_circuit": (0, 20),
         "night_xc": (0, 20),
     },
+    # Advisory-only, but it lives under hard_limits like the other non-gating
+    # pilot numbers (recent_experience, fuel_reserve_hr) so it rides the existing
+    # merge/clamp/publish path with no special casing anywhere.
+    "density_altitude": {
+        "advisory_above_field_ft": (0, 5000),
+    },
     "ifr_ceiling_agl_ft": {
         "day_xc": (100, 15000),
         "night_xc": (100, 15000),

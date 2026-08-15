@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.services import airmass
 from app.services import cfs_links, hazards as hz
+from app.services import density
 from app.services import fetch_health
 from app.services import magvar
 from app.services import solar
@@ -216,6 +217,15 @@ def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None,
         ws.wind_dir_true, ws.wind_kt, ws.gust_kt = m["wind_dir_true"], m["wind_kt"], m["gust_kt"]
         ws.visibility_sm, ws.ceiling_agl_ft = m["visibility_sm"], m["ceiling_agl_ft"]
         ws.hazards = list(m["hazards"])
+        # Temperature and altimeter, promoted here and *only* here. The forecast
+        # path (_endpoint_weather_forecast) never sets them, which is what keeps
+        # density altitude off a card for a departure hours from now: there is no
+        # flag to remember, the value simply isn't there to derive it from.
+        ws.temp_c, ws.altimeter_inhg = m["temp_c"], m["altimeter_inhg"]
+        if m["temp_c"] is not None:
+            ws.field_sources["temp"] = Source.OBSERVED
+        if m["altimeter_inhg"] is not None:
+            ws.field_sources["pressure"] = Source.OBSERVED
         tm = re.search(r"\b(\d{6})Z\b", metar)
         ws.as_of = tm.group(1) + "Z" if tm else None
         if model_now and model_now.get("wind_kt") is not None and m["wind_kt"] is not None:
@@ -559,6 +569,14 @@ def _assess_endpoint(
     if any((not c.passed) and c.applicable for c in wchecks):
         verdict = Verdict.NOGO
     checks = checks + wchecks
+    # Density altitude. Appended after decision() has already run, so it is
+    # structurally incapable of moving the verdict rather than merely declining
+    # to - and before the location stamp below, so it names its aerodrome like
+    # every other row without saying so itself.
+    da = density.solve(airport.elevation_ft, weather.altimeter_inhg, weather.temp_c)
+    da_row = density.advisory_row(da)
+    if da_row is not None:
+        checks.append(da_row)
     for c in checks:
         c.location = airport.ident
     if weather.source == Source.NONE:
@@ -587,7 +605,7 @@ def _assess_endpoint(
         threat_result_label=threat_result_label(n),
         weather=weather, best_runway=rw, best_takeoff=rw, best_landing=rw,
         runway_components=comps, variation_deg=round(magvar.declination(lat, lon), 1),
-        limit_checks=checks, threat_checks=tchecks,
+        limit_checks=checks, threat_checks=tchecks, density_altitude=da,
         notam_count=len(site_notams), notams=site_notams,
         cfs_url=links["cfs_url"], info_url=links["info_url"], info_label=links.get("info_label"),
         access_note=ap.access_note(airport.ident), altitude=alt,
@@ -945,6 +963,15 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     else:
         checks.append(LimitCheck(key="visibility", label="Visibility (XC)", limit_text=f"≥ {vis_limit} SM",
                                  actual_text="no data", passed=True))
+    # Density altitude at each end, per-end rather than worst-of-both: "CYFD
+    # +1,510 ft" and "CYKF +620 ft" are two different pieces of runway
+    # performance information, and collapsing them loses the one you are
+    # actually landing at. Advisory only - it never moves the route verdict.
+    for a, role in ((dep_a, "departure"), (dest_a, "destination")):
+        row = density.advisory_row(a.density_altitude,
+                                   location=f"{a.airport.ident} ({role})")
+        if row is not None:
+            checks.append(row)
     _stamp_route_groups(checks, dep_a, dest_a)
     return checks
 
