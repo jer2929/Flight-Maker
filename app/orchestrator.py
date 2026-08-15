@@ -36,6 +36,7 @@ from app.services import area_hazards as ah
 from app.services import area_products
 from app.services import cfs_links, geometry, hazards as hz
 from app.services import density
+from app.services import etd_options as etd_opts
 from app.services import fetch_health
 from app.services import magvar
 from app.services import solar
@@ -1001,6 +1002,24 @@ def _worst_crosswind(dep_a: AirportAssessment, dest_a: AirportAssessment) -> Run
     return annotated
 
 
+def _xc_ceiling_minimum(mode: str, flight_rules: str = "vfr") -> float:
+    """The cross-country ceiling minimum in force: IFR or VFR, day or night.
+
+    Read in two places - the gating route row and the wait advisory, which says
+    when a later hour lifts the deck back over this number. They must agree, so
+    the lookup lives here rather than being written out twice.
+    """
+    full = get_limits()
+    L = full["hard_limits"]
+    if flight_rules == "ifr":
+        c_block = full.get("ifr_minimums", {}).get("ceiling_agl_ft", L["ceiling_agl_ft"])
+    else:
+        c_block = L["ceiling_agl_ft"]
+    if mode == "night":
+        return c_block.get("night_xc", c_block.get("night_xc_cloud_base", 12000))
+    return c_block.get("day_xc", 4000)
+
+
 def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flight_rules: str = "vfr") -> list[LimitCheck]:
     """Wind/ceiling/vis hard limits evaluated across departure, enroute samples,
     and destination - each row says WHERE the worst value is."""
@@ -1061,7 +1080,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
         c_block = ifr.get("ceiling_agl_ft", L["ceiling_agl_ft"])
     else:
         c_block = L["ceiling_agl_ft"]
-    ceil_limit = c_block.get("night_xc", c_block.get("night_xc_cloud_base", 12000)) if mode == "night" else c_block.get("day_xc", 4000)
+    ceil_limit = _xc_ceiling_minimum(mode, flight_rules)
     circuit_limit = c_block.get("night_circuit", 3000) if mode == "night" else c_block.get("day_circuit", 2000)
     # The XC ceiling minimum applies to the whole route, ends included - a deck
     # below it over the departure field is as much a no-go as one at midpoint,
@@ -1618,6 +1637,13 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         dep_ident=dep.ident, dest_ident=dest.ident,
         dep_lat=dep.lat, dep_lon=dep.lon, dest_lat=dest.lat, dest_lon=dest.lon,
         static_hazards=static_hazards,
+        # Route geometry, so each hour can be given the cruising altitude its own
+        # winds and its own ceiling would support. Pure arithmetic over winds
+        # already in the response - it is what lets the wait advisory talk about
+        # the wind at cruise rather than the wind on the ground.
+        cruise={"course_true": bearing, "course_mag": bearing_mag,
+                "cruise_kt": get_cruise_kt(), "flight_rules": flight_rules,
+                "distance_nm": distance, "field_elev_ft": dep.elevation_ft},
     )
     # An empty timeline has exactly one cause - no hourly forecast came back -
     # and it used to render as "No clearly favourable window in the next 48 h",
@@ -1634,6 +1660,13 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
                               min_hours=math.ceil(flight_hr))
     etd_suggestion = tl.etd_nudge(timeline, etd_utc, flight_hr, verdict_now,
                                   daylight_only=daylight_only)
+    # "Could I do better by waiting?" - a different question from the nudge's
+    # "how do I reach GO", and the only one a pilot already sitting on a GO can
+    # ask. Advisory throughout: it reads the timeline that was just built, costs
+    # no fetch, and touches nothing that produces the verdict.
+    etd_options = etd_opts.wait_options(
+        timeline, etd_utc, flight_hr, daylight_only=daylight_only,
+        ceiling_minimum_ft=_xc_ceiling_minimum(mode, flight_rules))
 
     # En-route corridor. Built last, and deliberately NOT fed into all_checks,
     # ceiling_points, vis_points or route_ws: these are precautionary-landing
@@ -1708,7 +1741,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         hazards_filtered=ah.drop_counts(aside_haz),
         hazards_geojson=ah.to_feature_collection(relevant_haz + aside_haz),
         timeline=timeline, best_windows=windows,
-        etd_suggestion=etd_suggestion, daylight_margin=daylight_margin,
+        etd_suggestion=etd_suggestion, etd_options=etd_options,
+        daylight_margin=daylight_margin,
         window=window,
         enroute_airports=enroute_airports,
         enroute_airports_total=len(corridor),

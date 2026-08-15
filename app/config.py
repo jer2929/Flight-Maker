@@ -157,6 +157,14 @@ _NUMERIC_LIMITS: dict[str, dict[str, tuple[float, float]]] = {
     "density_altitude": {
         "advisory_above_field_ft": (0, 5000),
     },
+    # Also advisory-only, and here for the same reason: it rides the existing
+    # merge/clamp/publish path with no special casing.
+    "wait_advisory": {
+        "max_wait_hr": (1, 24),
+        "tailwind_gain_kt": (1, 40),
+        "ceiling_gain_ft": (100, 10000),
+        "crosswind_drop_kt": (1, 30),
+    },
     "ifr_ceiling_agl_ft": {
         "day_xc": (100, 15000),
         "night_xc": (100, 15000),

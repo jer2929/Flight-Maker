@@ -13,11 +13,13 @@ from datetime import datetime, timedelta, timezone
 
 from app.models import (
     BestWindow, EtdSuggestion, HourCondition, Runway, Source, Verdict, WeatherSummary,
+    WindAloft,
 )
 from app.services import magvar
 from app.services import weather as wx
 from app.services.evaluator import SEVERITY, evaluate, gating_hazards, prob_summary
 from app.services.runway import best_runway
+from app.services.winds_aloft import recommend_altitude
 from app.sources import openmeteo
 
 # WMO weather codes -> {label, hazard, heavy}. Only thunderstorm/freezing map to a
@@ -262,6 +264,52 @@ def _daylight_at(dep_fc: dict, dest_fc: dict, i: int) -> bool:
     return day
 
 
+def winds_aloft_at_index(fc: dict, i: int) -> list[WindAloft]:
+    """The model's pressure-level winds at one hour index.
+
+    Shared with the orchestrator, which asks the same question at the ETD hour;
+    the timeline asks it for all 48. Levels the model didn't serve are skipped
+    rather than guessed.
+    """
+    hourly = fc.get("hourly", {})
+    out: list[WindAloft] = []
+    for lvl, alt in openmeteo.PRESSURE_LEVELS_FT.items():
+        spd = hourly.get(f"windspeed_{lvl}") or []
+        dir_ = hourly.get(f"winddirection_{lvl}") or []
+        if (i < len(spd) and i < len(dir_)
+                and spd[i] is not None and dir_[i] is not None):
+            out.append(WindAloft(altitude_ft=alt, direction_true=dir_[i],
+                                 speed_kt=spd[i]))
+    return out
+
+
+def _cruise_for_hour(fc: dict, i: int, cruise: dict | None,
+                     ceiling_ft: float | None) -> dict:
+    """This hour's best cruising altitude and the route wind it would see.
+
+    Returns ``{}`` unless the caller supplied the route geometry, so every
+    existing caller of ``build_timeline`` is unaffected. The pick is gated on
+    *this hour's* ceiling, not the flight's - the whole point is that both the
+    wind and the deck move, and a tailwind that only exists above a deck you
+    cannot legally climb through is not a reason to wait for it.
+    """
+    if not cruise:
+        return {}
+    levels = winds_aloft_at_index(fc, i)
+    if not levels:
+        return {}
+    rec = recommend_altitude(
+        levels, cruise["course_true"], cruise["cruise_kt"],
+        course_mag=cruise.get("course_mag"), ceiling_ft=ceiling_ft,
+        flight_rules=cruise.get("flight_rules", "vfr"),
+        distance_nm=cruise.get("distance_nm"),
+        field_elev_ft=cruise.get("field_elev_ft"))
+    if rec is None:
+        return {}
+    return {"altitude_ft": rec.altitude_ft, "headwind_kt": rec.headwind_kt,
+            "groundspeed_kt": rec.groundspeed_kt}
+
+
 def _start_index(times: list[str], offset: int) -> int:
     """First hour at or after 'now', so windows never look backward.
 
@@ -292,6 +340,7 @@ def build_timeline(
     dest_lat: float | None = None,
     dest_lon: float | None = None,
     static_hazards: set[str] | None = None,
+    cruise: dict | None = None,
 ) -> list[HourCondition]:
     times = _series(dep_fc, "time")
     if not times:
@@ -348,8 +397,14 @@ def build_timeline(
         if ws.wind_dir_true is not None and w_lat is not None:
             wind_dir_mag = round(magvar.to_magnetic(ws.wind_dir_true, w_lat, w_lon))
 
+        # The cruise picture for this hour, gated on this hour's own ceiling.
+        # Pure arithmetic over winds already in the response - no extra fetch.
+        cr = _cruise_for_hour(dep_fc, i, cruise, ws.ceiling_agl_ft)
+
         timeline.append(HourCondition(
             time=tstr, verdict=verdict,
+            altitude_ft=cr.get("altitude_ft"), headwind_kt=cr.get("headwind_kt"),
+            groundspeed_kt=cr.get("groundspeed_kt"),
             wind_dir_true=ws.wind_dir_true, wind_dir_mag=wind_dir_mag,
             wind_kt=ws.wind_kt, gust_kt=ws.gust_kt,
             crosswind_kt=(rw.crosswind_kt if rw else None),

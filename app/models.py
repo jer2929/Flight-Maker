@@ -401,6 +401,15 @@ class HourCondition(BaseModel):
     source: Source = Source.MODEL
     reasons: list[str] = []
     daylight: bool = True
+    # The cruise picture for this hour, when the caller supplied the route
+    # geometry. Populated by re-running the altitude recommendation against this
+    # hour's winds aloft and this hour's ceiling, so "wait two hours for a
+    # tailwind" is measured on the level the flight would actually be flown at
+    # rather than on the surface wind. ``headwind_kt`` is signed the same way as
+    # ``AltitudeRecommendation``: positive is a headwind.
+    altitude_ft: Optional[float] = None
+    headwind_kt: Optional[float] = None
+    groundspeed_kt: Optional[float] = None
 
 
 class BestWindow(BaseModel):
@@ -431,6 +440,38 @@ class EtdSuggestion(BaseModel):
     hours_available: int    # length of the usable run starting there
     # What stops applying at the suggested time, in the strip's own words.
     reason: Optional[str] = None
+
+
+class Improvement(BaseModel):
+    """One thing a later departure buys, with the numbers behind it."""
+
+    kind: str                       # tailwind | ceiling | hazard | crosswind
+    text: str                       # the sentence shown to the pilot
+    from_value: Optional[float] = None
+    to_value: Optional[float] = None
+
+
+class EtdOption(BaseModel):
+    """A departure time that is materially better, on a flight already legal.
+
+    Distinct from :class:`EtdSuggestion`, which only ever fires when the verdict
+    itself changes. This answers the question a pilot with a GO still has - "is
+    an hour's wait worth 14 kt of tailwind?" - and so it must be **advisory in
+    the strongest sense**: it can never move a verdict, never gate anything, and
+    never appear as a reason not to fly now. ``advisory`` is on the model rather
+    than assumed by the renderer so that intent survives serialisation.
+
+    Every option is required to be non-worsening on every axis it does not
+    improve. Trading a lower ceiling for a tailwind is not an improvement, and
+    an advisory that made that trade silently would be worse than no advisory.
+    """
+
+    etd_utc: str            # ISO UTC, matching HourCondition.time
+    delta_min: int          # signed minutes from the picked ETD; + = later
+    verdict: Verdict        # what the hour-by-hour forecast says about that hour
+    advisory: bool = True
+    hours_available: int    # length of the usable run starting there
+    improvements: list["Improvement"] = []
 
 
 class DaylightMargin(BaseModel):
@@ -530,6 +571,10 @@ class RouteAssessment(BaseModel):
     # "no better time was found" or "there was no forecast to search" - the page
     # tells those apart from ``timeline`` being empty, never from this field.
     etd_suggestion: Optional[EtdSuggestion] = None
+    # Departure times that are materially better on a flight that is already
+    # legal - "wait two hours for 14 kt of tailwind". Advisory only, and empty on
+    # most flights by design; see services/etd_options.py.
+    etd_options: list[EtdOption] = []
     daylight_margin: Optional[DaylightMargin] = None
     window: Optional[FlightWindow] = None
     # Situational awareness only - never gates the verdict (see
