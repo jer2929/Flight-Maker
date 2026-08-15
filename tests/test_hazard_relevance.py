@@ -19,6 +19,9 @@ CYFD, CYHM = "CYFD", "CYHM"
 
 # A route-crossing polygon, written the way a Canadian SIGMET writes one.
 ON_ROUTE_AREA = "N4230 W08100 - N4340 W08100 - N4340 W07900 - N4230 W07900"
+# About 60 nm north of track: off the route, but close enough to be worth seeing.
+NEAR_MISS_AREA = "N4412 W08024 - N4436 W08024 - N4436 W07954 - N4412 W07954"
+# Winnipeg - a different part of the country entirely.
 FAR_AREA = "N4900 W09730 - N5000 W09730 - N5000 W09600 - N4900 W09600"
 
 
@@ -104,8 +107,8 @@ def test_a_sigmet_on_the_route_gates_and_names_itself(route):
     assert r.sigmets[0].distance_nm == 0.0
 
 
-def test_a_sigmet_in_another_province_does_not_gate(route):
-    r = route([_sigmet(FAR_AREA, "SEV TURB SFC/FL180")])
+def test_a_sigmet_just_off_track_does_not_gate_but_is_still_shown(route):
+    r = route([_sigmet(NEAR_MISS_AREA, "SEV TURB SFC/FL180")])
 
     assert r.sigmets == []
     assert not any("SIGMET" in reason for reason in r.reasons_now)
@@ -113,6 +116,17 @@ def test_a_sigmet_in_another_province_does_not_gate(route):
         "it is set aside, not forgotten - the card still says one was found"
     assert len(r.nearby_advisories) == 1
     assert r.nearby_advisories[0].drop_label == "not on your route"
+
+
+def test_a_sigmet_in_another_province_is_not_mentioned_at_all(route):
+    """The national feeds carry hundreds of these. Counting them at the pilot is
+    noise - "268 not on your route" is not a fact anyone can use."""
+    r = route([_sigmet(FAR_AREA, "SEV TURB SFC/FL180")])
+
+    assert r.sigmets == []
+    assert r.nearby_advisories == []
+    assert r.hazards_filtered == {}
+    assert r.hazards_geojson["features"] == []
 
 
 def test_high_level_turbulence_over_the_route_does_not_gate_a_light_aircraft(route):
@@ -142,7 +156,7 @@ def test_an_expired_sigmet_over_the_route_does_not_gate(route):
 
 def test_the_map_payload_carries_relevant_and_set_aside_alike(route):
     r = route([_sigmet(ON_ROUTE_AREA, "SEV TURB SFC/FL180"),
-               _sigmet(FAR_AREA, "SEV ICE SFC/FL180", ident="B2")])
+               _sigmet(NEAR_MISS_AREA, "SEV ICE SFC/FL180", ident="B2")])
 
     features = r.hazards_geojson["features"]
     assert len(features) == 2
@@ -150,6 +164,26 @@ def test_the_map_payload_carries_relevant_and_set_aside_alike(route):
     for f in features:
         lon, lat = f["geometry"]["coordinates"][0][0]
         assert -180 <= lon <= 0 and 0 <= lat <= 90, "lon/lat must not be swapped"
+
+
+def test_a_pirep_of_moderate_turbulence_does_not_gate(route, monkeypatch):
+    """A PIREP is one aeroplane's experience of one moment, usually not an
+    aeroplane like yours. It belongs on the card; it does not belong in the
+    verdict. Rolled into the same blob as the forecasts, a single airliner's
+    "MOD turb" in the climb failed the turbulence row outright."""
+    async def pireps(*a, **k):
+        return [{"location": "CYYZ",
+                 "text": "UA /OV YYZ180010 /FL050 /TP B738 /TB MOD /IC MOD RIME"}]
+
+    monkeypatch.setattr(cfps, "pireps", pireps)
+    r = route([])
+
+    assert len(r.pireps) == 1, "it must still be shown"
+    turb = next(c for c in r.limit_checks if c.key == "turbulence")
+    ice = next(c for c in r.limit_checks if c.key == "icing")
+    assert turb.passed and ice.passed, "a PIREP alone must not fail these rows"
+    assert "PIREP" in turb.actual_text, "but the row should say what was reported"
+    assert r.verdict_now != Verdict.NOGO
 
 
 def test_no_advisories_at_all_is_a_clean_result(route):

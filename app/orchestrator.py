@@ -815,28 +815,34 @@ async def _gather_hazards(sites: list[str], path: list[tuple[float, float]],
     ordinary case, and it is the one the page may finally state truthfully.
     """
     bbox = geometry.bbox_of(path, buffer_nm)
-    jobs: list[tuple[str, str, object]] = [
-        ("cfps:sigmet", "CFPS SIGMET", cfps.sigmets(sites)),
-        ("cfps:airmet", "CFPS AIRMET", cfps.airmets(sites)),
-        ("cfps:pirep", "CFPS PIREP", cfps.pireps(sites)),
-        ("isigmet", "AWC international SIGMET", awc.isigmets()),
-        ("airsigmet", "AWC US SIGMET/AIRMET", awc.airsigmets()),
-        ("cwa", "AWC centre weather advisory", awc.cwas()),
-        ("pirep", "AWC PIREP", awc.pireps(bbox, pirep_age_hr)),
+    # Each job declares which kinds of advisory it is a source of, so a failure
+    # can be judged by what it costs rather than by the fact that it happened.
+    S, A, P = fetch_health.SIGMET, fetch_health.AIRMET, fetch_health.PIREP
+    jobs: list[tuple[str, str, tuple[str, ...], object]] = [
+        ("cfps:sigmet", "CFPS SIGMET", (S,), cfps.sigmets(sites)),
+        ("cfps:airmet", "CFPS AIRMET", (A,), cfps.airmets(sites)),
+        ("cfps:pirep", "CFPS PIREP", (P,), cfps.pireps(sites)),
+        ("isigmet", "AWC international SIGMET", (S,), awc.isigmets()),
+        ("airsigmet", "AWC US SIGMET/AIRMET", (S, A), awc.airsigmets()),
+        ("cwa", "AWC centre weather advisory", (S,), awc.cwas()),
+        ("pirep", "AWC PIREP", (P,),
+         awc.pireps(bbox, pirep_age_hr, near_ident=sites[0] if sites else None)),
     ]
     for hour in gairmet_hours:
-        jobs.append(("gairmet", f"AWC G-AIRMET +{hour}h", awc.gairmets(hour)))
+        jobs.append(("gairmet", f"AWC G-AIRMET +{hour}h", (A,), awc.gairmets(hour)))
 
-    results = await asyncio.gather(*(j[2] for j in jobs), return_exceptions=True)
+    results = await asyncio.gather(*(j[3] for j in jobs), return_exceptions=True)
 
     now = datetime.now(timezone.utc)
     out: list[ah.AreaHazard] = []
-    failures = 0
-    for (product, label, _), result in zip(jobs, results):
+    covered: set[str] = set()
+    lost: set[str] = set()
+    for (product, label, kinds, _), result in zip(jobs, results):
         if isinstance(result, BaseException):
-            failures += 1
-            fetch_health.detail(label)
+            lost.update(kinds)
+            fetch_health.detail(f"{label} ({_why(result)})")
             continue
+        covered.update(kinds)
         for item in result:
             try:
                 if product.startswith("cfps:"):
@@ -849,11 +855,30 @@ async def _gather_hazards(sites: list[str], path: list[tuple[float, float]],
             if haz is not None:
                 out.append(haz)
 
-    if failures == len(jobs):
+    # Only a kind with *no* surviving source is something the pilot has lost.
+    # The two upstreams overlap on purpose; one of them dropping a product the
+    # other still covers is redundancy doing its job, not news.
+    blind = lost - covered
+    if blind == {fetch_health.SIGMET, fetch_health.AIRMET, fetch_health.PIREP}:
         fetch_health.record(fetch_health.AREA)
-    elif failures:
-        fetch_health.record(fetch_health.AREA_PARTIAL)
+    else:
+        for kind in (fetch_health.SIGMET, fetch_health.AIRMET, fetch_health.PIREP):
+            if kind in blind:
+                fetch_health.record(kind)
     return ah.dedupe(out)
+
+
+def _why(exc: BaseException) -> str:
+    """A short reason a fetch failed, for the banner's detail fold.
+
+    "AWC PIREP (HTTP 400)" can be acted on; "AWC PIREP" alone needs a packet
+    capture to get anywhere.
+    """
+    resp = getattr(exc, "response", None)
+    if resp is not None and getattr(resp, "status_code", None):
+        return f"HTTP {resp.status_code}"
+    name = type(exc).__name__
+    return "timed out" if "Timeout" in name else name
 
 
 def _gairmet_hours(etd: datetime, eta: datetime, now: datetime) -> list[int]:
@@ -1346,7 +1371,13 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # re-split the blob on its own punctuation rules and could pair one SIGMET's
     # "SEV" with another product's "TURB"; a blank line between them is a
     # boundary it already respects.
-    area_text = "\n\n".join(h.text for h in relevant_haz)
+    #
+    # PIREPs are held apart from the forecasts. A SIGMET or AIRMET is a
+    # forecaster's statement about the airspace; a PIREP is what one aeroplane
+    # met at one moment, usually not an aeroplane like yours. Both belong on the
+    # card - only the first belongs in the verdict.
+    area_text = "\n\n".join(h.text for h in relevant_haz if h.kind != "PIREP")
+    pirep_text = "\n\n".join(h.text for h in relevant_haz if h.kind == "PIREP")
     # Hazards are scoped to the flight window, from the parsed TAF segments -
     # NOT grepped out of the raw text. A TS group valid tomorrow used to fail
     # this check today and force a NO-GO on a flight that never met it.
@@ -1362,6 +1393,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     weather_checks = hz.weather_checks(
         raw_text=area_text,
         area_text=area_text,
+        pirep_text=pirep_text,
         hazards=set(route_ws.hazards),
         window_hazards=window_haz,
         metar_hazards=metar_haz,

@@ -88,17 +88,38 @@ async def cwas() -> list[dict]:
     return await _area("cwa", {"format": "geojson"})
 
 
-async def pireps(bbox: tuple[float, float, float, float], age_hr: int = 3) -> list[dict]:
-    """PIREPs inside a bounding box, filed within the last ``age_hr`` hours.
+async def pireps(bbox: tuple[float, float, float, float], age_hr: int = 3,
+                 near_ident: str | None = None) -> list[dict]:
+    """PIREPs near the route, filed within the last ``age_hr`` hours.
 
-    The only one of these endpoints that filters spatially for us, so it gets a
-    box rather than the continent. Requested as plain JSON: its rows already
-    carry ``lat``/``lon`` with the raw report, and the GeoJSON form adds nothing.
+    Worth the trouble of two request shapes, because this feed is the only one
+    that says *where* a PIREP was: it carries a decoded lat/lon, where the raw
+    text gives a position like "DXO330010" - a radial and distance off a VOR,
+    which no airport dataset can resolve. Without it those reports can be listed
+    but never drawn.
+
+    ``bbox`` is the documented spatial filter and is tried first. Some
+    deployments of this endpoint reject it; rather than lose the product, fall
+    back to the station-and-radius form, which is the shape the published
+    examples all use. The route geometry filters the result either way, so a
+    slightly wider answer costs nothing.
     """
-    return await _area("pirep", {
-        "format": "json", "age": age_hr,
-        "bbox": ",".join(f"{v:.3f}" for v in bbox),
-    })
+    box = ",".join(f"{v:.3f}" for v in bbox)
+    try:
+        return await _area("pirep", {"format": "geojson", "age": age_hr, "bbox": box})
+    except Exception:
+        if not near_ident:
+            raise
+    radius_nm = max(50, int(_bbox_radius_nm(bbox)))
+    return await _area("pirep", {"format": "geojson", "age": age_hr,
+                                 "id": near_ident.upper(), "distance": radius_nm})
+
+
+def _bbox_radius_nm(bbox: tuple[float, float, float, float]) -> float:
+    """A radius that covers the box, for the station-and-distance form."""
+    from app.services.geo import haversine_nm
+    min_lat, min_lon, max_lat, max_lon = bbox
+    return haversine_nm(min_lat, min_lon, max_lat, max_lon) / 2.0 + 25.0
 
 
 async def metar_history(idents: list[str], hours: int = 6) -> dict[str, list[str]]:
