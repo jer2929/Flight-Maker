@@ -1152,11 +1152,15 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
         # different meanings and this row used to print one sentence for all of
         # them - the worst of which rendered a failed fetch as a clear sky.
         #
-        # ``any(e for e in enroute)`` was the old test, and it was always true:
-        # ``_point_at`` returns an all-None dict on a failed fetch, and a
-        # non-empty dict is truthy. So a route with no model data at all reported
-        # "no ceiling (clear)" - precisely the class of bug commit 97a48f5 set
-        # out to kill. Ask the samples whether they actually held a reading.
+        # ``any(e for e in enroute)`` was the old test, and it tested the wrong
+        # thing. A fetch that returned nothing at all was caught, because
+        # ``_point_at`` short-circuits to ``{}`` on a falsy forecast. But a
+        # response that *arrives* carrying no usable hours - past the model
+        # horizon, or a 200 with a truncated body - yields a dict of all-None
+        # values, and a non-empty dict is truthy. That sampled nothing and
+        # reported "no ceiling (clear)": the same class of bug commit 97a48f5
+        # set out to kill, one field over. Ask whether a reading was actually
+        # held, not whether a dict was returned.
         sampled = any(e.get("sampled") for e in enroute)
         obs_backed = any(e.get("obs_station") for e in enroute)
         scan_tops = [e.get("scan_top_ft") for e in enroute if e.get("scan_top_ft")]

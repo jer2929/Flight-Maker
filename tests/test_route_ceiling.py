@@ -35,12 +35,16 @@ def _rows(enroute, dep_ceiling=8000, dest_ceiling=8000):
 
 # --- The failed fetch that read as a clear sky -----------------------------
 
-def test_failed_fetch_is_not_a_clear_sky():
-    """``_point_at`` returns an all-None dict when the forecast did not download.
+def test_unusable_response_is_not_a_clear_sky():
+    """A response that arrived but carried no usable hour.
 
-    That dict is truthy, so the old ``any(e for e in enroute)`` counted it as a
-    successful sample and the row said "no ceiling (clear)". This is the exact
-    failure mode commit 97a48f5 set out to eliminate, reappearing one field over.
+    Worth being precise about, because the old test caught half of this. A fetch
+    that returned *nothing* was handled - ``_point_at`` short-circuits to ``{}``
+    on a falsy forecast, and ``any(e for e in enroute)`` is False for that. But a
+    200 that carries no usable hours - past the model horizon, or a truncated
+    body - produces a dict of all-None values, and a non-empty dict is truthy. So
+    that case sampled nothing and reported "no ceiling (clear)": the failure mode
+    commit 97a48f5 set out to eliminate, reappearing one field over.
     """
     dead = [{"ceiling_ft": None, "vis_sm": None, "wind_kt": None, "sampled": False},
             {"ceiling_ft": None, "vis_sm": None, "wind_kt": None, "sampled": False}]
@@ -48,6 +52,20 @@ def test_failed_fetch_is_not_a_clear_sky():
     assert "no data" in row.actual_text
     assert "clear" not in row.actual_text
     assert row.source is None, "a fetch that failed has no source to cite"
+
+
+def test_an_unusable_sample_is_truthy_but_not_sampled():
+    """The exact shape of the old bug, pinned so it cannot come back.
+
+    ``_point_at`` returns a dict full of None for a response with no usable
+    hours. It is non-empty, so it passes a truthiness test; it holds no reading,
+    so it must fail a sampled test.
+    """
+    pt = orchestrator._point_at({"elevation": 100.0, "hourly": {"time": []}})
+    assert pt, "non-empty, which is what fooled the old check"
+    assert pt["sampled"] is False, "but it sampled nothing"
+    # A fetch that returned nothing at all was always handled correctly.
+    assert orchestrator._point_at({}) == {}
 
 
 def test_genuinely_clear_route_says_so_with_its_scan_top():
