@@ -264,7 +264,8 @@ def _ceiling_dropping(fc: dict, from_dt: datetime | None = None) -> bool:
 # Endpoint "now" weather (METAR > TAF > model), with provenance.
 # ---------------------------------------------------------------------------
 def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None,
-                      ensemble: dict | None = None) -> WeatherSummary:
+                      ensemble: dict | None = None,
+                      field_elev_ft: float | None = None) -> WeatherSummary:
     # The "now" hard-limit values come ONLY from the METAR observation, falling
     # back to the model when there's no METAR: a TAF is a forecast, and a
     # forecast never overrides an observation of the present moment.
@@ -285,10 +286,10 @@ def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None,
         ws.wind_dir_true, ws.wind_kt, ws.gust_kt = m["wind_dir_true"], m["wind_kt"], m["gust_kt"]
         ws.visibility_sm, ws.ceiling_agl_ft = m["visibility_sm"], m["ceiling_agl_ft"]
         ws.hazards = list(m["hazards"])
-        # Temperature and altimeter, promoted here and *only* here. The forecast
-        # path (_endpoint_weather_forecast) never sets them, which is what keeps
-        # density altitude off a card for a departure hours from now: there is no
-        # flag to remember, the value simply isn't there to derive it from.
+        # Temperature and altimeter for density altitude. An observation is the
+        # right instrument for a departure now, and the wrong one for a departure
+        # later - the forecast path derives its own from the model rather than
+        # reading this METAR at a time it does not describe.
         ws.temp_c, ws.altimeter_inhg = m["temp_c"], m["altimeter_inhg"]
         if m["temp_c"] is not None:
             ws.field_sources["temp"] = Source.OBSERVED
@@ -315,7 +316,46 @@ def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None,
         ws.gust_kt = ensemble.get("gust_kt")
         ws.wind_ensemble_n = ensemble.get("wind_ensemble_n")
         ws.wind_models = ensemble.get("wind_models", [])
+    # Temperature and pressure for density altitude at a field with no METAR.
+    # The blend first - it is several models' answer rather than one - falling
+    # back to the single HRDPS run. Either way it is a model value and is
+    # recorded as one.
+    _apply_model_thermo(ws, ensemble, fc, _current_index(fc) if fc else 0,
+                        field_elev_ft)
     return ws
+
+
+def _apply_model_thermo(ws: WeatherSummary, ensemble: dict | None,
+                        fc: dict | None, i: int,
+                        field_elev_ft: float | None) -> None:
+    """Model temperature and altimeter setting onto a summary, in place.
+
+    Only ever fills what is still missing, so an observation already promoted
+    from a METAR is never overwritten by a model. Temperature is corrected from
+    the model's grid-cell elevation to the aerodrome's; ``pressure_msl`` is the
+    altimeter setting because ``surface_pressure`` is referenced to that same
+    grid-cell elevation (see ``services.density.solve``).
+    """
+    if ws.temp_c is not None and ws.altimeter_inhg is not None:
+        return
+    temp = alt = None
+    if ensemble:
+        temp, alt = ensemble.get("temp_c"), ensemble.get("altimeter_inhg")
+    if fc and (temp is None or alt is None):
+        hourly = fc.get("hourly", {})
+        if temp is None:
+            t = openmeteo._at(hourly, "temperature_2m", i)
+            temp = density.oat_at_field(t, openmeteo.field_elevation_ft(fc),
+                                        field_elev_ft)
+        if alt is None:
+            p = openmeteo._at(hourly, "pressure_msl", i)
+            alt = round(p * openmeteo.HPA_TO_INHG, 2) if p is not None else None
+    if ws.temp_c is None and temp is not None:
+        ws.temp_c = round(temp, 1)
+        ws.field_sources["temp"] = Source.MODEL
+    if ws.altimeter_inhg is None and alt is not None:
+        ws.altimeter_inhg = alt
+        ws.field_sources["pressure"] = Source.MODEL
 
 
 def _window_indices(fc: dict | None, lo: datetime, hi: datetime) -> list[int]:
@@ -421,7 +461,9 @@ def _window_forecast(taf_win: dict | None) -> WindowForecast | None:
 def _endpoint_weather_forecast(metar: str | None, taf: str | None,
                                taf_segs: list[dict], fc: dict | None,
                                when: datetime,
-                               span: tuple[datetime, datetime] | None = None) -> WeatherSummary:
+                               span: tuple[datetime, datetime] | None = None,
+                               ensemble: dict | None = None,
+                               field_elev_ft: float | None = None) -> WeatherSummary:
     """Endpoint conditions for a FUTURE flight: HRDPS backbone + TAF overlay.
 
     A METAR observes *now*, so it is carried for display only and never drives a
@@ -460,6 +502,13 @@ def _endpoint_weather_forecast(metar: str | None, taf: str | None,
         ws.source = Source.MODEL
     elif taf_segs:
         ws.source = Source.TAF
+    # Temperature and pressure for density altitude at the hour the flight
+    # actually departs. This is the gap the observation-only rule left: a
+    # departure four hours out is exactly the one whose performance the pilot
+    # cannot yet observe, and a hot afternoon is exactly when it matters. The
+    # METAR above is carried for display only and is deliberately not read here -
+    # it describes a different moment.
+    _apply_model_thermo(ws, ensemble, fc, i, field_elev_ft)
     return ws
 
 
@@ -467,7 +516,8 @@ def _endpoint_weather_at(metar: str | None, taf: str | None,
                          taf_segs: list[dict], fc: dict | None,
                          ensemble: dict | None, *,
                          when: datetime | None, is_now: bool,
-                         span: tuple[datetime, datetime] | None = None) -> WeatherSummary:
+                         span: tuple[datetime, datetime] | None = None,
+                         field_elev_ft: float | None = None) -> WeatherSummary:
     """Dispatch between the observation-anchored "now" path and the forecast one.
 
     Either way the TAF's worst case over the flight window is attached: on the
@@ -475,11 +525,12 @@ def _endpoint_weather_at(metar: str | None, taf: str | None,
     path it rides alongside the observation as its own set of check rows.
     """
     if is_now or when is None:
-        ws = _endpoint_weather(metar, taf, fc, ensemble)
+        ws = _endpoint_weather(metar, taf, fc, ensemble, field_elev_ft)
         if taf_segs and span:
             ws.window_forecast = _window_forecast(wx.worst_in_window(taf_segs, *span))
         return ws
-    return _endpoint_weather_forecast(metar, taf, taf_segs, fc, when, span)
+    return _endpoint_weather_forecast(metar, taf, taf_segs, fc, when, span,
+                                      ensemble, field_elev_ft)
 
 
 def _card_ceilings(ws: WeatherSummary | None) -> list[float | None]:
@@ -607,7 +658,8 @@ def _assess_endpoint(
     if span is None and when is not None:
         span = flight_span(when)
     weather = _endpoint_weather_at(metar, taf, taf_segs, fc, ensemble,
-                                   when=when, is_now=is_now, span=span)
+                                   when=when, is_now=is_now, span=span,
+                                   field_elev_ft=airport.elevation_ft)
     if taf_segs:
         weather.taf_periods = _taf_periods(taf_segs, span)
         weather.taf_valid_from = min(s["start"] for s in taf_segs).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -641,7 +693,10 @@ def _assess_endpoint(
     # structurally incapable of moving the verdict rather than merely declining
     # to - and before the location stamp below, so it names its aerodrome like
     # every other row without saying so itself.
-    da = density.solve(airport.elevation_ft, weather.altimeter_inhg, weather.temp_c)
+    # The source is read back off the values that produced it, so a blended
+    # forecast can never print as an observation.
+    da = density.solve(airport.elevation_ft, weather.altimeter_inhg, weather.temp_c,
+                       source=weather.field_sources.get("temp", Source.MODEL))
     da_row = density.advisory_row(da)
     if da_row is not None:
         checks.append(da_row)
@@ -1327,15 +1382,20 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     dest_segs = wx.parse_taf_segments(tafs.get(dest.ident) or "")
 
     # Blend a multi-model wind only where there's no METAR (the endpoints that
-    # need it most - small fields without a station). The blend is a *current
-    # hour* product, so it has nothing to say about a future ETD.
+    # need it most - small fields without a station). On a future ETD the blend
+    # supplies temperature and pressure for density altitude only - the wind
+    # there comes from the TAF-over-model merge that gates the flight.
     if is_now:
         dep_ens, dest_ens = await asyncio.gather(
             _ens_if_needed(metars.get(dep.ident), dep, days),
             _ens_if_needed(metars.get(dest.ident), dest, days),
         )
     else:
-        dep_ens = dest_ens = None
+        # A future ETD takes the blend at its own hour, for temperature and
+        # pressure only. Both ends concurrently, and both cached.
+        dep_ens, dest_ens = await asyncio.gather(
+            _ens_at(dep, days, etd_utc), _ens_at(dest, days, eta_prov),
+        )
     dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens, flight_rules=flight_rules, when=etd_utc, is_now=is_now, taf_segments=dep_segs, span=flight_span(etd_utc, eta_prov), show_obs=show_obs, history_unavailable=hist_failed)
 
     # Nearest reporting station for an endpoint that has no METAR of its own.
@@ -1408,7 +1468,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     dest_ws_prov = _endpoint_weather_at(metars.get(dest.ident), tafs.get(dest.ident),
                                         dest_segs, dest_fc, dest_ens,
                                         when=eta_prov, is_now=is_now,
-                                        span=flight_span(etd_utc, eta_prov))
+                                        span=flight_span(etd_utc, eta_prov),
+                                        field_elev_ft=dest.elevation_ft)
     gate_ceiling = lowest_ceiling(_card_ceilings(dep_a.weather)
                                   + _card_ceilings(dest_ws_prov)
                                   + [e.get("ceiling_ft") for e in enroute])
@@ -1860,7 +1921,7 @@ async def suggest(
     origin_ws = _endpoint_weather_at(
         metars.get(origin_ident), tafs.get(origin_ident),
         wx.parse_taf_segments(tafs.get(origin_ident) or ""), origin_fc, None,
-        when=etd_utc, is_now=is_now)
+        when=etd_utc, is_now=is_now, field_elev_ft=origin.elevation_ft)
     origin_ceiling = lowest_ceiling(
         [_point_at(origin_fc, None if is_now else etd_utc).get("ceiling_ft") if origin_fc else None,
          *_card_ceilings(origin_ws)])
@@ -1981,6 +2042,30 @@ async def _ens_if_needed(metar, airport, days):
     if metar:
         return None
     return await _safe(openmeteo.ensemble_wind_now(airport.lat, airport.lon, days), None)
+
+
+async def _ens_at(airport, days: int, when: datetime):
+    """The multi-model blend at a **future** hour, for density altitude.
+
+    The blend used to be a current-hour product only, so a planned departure got
+    nothing from it. It is now indexable, and the hour a flight actually departs
+    is the one whose temperature and pressure the density altitude row needs -
+    a METAR cannot answer for 1900Z and the single HRDPS run is one model's
+    opinion where five are available.
+
+    Only the thermodynamics reach the forecast path (see
+    ``_endpoint_weather_forecast``); the wind there stays with the TAF-over-model
+    merge that gates the flight, which this must not quietly displace.
+    """
+    got = await _safe(openmeteo.ensemble_series(airport.lat, airport.lon, days), None)
+    if not got:
+        return None
+    resp, models = got
+    i = openmeteo.index_for_time(resp.get("hourly", {}),
+                                 when.strftime("%Y-%m-%dT%H:00"))
+    if i is None:
+        return None       # past the blend's horizon - the single run stands in
+    return openmeteo.ensemble_at_index(resp, models, i)
 
 
 async def assess_circuits(

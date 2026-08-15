@@ -256,10 +256,12 @@ class WeatherSummary(BaseModel):
     visibility_sm: Optional[float] = None
     ceiling_agl_ft: Optional[float] = None
     hazards: list[str] = []  # e.g. ["thunderstorm", "freezing_rain"]
-    # Observed temperature and altimeter setting. Populated ONLY on the "now"
-    # path, from a METAR - a forecast carries neither, and a METAR read at a
-    # future ETD describes the wrong moment. Density altitude is derived from
-    # these, so the None case is what keeps that row honest.
+    # Temperature and altimeter setting for the moment this summary describes:
+    # a METAR on the "now" path, the model (blended where several cover the
+    # point) on the forecast path. Density altitude is derived from these, and
+    # ``field_sources["temp"]`` / ``["pressure"]`` record which they were - a
+    # METAR must never be read against a future ETD, so the distinction is kept
+    # rather than left to the reader.
     temp_c: Optional[float] = None
     altimeter_inhg: Optional[float] = None
     source: Source = Source.NONE       # where wind/conditions came from
@@ -313,9 +315,10 @@ class DensityAltitude(BaseModel):
 
     Hangs off the *assessment* rather than off ``WeatherSummary`` because it
     needs field elevation, which is a property of the aerodrome and not of the
-    weather. Present only when a live METAR supplied both a temperature and an
-    altimeter setting; ``None`` otherwise, which is what stops the card
-    inventing a number for a departure hours away.
+    weather. Present whenever a temperature and an altimeter setting could be
+    had for the moment being assessed - a METAR for a departure now, the model
+    for one later - and ``None`` when neither could, which is what stops the
+    card inventing a number it has no basis for.
     """
 
     field_elevation_ft: float
@@ -327,6 +330,11 @@ class DensityAltitude(BaseModel):
     isa_temp_c: float
     oat_c: float
     altimeter_inhg: float
+    # Where the temperature and pressure came from: a METAR for a departure now,
+    # the model (blended across several where they cover the point) for one
+    # later. Carried on the value so the row that prints it cannot show a
+    # forecast as an observation.
+    source: Source = Source.OBSERVED
 
 
 class AirportAssessment(BaseModel):

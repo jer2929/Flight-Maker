@@ -126,3 +126,152 @@ def test_a_density_altitude_advisory_never_moves_the_verdict():
     # decision() fails on `not passed and applicable`; the advisory is neither.
     assert not any((not c.passed) and c.applicable for c in checks)
     assert verdict.value == "GO"
+
+
+# --- the forecast path ------------------------------------------------------
+#
+# This module used to run off an observed METAR and nothing else, on the stated
+# grounds that "a forecast carries neither a reliable surface temperature nor an
+# altimeter setting". HRDPS serves both on every request the app already makes,
+# and the observation-only rule left the flight that most needs this row - a hot
+# afternoon departure, hours away, that cannot yet be observed - with no row at
+# all. What must never happen is a forecast presented as an observation.
+
+def test_source_rides_on_the_value():
+    obs = density.solve(CYFD_ELEV, 29.92, 30.0)
+    assert obs.source == Source.OBSERVED, "the default stays the observed path"
+    model = density.solve(CYFD_ELEV, 29.92, 30.0, source=Source.MODEL)
+    assert model.source == Source.MODEL
+    # Identical inputs, identical answer - only the provenance differs.
+    assert model.density_altitude_ft == obs.density_altitude_ft
+
+
+def test_row_reports_the_source_it_was_given():
+    """It used to hardcode "Observed", which would have become a lie."""
+    obs = density.advisory_row(density.solve(CYFD_ELEV, 29.92, 32.0))
+    assert obs.source == "Observed"
+    model = density.advisory_row(
+        density.solve(CYFD_ELEV, 29.92, 32.0, source=Source.MODEL))
+    assert model.source == "HRDPS"
+    assert model.actual_text == obs.actual_text
+
+
+def test_a_model_derived_row_is_still_only_advisory():
+    """The go/no-go on a density altitude belongs to the pilot with the POH.
+
+    That reasoning does not weaken because the number came from a forecast, so
+    the model path gets exactly the same non-gating treatment.
+    """
+    row = density.advisory_row(
+        density.solve(CYFD_ELEV, 29.92, 40.0, source=Source.MODEL))
+    assert row.passed is True
+    assert row.advisory is True
+
+
+def test_model_temperature_is_corrected_to_the_field_elevation():
+    """The model's grid cell is not the aerodrome, and every degree is 120 ft.
+
+    A cell 1,000 ft above the field reports a temperature about 2 C too cold for
+    the field, which would understate the density altitude by roughly 240 ft.
+    """
+    # Model cell at 1,815 ft reading 18 C; the field is 1,000 ft lower.
+    assert density.oat_at_field(18.0, 1815.0, 815.0) == pytest.approx(19.98, abs=0.01)
+    # And the other way round.
+    assert density.oat_at_field(18.0, 815.0, 1815.0) == pytest.approx(16.02, abs=0.01)
+
+
+def test_temperature_correction_declines_to_guess():
+    # No elevation for either end means no correction - returning the raw value
+    # is honest; inventing a lapse over an unknown distance is not.
+    assert density.oat_at_field(18.0, None, 815.0) == 18.0
+    assert density.oat_at_field(18.0, 1815.0, None) == 18.0
+    assert density.oat_at_field(None, 1815.0, 815.0) is None
+
+
+def test_the_correction_changes_the_answer_by_the_expected_amount():
+    raw = density.solve(CYFD_ELEV, 29.92, 18.0, source=Source.MODEL)
+    corrected = density.solve(
+        CYFD_ELEV, 29.92, density.oat_at_field(18.0, 1815.0, CYFD_ELEV),
+        source=Source.MODEL)
+    # ~2 C warmer at the field -> ~240 ft more density altitude.
+    assert corrected.density_altitude_ft - raw.density_altitude_ft == pytest.approx(238, abs=8)
+
+
+# --- the wiring: a departure hours away now gets an answer ------------------
+
+def test_blend_is_preferred_over_the_single_run():
+    """Five models' answer beats one where both are available."""
+    from app import orchestrator
+    ws = WeatherSummary()
+    fc = {"elevation": 248.4,      # 815 ft - the same field, so no lapse to apply
+          "hourly": {"temperature_2m": [10.0], "pressure_msl": [1000.0]}}
+    orchestrator._apply_model_thermo(
+        ws, {"temp_c": 30.0, "altimeter_inhg": 29.92}, fc, 0, CYFD_ELEV)
+    assert ws.temp_c == 30.0
+    assert ws.altimeter_inhg == 29.92
+
+
+def test_a_model_never_overwrites_an_observation():
+    """The one direction this must never run."""
+    from app import orchestrator
+    ws = WeatherSummary(temp_c=22.0, altimeter_inhg=30.10)
+    ws.field_sources = {"temp": Source.OBSERVED, "pressure": Source.OBSERVED}
+    orchestrator._apply_model_thermo(
+        ws, {"temp_c": 30.0, "altimeter_inhg": 29.00}, None, 0, CYFD_ELEV)
+    assert ws.temp_c == 22.0
+    assert ws.altimeter_inhg == 30.10
+    assert ws.field_sources["temp"] == Source.OBSERVED
+
+
+def test_single_run_fills_in_when_the_blend_is_unavailable():
+    from app import orchestrator
+    ws = WeatherSummary()
+    fc = {"elevation": 248.4,
+          "hourly": {"temperature_2m": [30.0], "pressure_msl": [1013.25]}}
+    orchestrator._apply_model_thermo(ws, None, fc, 0, CYFD_ELEV)
+    assert ws.temp_c == pytest.approx(30.0, abs=0.1)
+    assert ws.altimeter_inhg == pytest.approx(29.92, abs=0.01)
+    assert ws.field_sources["temp"] == Source.MODEL
+    assert ws.field_sources["pressure"] == Source.MODEL
+
+
+def test_pressure_msl_is_read_not_surface_pressure():
+    """``surface_pressure`` is referenced to the model's own grid elevation.
+
+    Using it would fold the grid-cell-versus-aerodrome error straight into the
+    pressure altitude - the same error field elevation is taken from the airport
+    database to avoid.
+    """
+    from app import orchestrator
+    ws = WeatherSummary()
+    fc = {"elevation": 248.4,
+          "hourly": {"temperature_2m": [20.0], "pressure_msl": [1013.25],
+                     "surface_pressure": [975.0]}}
+    orchestrator._apply_model_thermo(ws, None, fc, 0, CYFD_ELEV)
+    assert ws.altimeter_inhg == pytest.approx(29.92, abs=0.01)
+
+
+def test_a_future_departure_finally_gets_a_row():
+    """The gap the observation-only rule left.
+
+    A hot afternoon departure four hours out is exactly the flight whose
+    performance the pilot cannot yet observe, and it used to produce no density
+    altitude row at all.
+    """
+    from datetime import datetime, timezone
+    from app import orchestrator
+    when = datetime(2026, 8, 15, 18, 0, tzinfo=timezone.utc)
+    fc = {"elevation": 248.4, "utc_offset_seconds": 0,
+          "hourly": {"time": ["2026-08-15T18:00"], "temperature_2m": [33.0],
+                     "pressure_msl": [1008.0], "windspeed_10m": [8],
+                     "winddirection_10m": [270], "visibility": [24140]}}
+    ws = orchestrator._endpoint_weather_forecast(
+        None, None, [], fc, when, field_elev_ft=CYFD_ELEV)
+    assert ws.temp_c is not None, "the model carried a temperature all along"
+    assert ws.altimeter_inhg is not None
+    row = density.advisory_row(
+        density.solve(CYFD_ELEV, ws.altimeter_inhg, ws.temp_c,
+                      source=ws.field_sources.get("temp", Source.MODEL)))
+    assert row is not None, "33 C at an 815 ft field is well past the threshold"
+    assert row.source == "HRDPS", "and it must not claim to be an observation"
+    assert row.advisory is True

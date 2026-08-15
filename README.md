@@ -51,6 +51,27 @@ silently assess the wrong flight), and if the time you picked passes while the t
 sits open the control resets to **Now** and says so rather than changing quietly
 underneath you.
 
+### Would waiting help?
+Directly under the go/no-go, two different questions get answered.
+
+If the flight is **not** a GO, the nudge says how far you are from one - the
+nearest hour whose forecast turns MITIGATE or GO, provided the good spell is long
+enough to hold your whole leg, and what stops applying when you get there.
+
+If the flight **is** already a GO, you still get told when waiting would buy you
+something real: **route wind at cruise**, **ceiling**, a **gating hazard clearing**,
+or **crosswind**. The wind figure is the component along your course at the
+altitude that hour's winds and that hour's ceiling would actually support, not the
+surface wind - a tailwind that only exists above a deck you cannot legally climb
+through is not a reason to wait for it.
+
+Two rules keep this from becoming noise. An option must be **no worse on every
+axis it does not improve**, so a 25 kt wind swing that comes with a deck 3,500 ft
+lower is never offered. And the thresholds are yours (*My Minimums*): 10 kt of
+wind, 1,500 ft of ceiling, 5 kt of crosswind by default, searching up to 12 h
+ahead. Most flights produce nothing here, which is the correct answer on most
+flights. It is **advisory only** and never appears as a reason not to go now.
+
 ### The observation horizon
 An observation describes the next half hour, not the next afternoon. Once the ETD
 is **3 h or more** out, the current METAR, the METAR history and the trends drawn
@@ -191,8 +212,7 @@ GFA panel below*, and stay silent on the days there is nothing to say.
 The one performance limiter none of the other rows can see. A day comfortably
 inside every wind, ceiling and visibility minimum can still cost a normally
 aspirated trainer a large slice of its climb rate and stretch its takeoff roll well
-past the POH numbers - and nothing about the wind or the cloud tells you that. It
-comes straight off the observation:
+past the POH numbers - and nothing about the wind or the cloud tells you that:
 
 ```
 PA = field elevation + (29.92 − altimeter) × 1000
@@ -211,12 +231,19 @@ structurally incapable of moving your verdict - it's appended after the decision
 made. The go/no-go on a density altitude belongs to whoever has the aircraft's
 numbers in front of them.
 
-Computed from an **observed METAR only** - it needs a real temperature and a real
-altimeter setting. On a planned ETD, or at a field with no METAR of its own, there
-is no row at all rather than a plausible-looking number derived from the wrong time
-or the wrong aerodrome. Field elevation comes from the airport database, never from
-the model's grid-cell elevation, which can be out by hundreds of feet - the same
-order as the thing being measured.
+**Observation for now, forecast for later, and the row says which.** A METAR is
+the right instrument for a departure in the next few minutes and the wrong one for
+a departure at 1900Z - so a planned ETD is answered from the model instead, blended
+across the five models where they cover the field. This used to be observation-only,
+which meant the flight that most needs the row - a hot afternoon departure, hours
+away, whose performance you cannot yet observe - got no row at all.
+
+Two things the model path is careful about. Field elevation always comes from the
+airport database, never from the model's grid-cell elevation, which can be out by
+hundreds of feet - the same order as the thing being measured. The altimeter setting
+comes from `pressure_msl` rather than `surface_pressure`, which is referenced to
+that same grid cell; the model temperature is corrected from the grid cell to the
+real field by the ISA lapse rate, because every degree is 120 ft of density altitude.
 
 ### En-route aerodromes
 A collapsed-by-default list of every aerodrome within **5 nm of the straight
@@ -334,6 +361,27 @@ prefers real aviation data over the model:
 The timeline combines both endpoints conservatively (worse of the two) and runs
 the decision card on each hour. Where a field has both METAR and model, the
 model-vs-observed wind delta is shown as a confidence hint.
+
+### How good is the en-route ceiling?
+Honestly: it is a **planning aid, not an observation**, and worth understanding
+because it is the weakest number on the page.
+
+GEM does not serve a cloud base, so an en-route ceiling is *inferred* by scanning
+pressure levels for the lowest broken-or-worse layer, taking each level's real
+geopotential height for that hour and interpolating the base between levels. That
+buys roughly ±700–1,000 ft. It is structurally blind to decks thinner than the
+level spacing, and it cannot see above the top of the scan (~700 hPa, near
+10,000 ft) - so the card says *"no ceiling below 10,000 ft"* rather than "clear",
+because the latter claims more than the method supports.
+
+The much better answer, where one exists, is a **real report**: the nearest
+reporting station to each route midpoint rides the METAR/TAF batch the route
+already issues, and is merged worst-of. An observed broken layer **lowers** the
+route ceiling; an observed clear sky **never raises** it, because a field 30 nm
+off track being clear is no evidence about the air over your course. Past the
+observation horizon that station's TAF is read at the hour you are actually over
+the point. Each row names the station and distance behind its number, so a real
+observation is always distinguishable from an inference.
 
 On the airport cards the TAF is split into its **FM/BECMG/TEMPO/PROB periods**,
 and **every period the flight passes through is green** - whatever kind of group
@@ -473,10 +521,12 @@ app/
                      for every advisory, and which ones reach this flight),
                      runway, winds_aloft, weather (+TAF segments),
                      timeline, evaluator, density (density altitude),
+                     etd_options (would waiting help?),
                      fetch_health (what failed to download)
 data/                limits.yaml + bundled airport/runway seed
 scripts/             refresh_airport_data.py (+ ensure_airport_data bootstrap),
-                     probe_area_products.py (what the advisory feeds return)
+                     probe_area_products.py (what the advisory feeds return),
+                     probe_openmeteo_levels.py (which levels/variables are served)
 web/                 single-page dashboard (Route + Discovery tabs)
 tests/               offline logic tests + auto-skipping live smoke tests
 ```

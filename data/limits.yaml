@@ -31,7 +31,8 @@ hard_limits:
   # you to open the performance chart; it is never a NO-GO, because the go/no-go
   # on a density altitude belongs to whoever has the aircraft's numbers in front
   # of them. NAV CANADA broadcasts DA on ATIS/AWOS at 200 ft AAE; 500 is the more
-  # conservative default here. Computed from an observed METAR only.
+  # conservative default here. Computed from an observed METAR for a departure
+  # now, and from the model forecast for a departure later; the row names which.
   density_altitude:
     advisory_above_field_ft: 500
   # ADVISORY ONLY - like density_altitude above, this never gates anything.
