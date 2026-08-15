@@ -146,6 +146,47 @@ def test_one_upstream_surviving_is_not_a_failure(monkeypatch, upstreams):
     assert r.departure.metar_history, "should have fallen back to CFPS"
 
 
+def test_a_field_with_no_metar_is_not_told_its_history_failed(monkeypatch, upstreams):
+    """Reported from CYFD, which matches ``_REPORTING_RE`` and publishes nothing.
+    The request was always going to come back empty, so blaming the download for
+    the absence puts a line in the banner that can never mean anything - and a
+    banner that cries wolf is one the pilot learns to click past."""
+    from app.services import fetch_health
+
+    async def boom(*a, **k):
+        raise RuntimeError("down")
+
+    async def no_metars(sites, *a, **k):
+        return {}
+
+    monkeypatch.setattr(awc, "metar_history", boom)
+    monkeypatch.setattr(cfps, "metar_history", boom)
+    monkeypatch.setattr(cfps, "metars", no_metars)
+
+    with fetch_health.collect() as health:
+        r = _route(NOW + timedelta(hours=1))
+
+    assert fetch_health.HISTORY not in health.failed
+    assert r.departure.history_unavailable is False
+
+
+def test_a_reporting_field_is_still_told_its_history_failed(monkeypatch, upstreams):
+    """The guard must not swallow the case the banner was built for."""
+    from app.services import fetch_health
+
+    async def boom(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(awc, "metar_history", boom)
+    monkeypatch.setattr(cfps, "metar_history", boom)
+
+    with fetch_health.collect() as health:
+        r = _route(NOW + timedelta(hours=1))
+
+    assert fetch_health.HISTORY in health.failed
+    assert r.departure.history_unavailable is True
+
+
 # ---- Night arrival on a day flight --------------------------------------
 
 def test_day_flight_landing_after_dark_is_called_out(upstreams):

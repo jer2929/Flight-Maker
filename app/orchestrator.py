@@ -38,6 +38,7 @@ from app.services import cfs_links, geometry, hazards as hz
 from app.services import density
 from app.services import etd_options as etd_opts
 from app.services import fetch_health
+from app.services import firs
 from app.services import magvar
 from app.services import solar
 from app.services import trends
@@ -87,6 +88,13 @@ OBS_RELEVANT_HRS = 3
 
 ENROUTE_CORRIDOR_NM = 5.0
 ENROUTE_MAX_FIELDS = 20
+
+# How far above the field a circuit flight is assessed for, when scoping area
+# advisories to it. A circuit sits at 1,000 ft AGL; the rest is the climb-out and
+# an overhead join. Deliberately far below the route's cruise-plus-2,000: a
+# SIGMET at FL240 has nothing to say about a flight that never leaves the
+# aerodrome, and putting it on the card would only teach the pilot to skim.
+CIRCUIT_SLAB_FT = 3000.0
 
 
 def flight_span(etd: datetime, eta: datetime | None = None) -> tuple[datetime, datetime]:
@@ -657,6 +665,7 @@ def _assess_endpoint(
     taf_segments: list[dict] | None = None,
     span: tuple[datetime, datetime] | None = None,
     show_obs: bool = True, history_unavailable: bool = False,
+    extra_checks: list[LimitCheck] | None = None,
 ) -> AirportAssessment:
     lat, lon = airport.lat, airport.lon
     runways = fill_headings(ap.get_runways(airport.ident), lat, lon)
@@ -688,7 +697,8 @@ def _assess_endpoint(
     rw = _rw_with_mag(best_runway(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt), lat, lon)
     verdict, checks, tchecks, n = decision(
         weather, rw, mode, ap.is_complex_airspace(airport.ident), manual_threats,
-        ceiling_mode=ceiling_mode, flight_rules=flight_rules)
+        extra_checks=extra_checks, ceiling_mode=ceiling_mode,
+        flight_rules=flight_rules)
     # What the TAF says about the rest of the window, as its own rows (and the
     # PROB advisory). A failing one has to move the verdict, or the row would
     # report a limit bust the card then ignores.
@@ -978,13 +988,17 @@ async def _gather_hazards(sites: list[str], path: list[tuple[float, float]],
     ordinary case, and it is the one the page may finally state truthfully.
     """
     bbox = geometry.bbox_of(path, buffer_nm)
+    # CFPS issues these per FIR, so ask about the regions this flight is in
+    # rather than about all seven. An empty set (a US departure, somewhere the
+    # boxes cannot place) falls back to all seven inside ``cfps.area``.
+    route_firs = firs.firs_for_path(path, buffer_nm)
     # Each job declares which kinds of advisory it is a source of, so a failure
     # can be judged by what it costs rather than by the fact that it happened.
     S, A, P = fetch_health.SIGMET, fetch_health.AIRMET, fetch_health.PIREP
     jobs: list[tuple[str, str, tuple[str, ...], object]] = [
-        ("cfps:sigmet", "CFPS SIGMET", (S,), cfps.sigmets(sites)),
-        ("cfps:airmet", "CFPS AIRMET", (A,), cfps.airmets(sites)),
-        ("cfps:pirep", "CFPS PIREP", (P,), cfps.pireps(sites)),
+        ("cfps:sigmet", "CFPS SIGMET", (S,), cfps.sigmets(sites, route_firs)),
+        ("cfps:airmet", "CFPS AIRMET", (A,), cfps.airmets(sites, route_firs)),
+        ("cfps:pirep", "CFPS PIREP", (P,), cfps.pireps(sites, route_firs)),
         ("isigmet", "AWC international SIGMET", (S,), awc.isigmets()),
         ("airsigmet", "AWC US SIGMET/AIRMET", (S, A), awc.airsigmets()),
         ("cwa", "AWC centre weather advisory", (S,), awc.cwas()),
@@ -1029,6 +1043,57 @@ async def _gather_hazards(sites: list[str], path: list[tuple[float, float]],
             if kind in blind:
                 fetch_health.record(kind)
     return ah.dedupe(out)
+
+
+def _area_advisory_check(relevant: list[ah.AreaHazard]) -> LimitCheck:
+    """One Weather row for the area advisories over a circuit aerodrome.
+
+    The route builds nine rows here, through ``hazards.weather_checks``, and that
+    machinery is route-shaped in ways a circuit is not: it counts IMC points
+    across a corridor, samples a low-level jet along track, and signs each icing
+    and turbulence row off with "confirm on the GFA panel below" - a panel the
+    circuits page does not draw. Reusing it would put four kinds of wrong on the
+    card to gain nothing a stay-in-the-pattern flight can act on.
+
+    So the circuit gets the part that survives the loss of a route: **is there a
+    bulletin over this aerodrome, and does it speak for itself?** SIGMETs and
+    CWAs do - they are issued because the weather is hazardous to all aircraft,
+    which is why they are ``ah.GATING_KINDS`` - so a relevant one fails the row.
+    An AIRMET or a PIREP is reported without gating, the same standing they have
+    on the route card, where they reach the verdict only through rows that grade
+    severity against the altitudes flown.
+
+    A row either way, never an empty space: "nothing active over the field" is
+    the answer a pilot came for, and it is not the same answer as a silent card.
+    """
+    gating = [h for h in relevant if h.kind in ah.GATING_KINDS]
+    advisory_only = [h for h in relevant if h.kind not in ah.GATING_KINDS]
+
+    def _names(items: list[ah.AreaHazard]) -> str:
+        out: list[str] = []
+        for h in items[:4]:
+            label = ah.HAZARD_LABELS.get(h.hazard) or h.hazard or "advisory"
+            out.append(f"{h.kind} ({label})")
+        extra = len(items) - len(out)
+        return ", ".join(out) + (f" +{extra} more" if extra > 0 else "")
+
+    if gating:
+        return LimitCheck(
+            key="area_advisories", label="SIGMET / CWA over the field",
+            limit_text="none over the aerodrome",
+            actual_text=f"{_names(gating)} - read it before you fly",
+            passed=False, group="weather")
+    if advisory_only:
+        return LimitCheck(
+            key="area_advisories", label="AIRMET / PIREP near the field",
+            limit_text="none over the aerodrome",
+            actual_text=f"{_names(advisory_only)} - advisory, check the altitudes",
+            passed=True, advisory=True, group="weather")
+    return LimitCheck(
+        key="area_advisories", label="Area advisories",
+        limit_text="none over the aerodrome",
+        actual_text="no active SIGMET / AIRMET / PIREP over the field",
+        passed=True, group="weather")
 
 
 def _why(exc: BaseException) -> str:
@@ -1388,7 +1453,12 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # Both upstreams failing is what used to render as an empty panel that looked
     # exactly like "no trend to report" - the reason trends seemed to come and go
     # between two runs of the same route. Track it so the card can say so.
-    hist_failed = show_obs and awc_hist is None and cfps_hist is None
+    # ...and only at a field that publishes observations in the first place. The
+    # request is batched across both ends, so a non-reporting ident costs nothing
+    # to leave in it - but blaming the download for an absence that was never
+    # going to be filled is how a banner earns its way into being ignored.
+    hist_failed = (show_obs and awc_hist is None and cfps_hist is None
+                   and any(metars.get(s) for s in sites))
     if hist_failed:
         fetch_health.record(fetch_health.HISTORY)
     awc_hist, cfps_hist = awc_hist or {}, cfps_hist or {}
@@ -1413,7 +1483,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         dep_ens, dest_ens = await asyncio.gather(
             _ens_at(dep, days, etd_utc), _ens_at(dest, days, eta_prov),
         )
-    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens, flight_rules=flight_rules, when=etd_utc, is_now=is_now, taf_segments=dep_segs, span=flight_span(etd_utc, eta_prov), show_obs=show_obs, history_unavailable=hist_failed)
+    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens, flight_rules=flight_rules, when=etd_utc, is_now=is_now, taf_segments=dep_segs, span=flight_span(etd_utc, eta_prov), show_obs=show_obs, history_unavailable=hist_failed and bool(metars.get(dep.ident)))
 
     # Nearest reporting station for an endpoint that has no METAR of its own.
     async def _attach_nearby(assessment, airport, cands):
@@ -1516,7 +1586,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     eta_utc = etd_utc + timedelta(hours=flight_hr)
     span = flight_span(etd_utc, eta_utc)
 
-    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens, flight_rules=flight_rules, when=eta_utc, is_now=is_now, taf_segments=dest_segs, span=span, show_obs=show_obs, history_unavailable=hist_failed)
+    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens, flight_rules=flight_rules, when=eta_utc, is_now=is_now, taf_segments=dest_segs, span=span, show_obs=show_obs, history_unavailable=hist_failed and bool(metars.get(dest.ident)))
 
     # The departure was assessed before the winds-aloft pass refined the ETA, so
     # its TAF was flagged against the provisional window. Re-flag it against the
@@ -1596,7 +1666,17 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # is set aside *with its reason* rather than dropped.
     haz_low_ft = 0.0
     haz_high_ft = (cruise_alt + 2000.0) if cruise_alt else 10000.0
-    known_firs = {h.fir for h in raw_hazards if h.fir and h.source == ah.CFPS}
+    # The regions this route is actually in - read off the route, not off the
+    # feed. Deriving it from the FIRs that came back was circular: CFPS was asked
+    # about every Canadian FIR, so every FIR with an active bulletin was "known"
+    # and the test could never reject anything.
+    #
+    # Padded the same way the fetch was, so the two agree. A narrower pad here
+    # would set aside, on its region alone, a bulletin the fetch had already
+    # judged near enough to ask for - and this test only ever runs on the ones
+    # with no shape to judge them by.
+    known_firs = firs.firs_for_path(
+        route_pts, max(settings.hazard_corridor_nm, settings.pirep_corridor_nm))
     relevant_haz, aside_haz = ah.filter_relevant(
         raw_hazards, path=route_pts, buffer_nm=settings.hazard_corridor_nm,
         low_ft=haz_low_ft, high_ft=haz_high_ft, etd=etd_utc, eta=eta_utc,
@@ -2107,7 +2187,10 @@ async def assess_circuits(
     days = days_for(settings.timeline_hours)
     is_reporting = bool(_REPORTING_RE.match(aerodrome_ident))
     sites = [aerodrome_ident] if is_reporting else []
-    metar_d, taf_d, notam_d, fc_d, ens_d = await asyncio.gather(
+    # A circuit is a point, not a track, and every geometry helper below takes a
+    # one-point path without complaint (see ``geometry.polyline_distance_nm``).
+    field_pt = [(airport.lat, airport.lon)]
+    metar_d, taf_d, notam_d, fc_d, ens_d, raw_hazards = await asyncio.gather(
         _safe(cfps.metars(sites), {}, fetch_health.METAR) if sites else asyncio.sleep(0, result={}),
         _safe(cfps.tafs(sites), {}, fetch_health.TAF) if sites else asyncio.sleep(0, result={}),
         _safe(cfps.notams([aerodrome_ident]), {}, fetch_health.NOTAM),
@@ -2116,6 +2199,14 @@ async def assess_circuits(
         # its own - see the same call in ``suggest``.
         _safe(openmeteo.ensemble_wind_now(airport.lat, airport.lon, days), None)
         if is_now else asyncio.sleep(0, result=None),
+        # Area advisories. The circuits checklist has always printed "TAF +
+        # SIGMET/AIRMET/PIREP + model" over its Weather group while fetching none
+        # of the three - a caption describing the route card, on a card that had
+        # no idea whether a SIGMET was sitting over the field.
+        _gather_hazards(sites, field_pt,
+                        max(settings.hazard_corridor_nm, settings.pirep_corridor_nm),
+                        _gairmet_hours(etd_utc, etd_utc, now),
+                        settings.pirep_max_age_hr),
     )
     if not fc_d:
         fetch_health.record(fetch_health.HRDPS)
@@ -2126,14 +2217,49 @@ async def assess_circuits(
 
     # Same observation horizon as the route cards - see `show_obs` there.
     show_obs = etd_utc <= now + timedelta(hours=OBS_RELEVANT_HRS)
+    # An aerodrome that publishes no METAR has no observation history either, so
+    # asking for one can only ever come back empty - and a transient failure on
+    # that pointless request put "METAR observation history" in the banner at a
+    # field that never had any. ``_REPORTING_RE`` is no help here: CYFD matches
+    # it and publishes nothing. The only honest signal is whether a METAR
+    # actually came back, which it has by now.
+    want_history = show_obs and metar is not None
     awc_hist = await _safe(awc.metar_history([aerodrome_ident], 6), None,
-                           fetch_health.HISTORY) if show_obs else {}
+                           fetch_health.HISTORY) if want_history else {}
     history = (awc_hist or {}).get(aerodrome_ident, [])
+
+    # Which of them reach this aerodrome. Surface to 3,000 ft above the field:
+    # a circuit sits at 1,000 ft AGL, and the slab leaves room for the climb-out
+    # and an overhead join without reaching for the flight levels a cross-country
+    # would have to clear. The span collapses to the ETD plus the usual pad -
+    # ``flight_span`` handles the no-ETA case for exactly this caller.
+    span_from, span_to = flight_span(etd_utc)
+    field_elev = airport.elevation_ft or 0.0
+    relevant_haz, aside_haz = ah.filter_relevant(
+        raw_hazards, path=field_pt, buffer_nm=settings.hazard_corridor_nm,
+        low_ft=0.0, high_ft=field_elev + CIRCUIT_SLAB_FT,
+        etd=span_from, eta=span_to, now=now,
+        known_firs=firs.firs_for_path(
+            field_pt,
+            max(settings.hazard_corridor_nm, settings.pirep_corridor_nm)) or None,
+        pirep_max_age_hr=settings.pirep_max_age_hr,
+        pirep_buffer_nm=settings.pirep_corridor_nm)
 
     return _assess_endpoint(
         airport, metar, taf, fc_d, notam_d, mode, manual_threats,
         distance_nm=0.0, bearing=0.0, alt=None,
         history=history, ensemble=ensemble, when=etd_utc, is_now=is_now,
         flight_rules=flight_rules, ceiling_mode="circuit",
-        show_obs=show_obs, history_unavailable=(show_obs and awc_hist is None),
-    )
+        show_obs=show_obs, history_unavailable=(want_history and awc_hist is None),
+        extra_checks=[_area_advisory_check(relevant_haz)],
+    ).model_copy(update={
+        "sigmets": [ah.to_advisory(h) for h in relevant_haz
+                    if h.kind in ("SIGMET", "CWA")][:8],
+        "airmets": [ah.to_advisory(h) for h in relevant_haz
+                    if h.kind in ("AIRMET", "G-AIRMET")][:8],
+        "pireps": [ah.to_advisory(h) for h in relevant_haz
+                   if h.kind == "PIREP"][:8],
+        "nearby_advisories": [ah.to_advisory(h) for h in aside_haz[:12]],
+        "hazards_filtered": ah.drop_counts(aside_haz),
+        "hazards_geojson": ah.to_feature_collection(relevant_haz + aside_haz),
+    })

@@ -927,12 +927,25 @@ function destroyRadar() {
   RADAR = { map: null, wms: null, frames: [], idx: 0, layer: RADAR.layer || "RADAR_1KM_RRAI", timer: null };
 }
 
-async function loadRadar(r) {
+// The map takes a list of aerodromes rather than a route result, because a
+// circuit has one of them and a route has two. Everything below - the radar
+// animation, the hazard layers, the legend, the layer control - is the same
+// picture either way; only the course line and the second marker are a route's.
+function routeStops(r) {
+  return [r.departure.airport, r.destination.airport];
+}
+function circuitStop(r) {
+  return [r.airport];
+}
+
+async function loadRadar(r, stops) {
   const host = $("#route-radar");
   if (!host) return;
   if (typeof L === "undefined") { host.innerHTML = radarFallback(); return; }
-  const dep = r.departure.airport, dest = r.destination.airport;
-  const midLat = (dep.lat + dest.lat) / 2, midLon = (dep.lon + dest.lon) / 2;
+  const pts = (stops || routeStops(r)).filter(Boolean);
+  if (!pts.length) return;
+  const midLat = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
+  const midLon = pts.reduce((s, p) => s + p.lon, 0) / pts.length;
   const hazardsGeo = r.hazards_geojson && (r.hazards_geojson.features || []).length
     ? r.hazards_geojson : null;
   host.innerHTML = `<div class="panel radar-panel">
@@ -955,15 +968,20 @@ async function loadRadar(r) {
   RADAR.map = L.map("radar-map", { scrollWheelZoom: false }).setView([midLat, midLon], 7);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     { maxZoom: 11, attribution: "© OpenStreetMap" }).addTo(RADAR.map);
-  L.marker([dep.lat, dep.lon]).addTo(RADAR.map).bindTooltip(dep.ident, { permanent: false });
-  if (dest.ident !== dep.ident) L.marker([dest.lat, dest.lon]).addTo(RADAR.map).bindTooltip(dest.ident);
+  const seen = new Set();
+  pts.forEach((p) => {
+    if (seen.has(p.ident)) return;
+    seen.add(p.ident);
+    L.marker([p.lat, p.lon]).addTo(RADAR.map).bindTooltip(p.ident, { permanent: false });
+  });
   RADAR.wms = L.tileLayer.wms(GEOMET_WMS, {
     layers: RADAR.layer, format: "image/png", transparent: true, version: "1.3.0", opacity: 0.7,
   }).addTo(RADAR.map);
   // The course line. A hazard polygon means nothing without the track it does
-  // or does not cross, and the map used to show only the two end markers.
-  if (dest.ident !== dep.ident) {
-    L.polyline([[dep.lat, dep.lon], [dest.lat, dest.lon]],
+  // or does not cross, and the map used to show only the two end markers. A
+  // circuit has no track to draw - the single marker is the whole flight.
+  if (seen.size > 1) {
+    L.polyline(pts.map((p) => [p.lat, p.lon]),
       { color: "#e8eef7", weight: 2, opacity: 0.8, dashArray: "6 4" }).addTo(RADAR.map);
   }
   if (hazardsGeo) {
@@ -979,7 +997,14 @@ async function loadRadar(r) {
     // which is the same as not drawing it. PIREPs are capped at
     // ``pirep_corridor_nm`` from the route, so this can never run away; areas
     // are national and deliberately still do not get a vote.
-    const view = L.latLngBounds([[dep.lat, dep.lon], [dest.lat, dest.lon]]).pad(0.4);
+    //
+    // A single aerodrome has no extent of its own, so the pad has nothing to
+    // work on - give it a corridor's worth of margin to open out from.
+    const view = seen.size > 1
+      ? L.latLngBounds(pts.map((p) => [p.lat, p.lon])).pad(0.4)
+      : L.latLngBounds([pts[0].lat, pts[0].lon], [pts[0].lat, pts[0].lon]).pad(0.4)
+        .extend([pts[0].lat + 0.85, pts[0].lon + 1.15])
+        .extend([pts[0].lat - 0.85, pts[0].lon - 1.15]);
     const pireps = layers.pireps.getBounds();
     if (pireps.isValid()) view.extend(pireps);
     RADAR.map.fitBounds(view, { maxZoom: 8 });
@@ -1072,10 +1097,14 @@ function renderCircuits(r) {
   setHealth("route-data-health", dataHealthBanner(r.data_health, "runRoute"));
   $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.airport.ident} circuits: ${v} now${frLabel}</div>`;
   $("#route-checklist").innerHTML = checklistGroups(r, "(circuit minimums)");
+  $("#route-advisories").innerHTML = advisoriesBlock(r);
   $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
   const etdVal = ($("#etd") || {}).value;
   $("#route-endpoints").innerHTML = endpointCard(
     r, "Aerodrome", etdVal && etdVal !== "now" ? `your ETD ${zHM(etdVal)}` : "");
+  // Circuits carries the same hazard GeoJSON the route does, so it gets the same
+  // map - one marker instead of two, and no course line.
+  loadRadar(r, circuitStop(r));
 }
 
 // Both endpoint cards mark the same span, so they get the same label: the TAF
@@ -1130,7 +1159,7 @@ function renderRoute(r) {
     endpointCard(r.departure, "Departure", winLabel(win)) +
     endpointCard(r.destination, "Destination", winLabel(win));
   $("#route-enroute").innerHTML = enrouteBlock(r);
-  loadRadar(r);
+  loadRadar(r, routeStops(r));
 
   // The ETD suggestions now render under the verdict chip (see above), so this
   // block is purely the three window states.
@@ -1630,13 +1659,15 @@ function advisoriesBlock(r) {
   const items = [...(r.sigmets || []), ...(r.airmets || []), ...(r.pireps || [])];
   const nearby = r.nearby_advisories || [];
   const line = filteredLine(r.hazards_filtered || {});
+  // A circuits result is a bare airport card; a route result has two ends.
+  const where = r.departure ? "on the route" : "over the field";
   const aside = nearby.length
     ? `<details class="adv-aside"><summary>${escapeHtml(line || `${nearby.length} more fetched`)}</summary>${nearby.map(advisoryItem).join("")}</details>`
     : "";
   if (!items.length) {
     // Only ever reached when the fetch actually succeeded - a failed one raises
     // the data-health banner above this panel instead.
-    return `<div class="panel adv-none">No active SIGMET/AIRMET/PIREP on the route.${aside}</div>`;
+    return `<div class="panel adv-none">No active SIGMET/AIRMET/PIREP ${where}.${aside}</div>`;
   }
   return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(tap an item for the full text - check the altitudes, many apply only to higher levels)</span></summary>${items.map(advisoryItem).join("")}${aside}</details>`;
 }

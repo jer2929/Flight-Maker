@@ -591,10 +591,20 @@ def _drop_reason(h: AreaHazard, *, path, buffer_nm, low_ft, high_ft,
         # nothing left of it but the text, it can never be drawn, and it was
         # reaching the card marked relevant with no distance to check it by.
         return "geometry"
-    elif known_firs and h.source == AWC and h.fir and h.fir not in known_firs:
-        # AWC's SIGMET feeds are global. A record we cannot place, for a region
-        # this route never sees, is the one case worth dropping unplaced -
-        # otherwise a Reykjavik advisory rides along with every flight.
+    elif known_firs and h.fir and h.fir not in known_firs:
+        # Nothing here has a shape, so the region it names is the only evidence
+        # of where it is. A record for a region this route never enters is the
+        # one case worth dropping unplaced - otherwise a Reykjavik advisory
+        # rides along with every flight.
+        #
+        # This used to apply to AWC records only, on the grounds that AWC's feeds
+        # are the global ones. That was the wrong half: CFPS is the feed queried
+        # *per FIR*, and a great many of its bulletins describe their area in
+        # words that ``parse_icao_polygon`` cannot read - so a CZEG icing AIRMET,
+        # unplaced and therefore untested, reached a card in southern Ontario
+        # marked relevant with no distance beside it. The source-blind test also
+        # catches a merged record, whose ``source`` names both upstreams and so
+        # matched neither branch of the old one.
         return "fir"
 
     # --- how high ----------------------------------------------------------

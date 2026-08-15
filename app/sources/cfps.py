@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from typing import Iterable
 
 from app.config import get_settings
 from app.sources import _http, cache
@@ -204,7 +205,8 @@ async def notams(sites: list[str]) -> dict[str, list[dict]]:
 CANADIAN_FIRS = ("CZVR", "CZEG", "CZWG", "CZYZ", "CZUL", "CZQM", "CZQX")
 
 
-async def area(alpha: str, sites: list[str]) -> list[dict]:
+async def area(alpha: str, sites: list[str],
+               firs: Iterable[str] | None = None) -> list[dict]:
     """Raw CFPS items for an area product (``sigmet`` / ``airmet`` / ``pirep``).
 
     Goes through the same ``site=``-keyed request the METAR, TAF and NOTAM
@@ -218,33 +220,47 @@ async def area(alpha: str, sites: list[str]) -> list[dict]:
     ``_fetch`` chunks in input order, so a single ident CFPS rejects would
     otherwise take the aerodromes down with it.
 
+    ``firs`` names which regions to ask about; ``None`` means all seven. Asking
+    for all of them regardless of where the flight is used to be the default, on
+    the theory that the geometry filter would sort it out downstream. It cannot,
+    for the many bulletins that describe their area in words rather than
+    coordinates - those fail open, as they must, and an Edmonton AIRMET rode all
+    the way to a card in southern Ontario. The narrower question is also six
+    fewer round trips for a local flight. An empty iterable still means all
+    seven: ``services.firs`` returns nothing when it cannot place the route, and
+    that has to mean *ask about everywhere*, never *ask about nowhere*.
+
     Raises on failure. Reporting the failure belongs to the caller - swallowing
     it here is what let a dead AIRMET feed render as a clear sky.
     """
-    aerodromes, firs = await asyncio.gather(
+    wanted = [f for f in (firs or ()) if f in CANADIAN_FIRS] or list(CANADIAN_FIRS)
+    aerodromes, fir_items = await asyncio.gather(
         _fetch(alpha, sites) if sites else _none(),
-        _fetch(alpha, list(CANADIAN_FIRS)),
+        _fetch(alpha, wanted),
     )
-    return list(aerodromes) + list(firs)
+    return list(aerodromes) + list(fir_items)
 
 
 async def _none() -> list[dict]:
     return []
 
 
-async def sigmets(sites: list[str]) -> list[dict]:
+async def sigmets(sites: list[str],
+                  firs: Iterable[str] | None = None) -> list[dict]:
     """Active SIGMETs (convective, severe icing/turbulence, volcanic ash)."""
-    return await area("sigmet", sites)
+    return await area("sigmet", sites, firs)
 
 
-async def airmets(sites: list[str]) -> list[dict]:
+async def airmets(sites: list[str],
+                  firs: Iterable[str] | None = None) -> list[dict]:
     """Active AIRMETs (icing, turbulence, IFR, mountain obscuration)."""
-    return await area("airmet", sites)
+    return await area("airmet", sites, firs)
 
 
-async def pireps(sites: list[str]) -> list[dict]:
+async def pireps(sites: list[str],
+                 firs: Iterable[str] | None = None) -> list[dict]:
     """Recent PIREPs (pilots' own reports of icing, turbulence and cloud)."""
-    return await area("pirep", sites)
+    return await area("pirep", sites, firs)
 
 
 # GFA chart images are served as opaque IDs the browser loads directly.
