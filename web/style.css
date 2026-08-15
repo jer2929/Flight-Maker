@@ -320,6 +320,20 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .etd-nudge { margin-bottom: 14px; }
 .etd-nudge.MITIGATE { background: rgba(201,138,0,.12); border-color: var(--mitigate); }
 .etd-nudge .nudge-why { margin-top: 6px; font-size: .82rem; color: var(--muted); }
+/* "Waiting would buy you..." - deliberately quieter than the nudge above it.
+   This fires on flights that are already legal, so it must never carry a
+   verdict colour: green would imply the flight is only good if you wait, and
+   amber would imply something is wrong with going now. Neither is true. */
+.etd-options { margin-bottom: 14px; }
+.etd-options > small { color: var(--muted); font-size: .8rem; }
+.etd-option {
+  background: rgba(255,255,255,.05); border-color: rgba(255,255,255,.18);
+  margin-top: 6px;
+}
+.etd-option .nudge-gains {
+  margin: 6px 0 0; padding-left: 18px; font-size: .84rem; color: var(--muted);
+}
+.etd-option .nudge-gains li { margin: 2px 0; }
 .legend { font-size: .78rem; color: var(--muted); margin: 8px 0; display: flex; gap: 14px; flex-wrap: wrap; }
 .legend span::before { content: "■ "; }
 .legend .go::before { color: var(--go); } .legend .mit::before { color: var(--mitigate); } .legend .nogo::before { color: var(--nogo); }

@@ -260,3 +260,30 @@ def test_density_altitude_unknown_leaf_is_dropped():
     merged = merge_limits(base, {"density_altitude": {"nonsense_key": 3}})
     assert "nonsense_key" not in merged["hard_limits"]["density_altitude"]
     assert merged["hard_limits"]["density_altitude"]["advisory_above_field_ft"] == 500
+
+
+# ---- wait-for-better-conditions thresholds ---------------------------------
+
+def test_wait_advisory_thresholds_merge_and_clamp():
+    base = get_default_limits()
+    wa = base["hard_limits"]["wait_advisory"]
+    assert wa["tailwind_gain_kt"] == 10
+    assert wa["ceiling_gain_ft"] == 1500
+    assert wa["crosswind_drop_kt"] == 5
+    assert wa["max_wait_hr"] == 12
+
+    merged = merge_limits(base, {"wait_advisory": {"tailwind_gain_kt": 15}})
+    assert merged["hard_limits"]["wait_advisory"]["tailwind_gain_kt"] == 15
+    # Untouched siblings survive the merge.
+    assert merged["hard_limits"]["wait_advisory"]["ceiling_gain_ft"] == 1500
+
+    hi = merge_limits(base, {"wait_advisory": {"max_wait_hr": 999}})
+    assert hi["hard_limits"]["wait_advisory"]["max_wait_hr"] == 24
+    lo = merge_limits(base, {"wait_advisory": {"ceiling_gain_ft": 0}})
+    assert lo["hard_limits"]["wait_advisory"]["ceiling_gain_ft"] == 100
+
+
+def test_wait_advisory_unknown_leaf_is_dropped():
+    base = get_default_limits()
+    merged = merge_limits(base, {"wait_advisory": {"nonsense_key": 3}})
+    assert "nonsense_key" not in merged["hard_limits"]["wait_advisory"]

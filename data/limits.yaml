@@ -31,9 +31,21 @@ hard_limits:
   # you to open the performance chart; it is never a NO-GO, because the go/no-go
   # on a density altitude belongs to whoever has the aircraft's numbers in front
   # of them. NAV CANADA broadcasts DA on ATIS/AWOS at 200 ft AAE; 500 is the more
-  # conservative default here. Computed from an observed METAR only.
+  # conservative default here. Computed from an observed METAR for a departure
+  # now, and from the model forecast for a departure later; the row names which.
   density_altitude:
     advisory_above_field_ft: 500
+  # ADVISORY ONLY - like density_altitude above, this never gates anything.
+  # How much better a later departure has to be before the card bothers to
+  # mention it. These are the "is it worth waiting?" thresholds, and they exist
+  # so the suggestion stays rare: an advisory that fires on every flight is one
+  # every pilot learns to scroll past. A suggestion is only made when the later
+  # hour is no worse on every other axis - see services/etd_options.py.
+  wait_advisory:
+    max_wait_hr: 12             # beyond this it isn't waiting, it's another day
+    tailwind_gain_kt: 10        # knots of route wind component gained at cruise
+    ceiling_gain_ft: 1500       # feet of extra ceiling
+    crosswind_drop_kt: 5        # knots off the crosswind on the best runway
   recent_experience:
     min_hours_last_30_days: 5
   fuel_reserve_hr:

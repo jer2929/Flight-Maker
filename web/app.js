@@ -1080,6 +1080,11 @@ function renderRoute(r) {
     ? `<small>${win.notes.map(escapeHtml).join(" · ")}</small>` : "";
   setHealth("route-data-health", dataHealthBanner(r.data_health, "runRoute"));
   $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.departure.airport.ident} → ${r.destination.airport.ident}: ${v} ${when}${frLabel}${notes}</div>`;
+  // Directly under the verdict: the nudge that reaches a GO first, then the
+  // "you could do better" options, which are subordinate to it by definition -
+  // one is about becoming legal, the other about a flight that already is.
+  $("#route-etd-suggestion").innerHTML =
+    etdNudgeCard(r.etd_suggestion) + etdOptionsCard(r.etd_options, v);
   $("#route-checklist").innerHTML = checklist(r);
   $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
 
@@ -1102,10 +1107,8 @@ function renderRoute(r) {
   $("#route-enroute").innerHTML = enrouteBlock(r);
   loadRadar(r);
 
-  // The nudge leads, because "when instead" is the question a non-GO raises and
-  // the window list answers a broader one. It renders above whichever of the
-  // three window states applies - including the failed-fetch state, where the
-  // backend returns no nudge at all and this contributes nothing.
+  // The ETD suggestions now render under the verdict chip (see above), so this
+  // block is purely the three window states.
   let windowsHtml;
   if (r.best_windows.length) {
     windowsHtml = `<h3>Best windows (next ${CONFIG.timeline_hours} h) - wind, ceiling &amp; visibility</h3>` +
@@ -1120,8 +1123,7 @@ function renderRoute(r) {
     // about. This is the sentence that used to be wrong.
     windowsHtml = `<div class="empty fetch-empty">⚠ Best windows unavailable - the hourly forecast did not download, so none could be searched for. This is <strong>not</strong> "no good window": pull the data again.</div>`;
   }
-  $("#route-windows").innerHTML =
-    `<div class="timeline-wrap">${etdNudgeCard(r.etd_suggestion)}${windowsHtml}</div>`;
+  $("#route-windows").innerHTML = `<div class="timeline-wrap">${windowsHtml}</div>`;
   renderTimeline(r.timeline, r.best_windows);
 }
 
@@ -1690,6 +1692,32 @@ function etdNudgeCard(s) {
     🕑 <strong>Depart ${mag} ${dir} (${zDayTime(s.etd_utc)})</strong> and the
     hour-by-hour forecast turns ${s.verdict} - ${s.hours_available} h available.
     ${why}</div>`;
+}
+
+const NUDGE_ICON = { tailwind: "💨", ceiling: "☁", hazard: "⛈", crosswind: "↔" };
+
+// "Wait and it gets better" - offered even when the flight is already legal,
+// which is the case etdNudgeCard is structurally unable to speak to. Rendered
+// deliberately quieter than the nudge: this is never a reason not to go now, so
+// a GO flight gets a plain advisory card with no verdict colour at all.
+function etdOptionsCard(options, verdictNow) {
+  if (!options || !options.length) return "";
+  const cards = options.map((o) => {
+    const dir = o.delta_min >= 0 ? "later" : "earlier";
+    const mag = fmtDelta(Math.abs(o.delta_min));
+    const gains = o.improvements
+      .map((i) => `<li>${NUDGE_ICON[i.kind] || "•"} ${escapeHtml(i.text)}</li>`)
+      .join("");
+    return `<div class="window-card etd-option">
+      🕑 <strong>Depart ${mag} ${dir} (${zDayTime(o.etd_utc)})</strong>
+      - ${o.hours_available} h available
+      <ul class="nudge-gains">${gains}</ul></div>`;
+  }).join("");
+  // On a GO the heading has to make clear this is an option, not a caveat.
+  const head = verdictNow === "GO"
+    ? "Already good to go - waiting would buy you:"
+    : "Waiting would also improve:";
+  return `<div class="etd-options"><small>${head}</small>${cards}</div>`;
 }
 
 // Daylight left at the destination on arrival. The app already computes civil
