@@ -265,9 +265,19 @@ select, input[type=text], .route-inputs input {
 .chk.advisory { border-left-color: var(--mitigate); } .chk.advisory .mark { color: var(--mit-ink); }
 .chk.na { opacity: .5; }
 .chk a { color: var(--accent); }
+/* The value that busted is the thing you must see. The rule name only names it
+   and the limit is a number you already agreed to, so weight and colour land on
+   the value alone - one loud element per row, grey everywhere else. */
+.chk.fail .act { color: var(--nogo-ink); font-weight: 700; }
+.chk.advisory .act { color: var(--mit-ink); font-weight: 600; }
+.chk.fail .lim, .chk.advisory .lim { color: var(--muted); }
 /* The settings readout reuses this chassis, but its right column holds
    "default 12,000 ft" rather than "≤ 9 kt". One token, one override. */
 #minimums-readout { --chk-lim: 10rem; }
+/* Zebra striping used to separate these rows. It was a positional pattern
+   competing with two semantic ones (the state bar and the fail tint), so it is
+   gone - but every row here is pass/custom, so they need a hairline instead. */
+#minimums-readout .chk + .chk { border-top: 1px solid rgba(255,255,255,.06); }
 
 /* NOTAM expansion */
 .notam-btn { cursor: pointer; color: var(--accent); }
