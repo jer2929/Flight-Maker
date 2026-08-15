@@ -582,6 +582,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .hz-key { display: inline-flex; align-items: center; gap: 5px; }
 .hz-key i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; opacity: .75; }
 .hz-key-dash i { background: transparent; border: 1px dashed var(--muted); }
+.hz-key-dot i { background: var(--muted); border-radius: 50%; }
 .hz-pop pre { margin: 6px 0; padding: 6px; max-height: 180px; overflow: auto;
   white-space: pre-wrap; word-break: break-word; font-size: .72rem;
   background: rgba(0,0,0,.25); border-radius: 5px; }

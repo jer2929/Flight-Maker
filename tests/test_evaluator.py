@@ -588,3 +588,90 @@ def test_every_counted_threat_has_a_row_by_default():
     present = derive_threats(wx, True, ["terrain_critical"], flight_rules="ifr")
     shown = {r.key for r in evaluator.threat_check_list(present) if r.present}
     assert present == shown
+
+
+# ---------------------------------------------------------------------------
+# What a TEMPO is allowed to do to a verdict
+# ---------------------------------------------------------------------------
+#
+# A TAF says two different things and the card used to read them as one. "FM1800
+# OVC008" is the forecaster stating the weather will be below your minimum for a
+# sustained stretch of the flight. "TEMPO 2000/2300 OVC008" is the same
+# forecaster saying conditions will be predominantly better, with temporary
+# deteriorations of under an hour. Folding both into one worst case and calling
+# any bust a NO-GO meant a legal METAR plus one TEMPO stopped the flight.
+
+
+def _tempo_window(kind, *, ceiling_ft=800.0):
+    """A "now" departure: the METAR is comfortably legal, the TAF window is not.
+
+    ``kind`` is which sort of group produced the window ceiling - "overlay" for a
+    TEMPO, "base" for a MAIN/FM/BECMG.
+    """
+    return WeatherSummary(
+        wind_dir_true=270, wind_kt=8, visibility_sm=10, ceiling_agl_ft=5000,
+        source=Source.OBSERVED, window_gated=False,
+        window_forecast=WindowForecast(
+            ceiling_agl_ft=ceiling_ft,
+            governing=["initial group 1200Z-1800Z", "TEMPO 2000Z-2300Z"],
+            by_field={"ceiling_agl_ft": "TEMPO 2000Z-2300Z"},
+            by_field_text={"ceiling_agl_ft": "TEMPO 2000/2300 BKN008"},
+            by_field_kind={"ceiling_agl_ft": kind}),
+    )
+
+
+def test_a_tempo_only_bust_asks_for_an_out_instead_of_stopping_the_flight():
+    rows = evaluator.window_checks(_tempo_window("overlay"), "day")
+    ceiling = {c.key: c for c in rows}["window_ceiling"]
+    assert not ceiling.passed, "the row still fails - nothing is hidden"
+    assert ceiling.temporary
+    assert ceiling.source_detail == "TEMPO 2000Z-2300Z", "and still names its group"
+    assert evaluator.checks_verdict(rows) == Verdict.MITIGATE
+
+
+def test_a_sustained_group_below_minimums_is_still_a_nogo():
+    rows = evaluator.window_checks(_tempo_window("base"), "day")
+    ceiling = {c.key: c for c in rows}["window_ceiling"]
+    assert not ceiling.passed and not ceiling.temporary
+    assert evaluator.checks_verdict(rows) == Verdict.NOGO
+
+
+def test_one_sustained_bust_beside_a_tempo_still_stops_the_flight():
+    """The downgrade needs *every* failing row to be transient, not just one."""
+    rows = evaluator.window_checks(_tempo_window("overlay"), "day")
+    hard = LimitCheck(key="ceiling", label="Ceiling", limit_text="x", actual_text="y",
+                      passed=False)
+    assert evaluator.checks_verdict(list(rows) + [hard]) == Verdict.NOGO
+
+
+def test_a_passing_card_is_still_a_go():
+    assert evaluator.checks_verdict(
+        evaluator.window_checks(_tempo_window("overlay", ceiling_ft=6000), "day")
+    ) == Verdict.GO
+
+
+def test_an_inapplicable_failing_row_is_not_a_bust():
+    na = LimitCheck(key="k", label="l", limit_text="x", actual_text="y",
+                    passed=False, applicable=False)
+    assert evaluator.checks_verdict([na]) == Verdict.GO
+
+
+def test_a_tempo_under_an_already_failing_sustained_forecast_is_not_transient():
+    """``by_field`` names the group that produced the *worst* value, which is the
+    TEMPO whenever there is one. That alone must never be read as "only the TEMPO
+    is the problem" - the sustained forecast underneath has to clear the limit
+    too, or the flight is below minimums for the whole window either way."""
+    wx = _tempo_window("overlay")
+    wx.window_forecast.sustained_ceiling_agl_ft = 1500   # below the 4,000 ft day XC
+    rows = evaluator.window_checks(wx, "day")
+    ceiling = {c.key: c for c in rows}["window_ceiling"]
+    assert not ceiling.passed and not ceiling.temporary
+    assert evaluator.checks_verdict(rows) == Verdict.NOGO
+
+
+def test_a_tempo_over_a_sustained_forecast_that_clears_is_transient():
+    wx = _tempo_window("overlay")
+    wx.window_forecast.sustained_ceiling_agl_ft = 5000   # above the 4,000 ft day XC
+    rows = evaluator.window_checks(wx, "day")
+    assert {c.key: c for c in rows}["window_ceiling"].temporary is True
+    assert evaluator.checks_verdict(rows) == Verdict.MITIGATE

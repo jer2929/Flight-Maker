@@ -113,3 +113,35 @@ def test_severity_does_not_leak_between_products():
 def test_no_match_at_all():
     assert find("METAR CYFD 121800Z 27008KT 15SM SKC 22/10 A3002") is None
     assert find("") is None
+
+
+# --- when a PIREP was filed -------------------------------------------------
+#
+# CFPS does not reliably send a startValidity for a PIREP, and without one the
+# age filter could never fire and the card had no age to print - the report sat
+# there looking as current as the METAR beside it. The bulletin always carries
+# the time; it just has to be read out of the text.
+
+from datetime import datetime, timezone  # noqa: E402
+
+NOW = datetime(2026, 3, 14, 18, 0, tzinfo=timezone.utc)
+
+
+def test_pirep_time_prefers_the_observation_time():
+    text = "UACN10 CYYZ 141730 YZ UA /OV YYZ /TM 1745 /FL050 /TP C172 /TB MOD"
+    assert apx.parse_pirep_time(text, NOW) == "2026-03-14T17:45:00Z"
+
+
+def test_pirep_time_falls_back_to_the_bulletin_header():
+    text = "UACN10 CYYZ 141730 YZ UA /OV YYZ /FL050 /TB MOD"
+    assert apx.parse_pirep_time(text, NOW) == "2026-03-14T17:30:00Z"
+
+
+def test_pirep_time_reads_hhmm_as_the_most_recent_one():
+    """/TM gives no day, so a stamp ahead of now is yesterday's, not tomorrow's."""
+    text = "UA /OV YYZ /TM 2350 /FL050 /TB MOD"
+    assert apx.parse_pirep_time(text, NOW) == "2026-03-13T23:50:00Z"
+
+
+def test_pirep_time_is_none_when_the_text_does_not_say():
+    assert apx.parse_pirep_time("UA /OV YYZ /FL050 /TB MOD", NOW) is None

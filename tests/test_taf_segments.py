@@ -355,3 +355,81 @@ def test_conditions_at_and_worst_in_window_agree_about_prob():
     assert point["hazards"] == window["hazards"]
     assert point["visibility_sm"] == window["visibility_sm"]
     assert point["prob"]["visibility_sm"] == window["prob"]["visibility_sm"]
+
+
+# --- from the raw TAF all the way to a verdict --------------------------------
+#
+# The unit tests above prove the fold; these prove the fold's provenance
+# survives into the decision. A TEMPO and a BECMG both land in
+# ``ceiling_agl_ft``, and the whole of the difference between "stop" and "go
+# with an out" is which of them put it there.
+
+
+def _verdict_for(etd_hour, eta_hour, taf=TAF_BECMG):
+    """Run a window through the real pipeline: parse -> fold -> rows -> verdict."""
+    from app.models import Source, WeatherSummary
+    from app.orchestrator import _window_forecast
+    from app.services.evaluator import checks_verdict, window_checks
+
+    win = worst_in_window(parse_taf_segments(taf), _q(etd_hour), _q(eta_hour))
+    ws = WeatherSummary(
+        # A comfortably legal observation of this minute - the "now" path.
+        wind_dir_true=270, wind_kt=8, visibility_sm=10, ceiling_agl_ft=5000,
+        source=Source.OBSERVED, window_gated=False,
+        window_forecast=_window_forecast(win))
+    rows = window_checks(ws, "day")
+    return checks_verdict(rows), {c.key: c for c in rows}
+
+
+# Sustained conditions comfortably above a day XC minimum, with a TEMPO that
+# dips under it - the case the whole rule is about.
+TAF_TEMPO_ONLY = (
+    f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM BKN050 "
+    f"TEMPO {_dd(D)}20/{_dd(D)}23 34015KT 5SM -SHRA BKN008"
+)
+
+
+def test_a_tempo_alone_asks_for_an_out_rather_than_a_nogo():
+    verdict, rows = _verdict_for(20, 22, taf=TAF_TEMPO_ONLY)
+    assert rows["window_ceiling"].passed is False, "the row still fails"
+    assert rows["window_ceiling"].source_detail.startswith("TEMPO")
+    assert rows["window_ceiling"].temporary is True
+    assert verdict.value == "MITIGATE"
+
+
+def test_the_same_taf_before_the_tempo_starts_is_a_plain_go():
+    verdict, _rows = _verdict_for(13, 15, taf=TAF_TEMPO_ONLY)
+    assert verdict.value == "GO"
+
+
+def test_a_becmg_below_minimums_in_the_window_is_a_nogo():
+    """The same TAF, for a flight that meets only the sustained group. BKN015 is
+    below the 4,000 ft day XC minimum all by itself, and no TEMPO is involved."""
+    verdict, rows = _verdict_for(17, 19)
+    assert rows["window_ceiling"].passed is False
+    assert rows["window_ceiling"].temporary is False, "BECMG is a sustained group"
+    assert verdict.value == "NO-GO"
+
+
+def test_a_tempo_under_an_already_busting_becmg_does_not_soften_the_verdict():
+    """The trap this rule has to avoid.
+
+    Over 19-21Z the BECMG holds BKN015 and the TEMPO drops to BKN008. The worst
+    value - and so the group ``by_field`` names - is the TEMPO's. But 1,500 ft is
+    already below the 4,000 ft minimum, so the flight is below minimums for the
+    whole window with or without the TEMPO. Reading "the TEMPO produced it" as
+    "only a TEMPO produced it" would turn a sustained NO-GO into an advisory.
+    """
+    verdict, rows = _verdict_for(19, 21)
+    assert rows["window_ceiling"].source_detail.startswith("TEMPO")
+    assert rows["window_ceiling"].temporary is False
+    assert verdict.value == "NO-GO"
+
+
+def test_a_sustained_group_below_minimums_still_stops_the_flight():
+    taf = (f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM SCT040 "
+           f"FM{_dd(D)}1800 31012KT 5SM BKN006")
+    verdict, rows = _verdict_for(19, 21, taf=taf)
+    assert rows["window_ceiling"].passed is False
+    assert rows["window_ceiling"].temporary is False
+    assert verdict.value == "NO-GO"

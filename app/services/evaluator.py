@@ -11,6 +11,8 @@ returns the legacy ``(verdict, reasons, count)`` tuple used by the timeline.
 """
 from __future__ import annotations
 
+from typing import Iterable
+
 from app.config import get_limits
 from app.models import LimitCheck, RunwayWind, Source, ThreatCheck, Verdict, WeatherSummary
 
@@ -45,7 +47,8 @@ def _worse(a: Verdict, b: Verdict) -> Verdict:
 
 
 def _attribute(check: LimitCheck, weather: WeatherSummary, field: str, *,
-               from_window: bool = False) -> LimitCheck:
+               from_window: bool = False,
+               sustained_ok: bool | None = None) -> LimitCheck:
     """Name the TAF group a row's value came from, when it came from a TAF.
 
     ``WeatherSummary.field_sources`` already carries per-value provenance and
@@ -62,6 +65,16 @@ def _attribute(check: LimitCheck, weather: WeatherSummary, field: str, *,
     future-ETD path (``window_gated``). On the "now" path the headline is an
     observation of this minute while the window describes later, so naming a
     group there would point at the wrong line of the TAF.
+
+    ``sustained_ok`` is the caller's answer to "would the base groups alone have
+    passed this limit?", and it is what makes ``temporary`` mean something. Two
+    conditions have to hold before a bust is a TEMPO's fault: the worst value has
+    to have come from the TEMPO, *and* the sustained forecast underneath has to
+    clear the limit by itself. A BECMG to 1,500 ft with a TEMPO to 800 ft under a
+    4,000 ft minimum satisfies the first and not the second - the flight is below
+    minimums for the whole window, and the TEMPO is merely the deeper of the two.
+    Callers that pass nothing get ``temporary = False``, which is the safe
+    default: the row gates exactly as it did before.
     """
     wf = weather.window_forecast
     if check.source != Source.TAF.value or wf is None:
@@ -70,7 +83,24 @@ def _attribute(check: LimitCheck, weather: WeatherSummary, field: str, *,
         return check
     check.source_detail = wf.by_field.get(field)
     check.source_text = wf.by_field_text.get(field) or None
+    # PROB groups never reach ``by_field`` - they are held out of the fold
+    # entirely - so an overlay here is a TEMPO, and only a TEMPO.
+    check.temporary = (
+        (not check.passed)
+        and wf.by_field_kind.get(field) == "overlay"
+        and bool(sustained_ok)
+    )
     return check
+
+
+def _clears(limit: float, actual: float | None) -> bool:
+    """Whether a value passes a minimum-type limit, on the same terms the rows do.
+
+    ``None`` passes, because both :func:`_ceiling_check` and :func:`_min_check`
+    treat it as "the forecast does not say" rather than as zero - a window whose
+    base groups mention no ceiling has an unlimited one, not a missing one.
+    """
+    return actual is None or actual >= limit
 
 
 def _field_source(weather: WeatherSummary, key: str) -> str | None:
@@ -128,15 +158,20 @@ def conditions_checks(
         unit="kt", source=wind_src, actual_suffix=xw_label,
     ), weather, "wind_kt"))
     ceil_limit, circuit_limit = _ceiling_limits(mode, ceiling_mode, flight_rules)
+    wf = weather.window_forecast
     checks.append(_attribute(
         _ceiling_check(ceil_limit, weather.ceiling_agl_ft, weather.source, ceil_src,
                        ceiling_mode, circuit_limit=circuit_limit),
-        weather, "ceiling_agl_ft"))
+        weather, "ceiling_agl_ft",
+        sustained_ok=_clears(ceil_limit,
+                             wf.sustained_ceiling_agl_ft if wf else None)))
     vis_limit, vis_label = _visibility_limit(mode, ceiling_mode, flight_rules)
     checks.append(_attribute(_min_check(
         "visibility", vis_label, vis_limit, weather.visibility_sm,
         unit="SM", source=vis_src,
-    ), weather, "visibility_sm"))
+    ), weather, "visibility_sm",
+        sustained_ok=_clears(vis_limit,
+                             wf.sustained_visibility_sm if wf else None)))
     # Hazardous weather flags - for IFR, widespread_ifr is expected and not a no-go.
     flags = set(L.get("weather_flags", []))
     if flight_rules == "ifr":
@@ -210,13 +245,16 @@ def window_checks(
             c = _ceiling_check(ceil_limit, wf.ceiling_agl_ft, Source.TAF,
                                Source.TAF.value, ceiling_mode, circuit_limit=circuit_limit)
             c.key, c.label = "window_ceiling", "Ceiling in flight window"
-            checks.append(_attribute(c, weather, "ceiling_agl_ft", from_window=True))
+            checks.append(_attribute(
+                c, weather, "ceiling_agl_ft", from_window=True,
+                sustained_ok=_clears(ceil_limit, wf.sustained_ceiling_agl_ft)))
         vis_limit, _label = _visibility_limit(mode, ceiling_mode, flight_rules)
         if wf.visibility_sm is not None:
             checks.append(_attribute(_min_check(
                 "window_visibility", "Visibility in flight window",
                 vis_limit, wf.visibility_sm, unit="SM", source=Source.TAF.value),
-                weather, "visibility_sm", from_window=True))
+                weather, "visibility_sm", from_window=True,
+                sustained_ok=_clears(vis_limit, wf.sustained_visibility_sm)))
 
     checks.extend(prob_checks(
         labels=wf.prob_labels, wind_kt=wf.prob_wind_kt, gust_kt=wf.prob_gust_kt,
@@ -227,6 +265,42 @@ def window_checks(
         for c in checks:
             c.location = location
     return checks
+
+
+def checks_verdict(checks: Iterable[LimitCheck]) -> Verdict:
+    """How far a failing row moves the verdict.
+
+    A TAF says two different things and the old code read them as one. A
+    MAIN/FM/BECMG group below your minimum is the forecaster stating that the
+    weather *will* be below it for a sustained stretch of your flight - that is a
+    NO-GO, and it stays one. A TEMPO is the same forecaster saying conditions
+    will be predominantly better with temporary deteriorations of under an hour.
+    Treating those identically meant a legal METAR plus one TEMPO stopped the
+    flight, which is both wrong about what a TEMPO claims and the kind of
+    over-firing that teaches a pilot to read past the banner on the day it is a
+    sustained group.
+
+    The honest answer to a TEMPO is not "go" either: it is go with an out - fuel,
+    an alternate, a decision point, a willingness to turn round. That is what
+    MITIGATE means here, so that is what a TEMPO-only bust returns. The row
+    itself still fails and still names the group it came from; only the distance
+    the verdict travels changes.
+
+    PROB30/PROB40 never reaches this - :func:`prob_checks` keeps it out of the
+    ceiling/vis/wind fold entirely, and only the hazards a pilot has put on their
+    own auto-NO-GO list gate.
+
+    This is the one rule for turning rows into a verdict, used by every caller,
+    because ``temporary`` is set in exactly one place and reaches both shapes the
+    TAF takes: the ``window_*`` rows on a "now" departure, where the headline is
+    a METAR and the window is its own set of rows, and the ordinary ceiling and
+    visibility rows on a future ETD, where the headline already *is* the window
+    worst case. Both paths therefore answer the same TAF the same way.
+    """
+    failed = [c for c in checks if (not c.passed) and c.applicable]
+    if not failed:
+        return Verdict.GO
+    return Verdict.MITIGATE if all(c.temporary for c in failed) else Verdict.NOGO
 
 
 def gating_hazards() -> set[str]:
@@ -495,9 +569,7 @@ def decision(
     tchecks = threat_check_list(present)
     weighted = threat_weight(present)
 
-    failed = any((not c.passed) and c.applicable for c in checks)
-    verdict = Verdict.NOGO if failed else Verdict.GO
-    verdict = _worse(verdict, threat_verdict(weighted))
+    verdict = _worse(checks_verdict(checks), threat_verdict(weighted))
     # Return the weighted count so the result label matches the verdict.
     return verdict, checks, tchecks, weighted
 

@@ -474,6 +474,12 @@ def worst_in_window(segments: list[dict], start: datetime,
     eff = dict(bases[0]["cond"])
     for b in bases[1:]:
         eff = worse(eff, b["cond"])
+    # The base groups alone, before any TEMPO is laid over them. A TEMPO can only
+    # ever be *the* reason a limit busts if what the forecaster says will hold
+    # for the whole window clears that limit by itself - otherwise the flight is
+    # below minimums with or without it, and naming the TEMPO because it happened
+    # to be the deeper of the two would turn a sustained NO-GO into an advisory.
+    sustained = dict(eff)
     governing = list(bases)
     prob: Optional[dict] = None
     prob_periods: list[dict] = []
@@ -493,6 +499,7 @@ def worst_in_window(segments: list[dict], start: datetime,
 
     eff["prob"] = prob
     eff["prob_periods"] = prob_periods
+    eff["sustained"] = sustained
     eff["governing"] = sorted(_binding(governing, eff), key=lambda s: s["start"])
     # Which group produced which value, so a failing limit can name its cause
     # rather than the whole list of groups the flight passes through.

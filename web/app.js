@@ -841,25 +841,43 @@ function hazardPopup(p) {
   }
   if (!p.relevant && p.drop_label) bits.push(p.drop_label);
   const head = [p.kind, p.hazard_label, p.severity].filter(Boolean).join(" · ");
-  return `<div class="hz-pop"><strong>${escapeHtml(head)}</strong>
+  // A PIREP has no validity to run "until", only a moment it was filed, so the
+  // popup above showed it no time at all. Age is the whole question with a
+  // PIREP: the air one aircraft flew through an hour ago has moved on.
+  const age = p.kind === "PIREP" ? pirepAgeChip(p.valid_from) : "";
+  return `<div class="hz-pop"><strong>${escapeHtml(head)}</strong>${age}
     <div class="hint">${escapeHtml(bits.join(" · "))}</div>
     <pre>${escapeHtml((p.text || "").trim())}</pre>
     ${p.source_url ? `<a href="${p.source_url}" target="_blank" rel="noopener">${escapeHtml(p.source || "source")} ↗</a>` : ""}</div>`;
 }
 
+// A PIREP is a point, and it cannot be drawn the way an area is. Leaflet
+// re-applies the layer's `style` function *after* `pointToLayer` (addData calls
+// resetStyle), so the polygon fill values always won: a set-aside PIREP came out
+// a 6 px circle at 6% fill behind a dashed 1 px outline, over an OSM tile and a
+// 70%-opacity radar overlay. That is invisible, which is exactly how it looked.
+// Points get their own style - solid, filled, dark-rimmed for contrast, and
+// legible at both relevances, because one aircraft's report of moderate icing 40
+// nm off track is still the most interesting thing on the map.
+function pirepStyle(f) {
+  const c = hazardColor(f.properties || {});
+  return (f.properties || {}).relevant
+    ? { color: "#0b0f14", weight: 2, opacity: 0.95, fillColor: c, fillOpacity: 0.95 }
+    : { color: "#0b0f14", weight: 1, opacity: 0.7, fillColor: c, fillOpacity: 0.6 };
+}
+
 function hazardLayers(gj) {
-  const make = (filter) => L.geoJSON(gj, {
+  const make = (filter, style) => L.geoJSON(gj, {
     filter,
-    style: hazardStyle,
-    pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-      radius: 6, ...hazardStyle(f), fillOpacity: f.properties.relevant ? 0.7 : 0.25,
-    }),
+    style,
+    // Radius only. Anything else set here is overwritten by `style` above.
+    pointToLayer: (f, latlng) => L.circleMarker(latlng, { radius: 7 }),
     onEachFeature: (f, layer) => layer.bindPopup(hazardPopup(f.properties || {}),
                                                  { maxWidth: 360 }),
   });
   return {
-    areas: make((f) => f.geometry && f.geometry.type !== "Point"),
-    pireps: make((f) => f.geometry && f.geometry.type === "Point"),
+    areas: make((f) => f.geometry && f.geometry.type !== "Point", hazardStyle),
+    pireps: make((f) => f.geometry && f.geometry.type === "Point", pirepStyle),
   };
 }
 
@@ -871,9 +889,12 @@ function hazardLegend(gj) {
     if (label && !seen.some((s) => s.label === label)) seen.push({ label, color: hazardColor(p) });
   });
   if (!seen.length) return "";
+  // A lone dot needs saying: it is one aircraft's report, not a forecast area.
+  const dots = (gj.features || []).some((f) => f.geometry && f.geometry.type === "Point")
+    ? `<span class="hz-key hz-key-dot"><i></i>PIREP (one aircraft's report)</span>` : "";
   return `<div class="hz-legend">${seen.map((s) =>
     `<span class="hz-key"><i style="background:${s.color}"></i>${escapeHtml(s.label)}</span>`).join("")}
-    <span class="hz-key hz-key-dash"><i></i>not on your route</span></div>`;
+    <span class="hz-key hz-key-dash"><i></i>not on your route</span>${dots}</div>`;
 }
 
 function parseISODurationMin(s) {
@@ -953,14 +974,15 @@ async function loadRadar(r) {
       "SIGMET / AIRMET areas": layers.areas,
       "PIREPs": layers.pireps,
     }, { collapsed: false, position: "topright" }).addTo(RADAR.map);
-    const bounds = layers.areas.getBounds();
-    if (bounds.isValid()) {
-      // Show the route first; widen only far enough to keep the relevant areas
-      // in frame, never so far that the route becomes a dot.
-      RADAR.map.fitBounds(
-        L.latLngBounds([[dep.lat, dep.lon], [dest.lat, dest.lon]]).pad(0.4),
-        { maxZoom: 8 });
-    }
+    // Show the route first, then widen far enough to keep the PIREPs in frame.
+    // The route bounds alone left a report 40 nm off track drawn but off-screen,
+    // which is the same as not drawing it. PIREPs are capped at
+    // ``pirep_corridor_nm`` from the route, so this can never run away; areas
+    // are national and deliberately still do not get a vote.
+    const view = L.latLngBounds([[dep.lat, dep.lon], [dest.lat, dest.lon]]).pad(0.4);
+    const pireps = layers.pireps.getBounds();
+    if (pireps.isValid()) view.extend(pireps);
+    RADAR.map.fitBounds(view, { maxZoom: 8 });
   }
   setTimeout(() => RADAR.map && RADAR.map.invalidateSize(), 150);
 
@@ -1569,7 +1591,11 @@ function advisoryChips(a) {
     if (!isNaN(t)) chips.push(`until ${String(t.getUTCHours()).padStart(2, "0")}${String(t.getUTCMinutes()).padStart(2, "0")}Z`);
   }
   if (a.drop_label) chips.push(a.drop_label);
-  return chips.map((c) => `<span class="adv-chip">${escapeHtml(c)}</span>`).join("");
+  // A PIREP has an age rather than a validity, and it is the fact that decides
+  // whether the report is still about the air you are about to fly through.
+  // Appended as raw HTML because it carries its own green/red class.
+  const age = a.kind === "PIREP" ? pirepAgeChip(a.valid_from) : "";
+  return chips.map((c) => `<span class="adv-chip">${escapeHtml(c)}</span>`).join("") + age;
 }
 // "9 outside your altitudes, 3 not on your route" - the line that keeps the
 // empty state honest. Something was found; it just does not reach this flight,
@@ -1726,10 +1752,16 @@ function etdOptionsCard(options, verdictNow) {
 // appears when the margin is tight enough for it to be a decision.
 function daylightSpan(m) {
   if (!m) return "";
+  // Only for a pilot who counts night operations as a threat. Someone who has
+  // deliberately turned that off is night-current and equipped, and a countdown
+  // to last light is one more line for them to read past on the day it matters.
+  // The "arrival is a night landing" note the window still carries is the
+  // backstop, and it is a different sentence from a margin.
+  if (!effectiveLimits().night_as_threat) return "";
   const late = m.margin_min < 0;
   const state = late
     ? `lands ${fmtDelta(Math.abs(m.margin_min))} after dark`
-    : `${fmtDelta(m.margin_min)} of daylight left`;
+    : `${fmtDelta(m.margin_min)} of daylight left after landing`;
   // Bare Zulu, like the ETD and ETA it sits beside in this strip. The latest
   // departure is always within hours of the dusk it is derived from, so the
   // weekday the nudge card carries would be noise here.
@@ -2532,12 +2564,30 @@ function metarAgeMin(raw) {
   if (d - now > 3600 * 1000) d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, +m[1], +m[2], +m[3]));
   return Math.max(0, Math.round((now - d) / 60000));
 }
-function ageChip(raw) {
-  const mins = metarAgeMin(raw);
+// How old a report is, in green/red. ``staleAfter`` is where red starts: a METAR
+// keeps a grey band between the hour it is issued on and the point it is
+// genuinely overdue, because a 70-minute-old hourly observation is normal. A
+// PIREP has no schedule - it describes air one aircraft flew through, and past
+// an hour that air has moved - so it goes straight from green to red.
+function ageChipFromMin(mins, { staleAfter = 90 } = {}) {
   if (mins == null) return "";
   const txt = mins < 60 ? `${mins} min ago` : `${Math.floor(mins / 60)} h ${mins % 60} min ago`;
-  const staleClass = mins > 90 ? " stale" : mins < 60 ? " fresh" : "";
+  const staleClass = mins > staleAfter ? " stale" : mins < 60 ? " fresh" : "";
   return ` <span class="age${staleClass}">${txt}</span>`;
+}
+function ageChip(raw) {
+  return ageChipFromMin(metarAgeMin(raw));
+}
+// Minutes since an ISO8601 stamp - what the advisory feeds carry, where a METAR
+// carries its own DDHHMM group.
+function isoAgeMin(iso) {
+  const t = Date.parse(iso || "");
+  if (isNaN(t)) return null;
+  return Math.max(0, Math.round((Date.now() - t) / 60000));
+}
+// A PIREP's age. Green under the hour, red over it.
+function pirepAgeChip(validFrom) {
+  return ageChipFromMin(isoAgeMin(validFrom), { staleAfter: 60 });
 }
 function dimsText(c) {
   const l = c.length_ft ? Math.round(c.length_ft).toLocaleString() : "?";

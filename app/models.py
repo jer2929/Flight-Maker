@@ -116,6 +116,9 @@ class LimitCheck(BaseModel):
     # instead of a number with no traceable origin.
     source_detail: Optional[str] = None  # e.g. "TEMPO 0100Z-0300Z"
     source_text: Optional[str] = None    # e.g. "TEMPO 0100/0300 2SM TSRA BKN008"
+    # The value came from a TEMPO rather than a sustained group. The row still
+    # fails; what changes is how far the verdict moves. See ``checks_verdict``.
+    temporary: bool = False
     # A row whose sentence doesn't fit the "X exceeds your limit (Y)" template
     # (no live weather, no legal VFR altitude). Used verbatim when set.
     reason_text: Optional[str] = None
@@ -220,6 +223,20 @@ class WindowForecast(BaseModel):
     # one to name when *this* value busts a limit.
     by_field: dict[str, str] = {}        # field -> period label
     by_field_text: dict[str, str] = {}   # field -> raw TAF slice
+    # field -> "base" | "overlay". A MAIN/FM/BECMG group is the forecaster saying
+    # the weather *will* be this for a sustained stretch; a TEMPO is a transient
+    # inside conditions that are otherwise better. Both fold into the worst case
+    # above, and the difference is what decides whether a bust stops the flight
+    # or asks for an out - see ``evaluator.checks_verdict``.
+    by_field_kind: dict[str, str] = {}
+    # The base groups alone, with no TEMPO laid over them - what the forecaster
+    # says will hold for the whole window. A bust counts as transient only when
+    # these values clear the limit on their own; if the sustained forecast is
+    # already below it, the TEMPO merely happened to be the deeper of the two.
+    sustained_ceiling_agl_ft: Optional[float] = None
+    sustained_visibility_sm: Optional[float] = None
+    sustained_wind_kt: Optional[float] = None
+    sustained_gust_kt: Optional[float] = None
     # PROB30/PROB40 falling in the window. Reported so the pilot sees them,
     # never merged into the values above, so they cannot fail a check alone.
     prob_ceiling_agl_ft: Optional[float] = None
