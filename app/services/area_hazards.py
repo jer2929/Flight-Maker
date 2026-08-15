@@ -195,6 +195,10 @@ def from_cfps_item(alpha: str, item: dict, *, now: Optional[datetime] = None,
     v_to = _iso(item.get("endValidity"))
     if v_from is None and v_to is None:
         v_from, v_to = area_products.parse_validity(text, now)
+    if kind == "PIREP" and v_from is None:
+        # A PIREP has no validity to parse, only the moment it was filed, and
+        # CFPS does not reliably supply one. Read it out of the bulletin.
+        v_from = area_products.parse_pirep_time(text, now)
 
     return AreaHazard(
         kind=kind, text=text, source=CFPS, source_url=CFPS_URL,
@@ -491,11 +495,21 @@ def _out_of_scope(h: AreaHazard) -> bool:
     *validity* is over the route and stays on the card - that a SIGMET is
     FL240-FL400 above your track is exactly the sort of thing a pilot wants to
     see stated rather than silently withheld.
+
+    A PIREP is the exception, and its corridor is a hard edge. It has no shape to
+    be near the edge of, so "40 nm off track" is the whole of what it is; past
+    the corridor it is simply somewhere else. The same applies to one we could
+    not place at all: with no position we cannot say whether it is 5 nm or 500
+    away, and it can never be drawn - so listing it puts a report from anywhere
+    in the country on the route card, marked relevant, with nothing to check it
+    against. PIREPs never gate a verdict, so dropping these costs no safety.
     """
     if h.drop_reason == "fir":
         return True
     if h.drop_reason != "geometry":
         return False
+    if h.kind == "PIREP":
+        return True
     return h.distance_nm is None or h.distance_nm > NEARBY_NM
 
 
@@ -519,6 +533,7 @@ def filter_relevant(
     now: Optional[datetime] = None,
     known_firs: Optional[set[str]] = None,
     pirep_max_age_hr: int = 3,
+    pirep_buffer_nm: Optional[float] = None,
 ) -> tuple[list[AreaHazard], list[AreaHazard]]:
     """Split advisories into ``(relevant, set_aside)``.
 
@@ -536,7 +551,8 @@ def filter_relevant(
         reason = _drop_reason(h, path=path, buffer_nm=buffer_nm, low_ft=low_ft,
                               high_ft=high_ft, etd=etd, eta=eta, now=now,
                               known_firs=known_firs,
-                              pirep_max_age_hr=pirep_max_age_hr)
+                              pirep_max_age_hr=pirep_max_age_hr,
+                              pirep_buffer_nm=pirep_buffer_nm)
         h.relevant = reason is None
         h.drop_reason = reason
         if reason is not None and _out_of_scope(h):
@@ -556,13 +572,25 @@ def filter_relevant(
 
 
 def _drop_reason(h: AreaHazard, *, path, buffer_nm, low_ft, high_ft,
-                 etd, eta, now, known_firs, pirep_max_age_hr) -> Optional[str]:
+                 etd, eta, now, known_firs, pirep_max_age_hr,
+                 pirep_buffer_nm=None) -> Optional[str]:
     # --- where -------------------------------------------------------------
     if h.geometry:
-        hit, dist = geometry.polyline_intersects_polygon(path, h.geometry, buffer_nm)
+        near = buffer_nm
+        if h.kind == "PIREP" and pirep_buffer_nm is not None:
+            near = pirep_buffer_nm
+        hit, dist = geometry.polyline_intersects_polygon(path, h.geometry, near)
         h.distance_nm = None if dist == float("inf") else dist
         if not hit:
             return "geometry"
+    elif h.kind == "PIREP":
+        # A PIREP we could not place is not a PIREP we can use. Every other
+        # product here fails open on an unreadable position, because a SIGMET we
+        # cannot place is still a warning about weather somewhere near a route we
+        # can place. A point report is different: with no position there is
+        # nothing left of it but the text, it can never be drawn, and it was
+        # reaching the card marked relevant with no distance to check it by.
+        return "geometry"
     elif known_firs and h.source == AWC and h.fir and h.fir not in known_firs:
         # AWC's SIGMET feeds are global. A record we cannot place, for a region
         # this route never sees, is the one case worth dropping unplaced -

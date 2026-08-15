@@ -106,11 +106,18 @@ def test_ensemble_wind_is_skipped_for_a_future_etd(upstreams):
     assert upstreams.get("ensemble_called") is True
 
 
-def test_a_tempo_over_the_first_half_of_the_leg_gates_the_card(monkeypatch, upstreams):
+def test_a_tempo_over_the_first_half_of_the_leg_reaches_the_card(monkeypatch, upstreams):
     """Discovery passed no flight span, so ``_assess_endpoint`` fell back to
     ETA +/- 30 min and never looked at the leg. A TEMPO over the first half of a
-    long flight gated the *route* card for the same airport and was invisible on
+    long flight moved the *route* card for the same airport and was invisible on
     its discovery card - two readings of one TAF, disagreeing.
+
+    What this pins is that the TEMPO is *seen*: it fails a row, and the row names
+    the group and quotes the line. How far it moves the verdict is
+    ``evaluator.checks_verdict``'s business - MITIGATE here, because the
+    sustained forecast (P6SM SCT040) clears the minimums on its own and only the
+    TEMPO dips under them. A card that read GO would mean the leg was never
+    looked at, which is the regression this test exists for.
     """
     from app.models import Verdict
 
@@ -129,7 +136,7 @@ def test_a_tempo_over_the_first_half_of_the_leg_gates_the_card(monkeypatch, upst
     results = asyncio.run(orchestrator.suggest(300.0, "day", [], etd=etd))
     card = next(r for r in results if r.airport.ident == "CYAM")
     assert card.flight_time_hr > 1.5, "need a leg long enough to have a first half"
-    assert card.verdict == Verdict.NOGO
+    assert card.verdict == Verdict.MITIGATE
     # ...and the card says which group did it, not just that something did.
     busts = [c for c in card.limit_checks if not c.passed and c.applicable]
     assert any(c.source == "TAF" and c.source_detail and c.source_detail.startswith("TEMPO")

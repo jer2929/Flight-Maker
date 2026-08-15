@@ -100,6 +100,16 @@ for taxi and approach - not for a single instant:
   `BECMG` is a permanent change, so it governs from the start of its transition;
   a `TEMPO` you fly through counts at its worst. Gating on the ETD instant used to
   pass a flight that flew straight into a 2 SM / 800 ft TEMPO twenty minutes later.
+* **A `TEMPO` on its own asks for an out; a sustained group stops the flight.** A
+  `FM`/`BECMG` below your minimum is the forecaster saying the weather *will* be
+  below it for a sustained stretch - that is a NO-GO. A `TEMPO` is the same
+  forecaster saying conditions will be predominantly better with temporary
+  deteriorations, and the honest answer to that is not "go" but *go with an out*:
+  fuel, an alternate, a decision point. So a bust traceable only to a `TEMPO` is
+  **MITIGATE**, not NO-GO. The row still fails and still names the group. "Only"
+  is load-bearing: if the sustained forecast underneath is *also* below your
+  minimum, the flight is below minimums with or without the `TEMPO` and it stays
+  a NO-GO, however much deeper the `TEMPO` happens to go.
 * On a **Now** departure the METAR still owns the departure-instant values - a
   forecast never overrides an observation of the present moment - and what the TAF
   says about the rest of the leg appears as its own clearly-labelled rows, naming
@@ -172,6 +182,19 @@ aeroplane like yours. They are read (including the coded `/TB` and `/IC` fields,
 where the word "turbulence" never appears) and reported on the icing and
 turbulence rows as advisories, but a single airliner's "MOD turb" in the climb
 does not cancel your flight.
+
+**A PIREP has to say where and when, or it isn't shown.** A SIGMET is a shape you
+can be twenty miles outside of and still want to see the edge of; a PIREP is one
+aircraft at one point, so how far off track it was is the whole of what it is.
+Anything beyond **50 nm** of the route is dropped outright rather than listed
+faint, and so is one whose `/OV` field can't be placed at all - with no position
+there is nothing to draw and no distance to judge it by, and such reports were
+riding onto the card marked relevant from anywhere in the country. Placing them
+needs US aerodromes and navaids, which the Canada-only airport table does not
+carry, so positions resolve against their own wider table. Each PIREP also shows
+**how old it is**, the way a METAR does: green under the hour, red over it. A
+PIREP describes air one aeroplane flew through, and after an hour that air has
+moved.
 
 Advisories that downloaded but don't apply to *you* are **shown, not discarded**,
 under a line reading *"4 more fetched: 3 outside your altitudes, 1 not on your
@@ -337,6 +360,15 @@ some pilots night is the single biggest risk multiplier; for others, current and
 over familiar terrain in stable VMC, it is a normal flight. Turning it off changes
 only the threat stack - night still selects your **night** ceiling and visibility
 minimums either way.
+
+It also decides whether the **last-light note** appears on the summary strip:
+`🌇 Last light 0142Z · 45 min of daylight left after landing`, with the latest ETD
+that still lands inside it once the margin is under an hour. The margin is
+measured to the moment you are on the ground, not to takeoff - which is what
+"after landing" is there to say. A pilot who has turned the night threat off is
+night-current and equipped, so for them the countdown is one more line to read
+past on the day it matters, and it stays hidden. The arrival note that spells out
+a night landing is separate and shows either way.
 
 > **Still using built-in defaults:** the numeric thresholds that *derive* the
 > automatic weather threats (e.g. wind ≥ 15 kt counts as "strong") are not yet

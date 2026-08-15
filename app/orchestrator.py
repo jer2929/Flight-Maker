@@ -45,6 +45,7 @@ from app.services import timeline as tl
 from app.services import weather as wx
 from app.models import RunwayComponent
 from app.services.evaluator import (
+    checks_verdict,
     conditions_checks,
     window_checks,
     decision,
@@ -440,6 +441,7 @@ def _window_forecast(taf_win: dict | None) -> WindowForecast | None:
     if not taf_win:
         return None
     prob = taf_win.get("prob") or {}
+    sustained = taf_win.get("sustained") or {}
     return WindowForecast(
         ceiling_agl_ft=taf_win.get("ceiling_agl_ft"),
         visibility_sm=taf_win.get("visibility_sm"),
@@ -450,6 +452,12 @@ def _window_forecast(taf_win: dict | None) -> WindowForecast | None:
                   for k, s in (taf_win.get("by_field") or {}).items()},
         by_field_text={k: s.get("text", "")
                        for k, s in (taf_win.get("by_field") or {}).items()},
+        by_field_kind={k: s.get("kind", "")
+                       for k, s in (taf_win.get("by_field") or {}).items()},
+        sustained_ceiling_agl_ft=sustained.get("ceiling_agl_ft"),
+        sustained_visibility_sm=sustained.get("visibility_sm"),
+        sustained_wind_kt=sustained.get("wind_kt"),
+        sustained_gust_kt=sustained.get("gust_kt"),
         prob_ceiling_agl_ft=prob.get("ceiling_agl_ft"),
         prob_visibility_sm=prob.get("visibility_sm"),
         prob_wind_kt=prob.get("wind_kt"), prob_gust_kt=prob.get("gust_kt"),
@@ -686,8 +694,7 @@ def _assess_endpoint(
     # report a limit bust the card then ignores.
     wchecks = window_checks(weather, mode, ceiling_mode=ceiling_mode,
                             flight_rules=flight_rules)
-    if any((not c.passed) and c.applicable for c in wchecks):
-        verdict = Verdict.NOGO
+    verdict = _worse_verdict(verdict, checks_verdict(wchecks))
     checks = checks + wchecks
     # Density altitude. Appended after decision() has already run, so it is
     # structurally incapable of moving the verdict rather than merely declining
@@ -948,9 +955,14 @@ def _enroute_candidates(mids: list[tuple[float, float]],
 
 
 def _station_position(ident: str) -> tuple[float, float] | None:
-    """Where a station is, for PIREPs that report position off one."""
-    a = ap.get_airport(ident.upper())
-    return (a.lat, a.lon) if a else None
+    """Where a station is, for PIREPs that report position off one.
+
+    The station table, not the airport table. The airport table is Canada-only
+    by design, so resolving against it meant every US station and every navaid a
+    ``/OV`` field named came back unplaced - and an unplaced PIREP never reaches
+    the map.
+    """
+    return ap.get_station(ident)
 
 
 async def _gather_hazards(sites: list[str], path: list[tuple[float, float]],
@@ -1351,7 +1363,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # aviationweather.gov (international SIGMET, US SIGMET/AIRMET, G-AIRMET,
         # CWA, PIREP) together. Scoped to the route below, once they are all in
         # one shape - the fetch is deliberately wide, the filtering is not.
-        _gather_hazards(all_sites, route_pts, settings.hazard_corridor_nm,
+        _gather_hazards(all_sites, route_pts,
+                        max(settings.hazard_corridor_nm, settings.pirep_corridor_nm),
                         _gairmet_hours(etd_utc, eta_prov, now),
                         settings.pirep_max_age_hr),
         _safe(openmeteo.forecast(dep.lat, dep.lon, days), {}, fetch_health.HRDPS),
@@ -1588,7 +1601,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         raw_hazards, path=route_pts, buffer_nm=settings.hazard_corridor_nm,
         low_ft=haz_low_ft, high_ft=haz_high_ft, etd=etd_utc, eta=eta_utc,
         now=now, known_firs=known_firs or None,
-        pirep_max_age_hr=settings.pirep_max_age_hr)
+        pirep_max_age_hr=settings.pirep_max_age_hr,
+        pirep_buffer_nm=settings.pirep_corridor_nm)
     sigmets = [h for h in relevant_haz if h.kind in ("SIGMET", "CWA")]
     airmets = [h for h in relevant_haz if h.kind in ("AIRMET", "G-AIRMET")]
     pireps = [h for h in relevant_haz if h.kind == "PIREP"]
@@ -1657,8 +1671,9 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     present = derive_threats(route_ws, ap.is_complex_airspace(dep.ident) or ap.is_complex_airspace(dest.ident), manual_threats, flight_rules=flight_rules)
     route_threats = threat_check_list(present)
     threat_count = threat_weight(present)
-    failed = any((not c.passed) and c.applicable for c in all_checks)
-    verdict_now = Verdict.NOGO if failed else Verdict.GO
+    # One rule for all of them: a row traceable only to a TEMPO asks for an out
+    # rather than stopping the flight, and every other failing row still stops it.
+    verdict_now = checks_verdict(all_checks)
     verdict_now = _worse_verdict(verdict_now, threat_verdict(threat_count))
     verdict_now = _worse_verdict(verdict_now, dep_a.verdict)
     verdict_now = _worse_verdict(verdict_now, dest_a.verdict)

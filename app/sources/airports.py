@@ -65,6 +65,35 @@ def load_airports() -> dict[str, Airport]:
 
 
 @lru_cache
+def load_stations() -> dict[str, tuple[float, float]]:
+    """``ident -> (lat, lon)`` for everything a PIREP reports its position off.
+
+    Deliberately separate from :func:`load_airports`, which answers a different
+    question and must stay Canada-only: it drives precautionary-landing
+    suggestions, and a Michigan VOR is not somewhere to put the aircraft down.
+    This table is the opposite shape - no names, no runways, no filtering by what
+    you could land on, but it carries US stations and navaids, because that is
+    what ``/OV`` fields actually name. Reading positions out of the airport table
+    is why PIREPs never reached the map: every ``K``-prefixed station a report
+    referenced resolved to nothing.
+    """
+    path = _pick(DATA_DIR / "stations_ca.csv", DATA_DIR / "stations_seed.csv")
+    out: dict[str, tuple[float, float]] = {}
+    with open(path, newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            ident = (row.get("ident") or "").strip().upper()
+            lat = _to_float(row.get("latitude_deg"))
+            lon = _to_float(row.get("longitude_deg"))
+            if ident and lat is not None and lon is not None:
+                out[ident] = (lat, lon)
+    return out
+
+
+def get_station(ident: str) -> tuple[float, float] | None:
+    return load_stations().get(ident.upper())
+
+
+@lru_cache
 def load_runways() -> dict[str, list[Runway]]:
     path = _pick(DATA_DIR / "runways_ca.csv", DATA_DIR / "runways_seed.csv")
     out: dict[str, list[Runway]] = {}

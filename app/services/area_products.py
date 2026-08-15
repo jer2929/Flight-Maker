@@ -356,6 +356,45 @@ def parse_validity(text: str, now: Optional[datetime] = None
     return fmt(start), fmt(end)
 
 
+# "/TM 1530" - the time the observation was made, HHMM, no day. This is the one
+# a pilot cares about; the header stamp is when the bulletin moved.
+_PIREP_TM = re.compile(r"/TM\s?(\d{2})(\d{2})\b")
+# "UACN10 CYYZ 151530" - the WMO abbreviated header, DDHHMM at the end.
+_PIREP_HEADER = re.compile(r"\b[A-Z]{4}\d{0,2}\s+[A-Z]{4}\s+(\d{6})\b")
+
+
+def parse_pirep_time(text: str, now: Optional[datetime] = None) -> Optional[str]:
+    """When a PIREP was filed, as an ISO8601 Z string, or ``None``.
+
+    CFPS does not always supply a ``startValidity`` for a PIREP, and without one
+    the age test in :mod:`area_hazards` could never fire and the card had no age
+    to show - the report just sat there looking as current as the METAR beside
+    it. The bulletin itself always carries the time twice: ``/TM`` is when the
+    pilot saw it, the WMO header is when it was transmitted. Prefer ``/TM``.
+
+    ``None`` means the text does not say, and callers must read it that way - an
+    unparsed time may never be treated as old.
+    """
+    now = now or datetime.now(timezone.utc)
+    up = text.upper()
+    m = _PIREP_TM.search(up)
+    if m:
+        hh, mi = int(m.group(1)), int(m.group(2))
+        if hh <= 23 and mi <= 59:
+            cand = now.replace(hour=hh, minute=mi, second=0, microsecond=0)
+            # HHMM with no day: the most recent time that reads that way. A
+            # stamp an hour into the future is yesterday's, not tomorrow's.
+            if cand > now + timedelta(minutes=30):
+                cand -= timedelta(days=1)
+            return cand.strftime("%Y-%m-%dT%H:%M:00Z")
+    m = _PIREP_HEADER.search(up)
+    if m:
+        filed = _ddhhmm(m.group(1), now)
+        if filed:
+            return filed.strftime("%Y-%m-%dT%H:%M:00Z")
+    return None
+
+
 def band_text(base_ft: float, top_ft: float) -> str:
     """A parsed band written back the way a pilot reads it."""
     if (base_ft, top_ft) == UNBOUNDED:

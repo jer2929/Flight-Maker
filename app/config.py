@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     hazard_route_sample_nm: float = 25.0
     # How long a PIREP describes the air mass it was filed in.
     pirep_max_age_hr: int = 3
+    # PIREPs get a wider corridor than the areas do, and a hard edge. A SIGMET is
+    # a polygon you can be 20 nm outside of and still care about the shape of; a
+    # PIREP is one aircraft at one point, and the question is only whether it was
+    # near enough to be about your air. Inside this it is drawn and listed;
+    # outside it is dropped outright rather than shown faint, because a report
+    # from the far side of the country is not a near miss.
+    pirep_corridor_nm: float = 50.0
 
     # Route timeline horizon (hours)
     timeline_hours: int = 48

@@ -160,3 +160,31 @@ def test_no_em_dashes_reach_the_pilot(upstreams):
         strings.append(r.etd_suggestion.reason)
     for s in strings:
         assert "—" not in s and "–" not in s, s
+
+
+# ---- the note itself ------------------------------------------------------
+#
+# The wording and the gate both live in web/app.js (daylightSpan), which no
+# Python test can call. These are copy guards, in the same spirit as
+# test_shell_cache reading the bundle: cheap, and they catch the string being
+# quietly reworded or the gate being dropped in a refactor.
+
+from pathlib import Path  # noqa: E402
+
+APP_JS = Path(__file__).resolve().parent.parent / "web" / "app.js"
+
+
+def test_the_margin_says_what_the_daylight_is_left_for():
+    """"45 min of daylight left" invites the question "left to do what?". The
+    margin is measured to the moment you are on the ground, not to takeoff."""
+    assert "of daylight left after landing" in APP_JS.read_text()
+
+
+def test_the_note_is_gated_on_the_night_operations_threat():
+    """A pilot who has turned night operations off as a threat is night-current
+    and equipped; a countdown to last light is one more line for them to read
+    past on the day it matters."""
+    src = APP_JS.read_text()
+    body = src[src.index("function daylightSpan("):]
+    body = body[:body.index("\nfunction ")]
+    assert "night_as_threat" in body, "daylightSpan must consult the threat setting"

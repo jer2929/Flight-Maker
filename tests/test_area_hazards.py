@@ -377,3 +377,64 @@ def test_a_pirep_becomes_a_point_feature():
     fc = ah.to_feature_collection([_haz(kind="PIREP", geometry=[(43.5, -80.1)])])
     assert fc["features"][0]["geometry"] == {"type": "Point",
                                              "coordinates": [-80.1, 43.5]}
+
+
+# ---------------------------------------------------------------------------
+# A PIREP's corridor is its own, and it is a hard edge
+# ---------------------------------------------------------------------------
+#
+# A SIGMET is a shape you can be twenty miles outside of and still want to see
+# the edge of. A PIREP is one aircraft at one point, so "how far off track" is
+# the whole of what it is - and past the corridor it is not a near miss, it is
+# somewhere else. These are the reports a pilot could not find on the map at all.
+
+# On the CYFD-CYHM track, and about 40 nm and 90 nm north of it.
+PIREP_ON_ROUTE = (43.15, -80.1)
+PIREP_40NM = (43.8, -80.15)
+PIREP_90NM = (44.65, -80.2)
+
+
+def _pirep(pos, **kw):
+    return _haz(kind="PIREP", text="UACN10 CYYZ 141200 UA /OV YYZ /FL050 /TB MOD",
+                geometry=([pos] if pos else []), **kw)
+
+
+def test_a_pirep_inside_its_own_corridor_is_relevant():
+    keep, aside = _filter([_pirep(PIREP_40NM)], pirep_buffer_nm=50.0)
+    assert len(keep) == 1 and not aside, "40 nm is inside the 50 nm PIREP corridor"
+    assert 25.0 < keep[0].distance_nm <= 50.0, "and the areas' 25 nm would have dropped it"
+
+
+def test_a_pirep_beyond_its_corridor_is_dropped_outright():
+    keep, aside = _filter([_pirep(PIREP_90NM)], pirep_buffer_nm=50.0)
+    assert not keep and not aside, "not counted, not listed, not sent to the map"
+
+
+def test_a_far_area_is_still_kept_as_a_near_miss():
+    """The hard edge is a PIREP rule, not a new rule for everything."""
+    keep, aside = _filter([_haz(geometry=NEAR_MISS)], pirep_buffer_nm=50.0)
+    assert not keep and len(aside) == 1, "a SIGMET 60 nm off track is still a near miss"
+
+
+def test_a_pirep_that_cannot_be_placed_is_dropped_rather_than_failing_open():
+    """Every other product fails open on an unreadable position. This one cannot.
+
+    A SIGMET we cannot place is still a warning about weather near a route we
+    can place. A point report with no point is nothing but text: it can never be
+    drawn, and it was reaching the card marked relevant with no distance to
+    check it by - which is how a report from anywhere in the country rode along.
+    """
+    keep, aside = _filter([_pirep(None)], pirep_buffer_nm=50.0)
+    assert not keep and not aside
+
+
+def test_an_unplaceable_sigmet_still_fails_open():
+    keep, _aside = _filter([_haz(geometry=[])], pirep_buffer_nm=50.0)
+    assert len(keep) == 1, "the fail-open rule is unchanged for everything else"
+
+
+def test_a_kept_pirep_reaches_the_map_as_a_point():
+    keep, _ = _filter([_pirep(PIREP_40NM)], pirep_buffer_nm=50.0)
+    fc = ah.to_feature_collection(keep)
+    assert fc["features"][0]["geometry"]["type"] == "Point"
+    assert fc["features"][0]["properties"]["kind"] == "PIREP"
