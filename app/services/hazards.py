@@ -67,12 +67,13 @@ def _gates(report: dict) -> bool:
         area_products.SEVERITY_RANK["moderate"]
 
 
-def _report_text(report: dict, kind: str, alt_phrase: str) -> str:
+def _report_text(report: dict, kind: str, alt_phrase: str,
+                 source: str = "AIRMET/SIGMET") -> str:
     """An area report written back with its severity and band, e.g.
-    ``MOD icing FL040-FL100 (AIRMET/SIGMET/PIREP), overlaps your 500-6,500 ft``."""
+    ``MOD icing FL040-FL100 (AIRMET/SIGMET), overlaps your 500-6,500 ft``."""
     sev = {"severe": "SEV", "moderate": "MOD", "light": "LGT"}[report["severity"]]
     band = area_products.band_text(report["base_ft"], report["top_ft"])
-    return (f"{sev} {kind} {band} (AIRMET/SIGMET/PIREP)"
+    return (f"{sev} {kind} {band} ({source})"
             f"{f', overlaps your {alt_phrase}' if alt_phrase else ''}")
 
 
@@ -88,7 +89,15 @@ def weather_checks(
     freezing_level_ft: Optional[float],
     personal_vis_sm: float,
     gfa_region: str,
-    area_text: str = "",           # SIGMET/AIRMET/PIREP only
+    area_text: str = "",           # forecast area products only (no PIREPs)
+    # PIREPs are kept apart from the forecast products on purpose. A SIGMET or
+    # AIRMET is a forecaster's statement about the airspace; a PIREP is one
+    # aeroplane's experience of one moment of it, from an aircraft that is
+    # usually not yours. It is worth reading and worth showing - it is not worth
+    # cancelling a flight over on its own, and rolling it into the same blob as
+    # the forecasts meant a single "MOD turb" report from an airliner in the
+    # climb failed the turbulence row outright.
+    pirep_text: str = "",
     # --- model-derived air mass (never gates; see ``services.airmass``) -------
     icing_bands: list[dict] = (),       # cloud-below-freezing bands, ft MSL
     turbulence: Optional[dict] = None,  # shear / gust / low-level-jet index
@@ -209,13 +218,32 @@ def weather_checks(
     # reported without gating - as is the model's own picture of the air. The
     # model never fails this row: it says what the air looks like so the GFA
     # panel below can be read with a question already in mind.
+    def _pirep_note(kind: str) -> str:
+        """What the pilots ahead of you actually met, if anyone said.
+
+        Reported at any severity and never gating - a light-chop report is still
+        the most current thing anyone knows about that air.
+        """
+        rpt = area_products.find_hazard(pirep_text, kind, planned_low_ft, planned_high_ft)
+        if not rpt:
+            return ""
+        # A PIREP writes its altitude as "/FL050", which the forecast-band
+        # patterns do not read - so without this the row said "no altitude given"
+        # about a report that plainly gave one, next to a card chip showing it.
+        level = area_products.parse_pirep_level(rpt["text"])
+        if level:
+            rpt = {**rpt, "base_ft": level[0], "top_ft": level[1]}
+        return _report_text(rpt, kind, "", source="PIREP")
+
     icing_rpt = area_products.find_hazard(raw_text, "icing", planned_low_ft, planned_high_ft)
+    icing_pirep = _pirep_note("icing")
     frz = (f"freezing level ~{round(freezing_level_ft):,} ft"
            if freezing_level_ft is not None else "")
     bands = airmass.bands_overlapping(list(icing_bands), planned_low_ft, planned_high_ft)
     model_txt = airmass.describe_icing(bands)
     if icing_rpt and _gates(icing_rpt):
-        add("icing", "Forecast icing", True, _report_text(icing_rpt, "icing", where),
+        add("icing", "Forecast icing", True,
+            " - ".join(x for x in (_report_text(icing_rpt, "icing", where), icing_pirep) if x),
             limit=mod_limit)
     else:
         bits = []
@@ -226,17 +254,22 @@ def weather_checks(
         else:
             bits.append(f"no AIRMET/SIGMET icing; no model cloud below freezing "
                         f"{planned_low_ft:,.0f}-{planned_high_ft:,.0f} ft")
+        if icing_pirep:
+            bits.append(icing_pirep)
         if frz:
             bits.append(frz)
         bits.append(f"confirm on the GFA icing panel below ({gfa_region})")
-        add("icing", "Forecast icing", False, " - ".join(bits), limit=mod_limit)
+        add("icing", "Forecast icing", False, " - ".join(bits), limit=mod_limit,
+            advisory=bool(icing_pirep))
 
     # 5. Moderate turbulence at low level, same two-source treatment.
     turb_rpt = area_products.find_hazard(raw_text, "turbulence", planned_low_ft, planned_high_ft)
+    turb_pirep = _pirep_note("turbulence")
     turb = turbulence or {}
     if turb_rpt and _gates(turb_rpt):
         add("turbulence", "Moderate turbulence (low level)", True,
-            _report_text(turb_rpt, "turbulence", where), limit=mod_limit)
+            " - ".join(x for x in (_report_text(turb_rpt, "turbulence", where), turb_pirep) if x),
+            limit=mod_limit)
     else:
         bits = []
         if turb_rpt:
@@ -244,11 +277,13 @@ def weather_checks(
         else:
             desc = airmass.describe_turbulence(turb)
             level = turb.get("level", "none")
-            bits.append(f"no AIRMET/PIREP turbulence; model {desc} - {level}"
-                        if desc else "no AIRMET/PIREP turbulence; no model data")
+            bits.append(f"no AIRMET/SIGMET turbulence; model {desc} - {level}"
+                        if desc else "no AIRMET/SIGMET turbulence; no model data")
+        if turb_pirep:
+            bits.append(turb_pirep)
         bits.append(f"confirm on the GFA turbulence panel below ({gfa_region})")
         add("turbulence", "Moderate turbulence (low level)", False, " - ".join(bits),
-            limit=mod_limit)
+            limit=mod_limit, advisory=bool(turb_pirep))
 
     # 6. Low-level wind shear forecast
     _forecast_hazard("low_level_wind_shear", "llws", "Low-level wind shear", "LLWS",

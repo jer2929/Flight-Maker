@@ -33,10 +33,19 @@ _SEVERITY_PATTERNS: list[tuple[str, str]] = [
 
 # Hazard keywords. Icing deliberately excludes the three phrases that contain
 # "ICE" but are not airframe icing.
-_ICING_RE = r"\bICG\b|\bICING\b|\bICE\b"
-_ICING_NOT_RE = r"\bICE\s+PELLETS?\b|\bICE\s+CRYSTALS?\b|\bNO\s+ICE\b|\bNIL\s+ICE\b|\bPL\b"
-_TURB_RE = r"\bTURB\b|\bTURBC\b|\bTURBULENCE\b|\bCHOP\b"
-_TURB_NOT_RE = r"\bNO\s+TURB\w*\b|\bNIL\s+TURB\w*\b|\bSMOOTH\b"
+# ``/IC`` and ``/TB`` are how a PIREP names its hazard - the word "TURB" often
+# never appears in one - so the patterns have to read the coded fields as well
+# as the prose. ``/TB NEG`` is a pilot reporting a smooth ride, which is a report
+# worth keeping and not a hazard, so it negates like "NO TURB" does.
+_ICING_RE = r"\bICG\b|\bICING\b|\bICE\b|/IC\b"
+# The trailing hazard word has to be swallowed with the negation: "/IC NIL ICE"
+# is one statement, and stripping only "/IC NIL" leaves a bare "ICE" behind that
+# reads as an icing report all over again.
+_ICING_NOT_RE = (r"\bICE\s+PELLETS?\b|\bICE\s+CRYSTALS?\b|\bNO\s+ICE\b|\bNIL\s+ICE\b"
+                 r"|\bPL\b|/IC\s+(?:NEG\w*|NIL|NONE)(?:\s+IC\w*)?\b")
+_TURB_RE = r"\bTURB\b|\bTURBC\b|\bTURBULENCE\b|\bCHOP\b|/TB\b"
+_TURB_NOT_RE = (r"\bNO\s+TURB\w*\b|\bNIL\s+TURB\w*\b|\bSMOOTH\b"
+                r"|/TB\s+(?:NEG\w*|NIL|NONE)(?:\s+(?:TURB\w*|CHOP))?\b")
 
 HAZARD_PATTERNS = {
     "icing": (_ICING_RE, _ICING_NOT_RE),
@@ -201,9 +210,22 @@ def parse_icao_polygon(text: str) -> list[tuple[float, float]]:
     return ring + [ring[0]]
 
 
-# "/OV YYZ180020" - 20 nm on the 180 radial off Toronto. Also "/OV CYYZ".
-_OV_RADIAL = re.compile(r"/OV\s+([A-Z]{3,4})(\d{3})(\d{3})\b")
+# The three forms a PIREP gives its position in, in the order they are tried:
+#
+#   /OV YYZ180020   20 nm on the 180 radial off Toronto
+#   /OV 5 SE KDTW   5 nm southeast of Detroit
+#   /OV KDTW        over the station
+#
+# The middle one is common enough that missing it loses a real share of the
+# reports, and it defeats a regex anchored straight after "/OV".
+_OV_RADIAL = re.compile(r"/OV\s+([A-Z]{3,4})\s?(\d{3})(\d{3})\b")
+_OV_BEARING = re.compile(r"/OV\s+(\d{1,3})\s*([NSEW]{1,3})\s+([A-Z]{3,4})\b")
 _OV_STATION = re.compile(r"/OV\s+([A-Z]{3,4})\b")
+
+# Compass points to true bearings, for the "5 SE KDTW" form.
+_DIRECTIONS = {"N": 0, "NNE": 22.5, "NE": 45, "ENE": 67.5, "E": 90, "ESE": 112.5,
+               "SE": 135, "SSE": 157.5, "S": 180, "SSW": 202.5, "SW": 225,
+               "WSW": 247.5, "W": 270, "WNW": 292.5, "NW": 315, "NNW": 337.5}
 
 
 def parse_pirep_position(
@@ -234,18 +256,36 @@ def parse_pirep_position(
         base = _resolve(resolve_station, m.group(1))
         if base:
             return project_nm(base[0], base[1], float(m.group(2)), float(m.group(3)))
+    m = _OV_BEARING.search(up)
+    if m and m.group(2) in _DIRECTIONS:
+        base = _resolve(resolve_station, m.group(3))
+        if base:
+            return project_nm(base[0], base[1], _DIRECTIONS[m.group(2)],
+                              float(m.group(1)))
     m = _OV_STATION.search(up)
     if m:
         return _resolve(resolve_station, m.group(1))
     return None
 
 
-def _resolve(resolve_station, ident: str) -> Optional[tuple[float, float]]:
-    """Try the ident as written, then with a Canadian ``C`` prefix.
+# A three-letter ident is missing its region prefix. Which one depends on where
+# the report was filed, and the report does not say - so try the three that
+# cover this app's airspace. Canada first, since that is where most of these
+# come from, then the continental US and Alaska.
+_IDENT_PREFIXES = ("C", "K", "P")
 
-    PIREPs drop the leading letter ("YYZ", not "CYYZ") far more often than not.
+
+def _resolve(resolve_station, ident: str) -> Optional[tuple[float, float]]:
+    """A station ident as a position, coping with the dropped region letter.
+
+    PIREPs write "YYZ" far more often than "CYYZ", and a US report writes "DTW",
+    not "KDTW". Only trying the Canadian prefix meant every American station in
+    the feed - and southern Ontario routes see a lot of them - went unplaced and
+    so never reached the map.
     """
-    for candidate in (ident, f"C{ident}") if len(ident) == 3 else (ident,):
+    candidates = (ident, *(f"{p}{ident}" for p in _IDENT_PREFIXES)) \
+        if len(ident) == 3 else (ident,)
+    for candidate in candidates:
         pos = resolve_station(candidate)
         if pos:
             return pos

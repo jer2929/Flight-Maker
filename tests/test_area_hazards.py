@@ -240,7 +240,8 @@ def _filter(hazards, **kw):
 
 
 ON_ROUTE = [(42.5, -81.0), (43.6, -81.0), (43.6, -79.5), (42.5, -79.5)]
-FAR_AWAY = [(49.0, -97.5), (50.0, -97.5), (50.0, -96.0), (49.0, -96.0)]
+NEAR_MISS = [(44.2, -80.4), (44.6, -80.4), (44.6, -79.9), (44.2, -79.9)]   # ~60 nm N
+FAR_AWAY = [(49.0, -97.5), (50.0, -97.5), (50.0, -96.0), (49.0, -96.0)]    # Winnipeg
 
 
 def test_an_area_on_the_route_is_relevant():
@@ -249,11 +250,20 @@ def test_an_area_on_the_route_is_relevant():
     assert keep[0].distance_nm == 0.0
 
 
-def test_an_area_the_route_never_enters_is_set_aside_with_its_reason():
-    keep, aside = _filter([_haz(geometry=FAR_AWAY)])
+def test_a_near_miss_is_set_aside_with_its_reason():
+    keep, aside = _filter([_haz(geometry=NEAR_MISS)])
     assert not keep and len(aside) == 1
     assert aside[0].drop_reason == "geometry"
     assert ah.DROP_LABELS[aside[0].drop_reason] == "not on your route"
+    assert 25.0 < aside[0].distance_nm < ah.NEARBY_NM
+
+
+def test_an_area_on_the_other_side_of_the_country_is_dropped_outright():
+    """The national feeds carry the whole continent. Telling a pilot in southern
+    Ontario that 268 advisories over the prairies do not apply is noise, not
+    honesty - so these are not even counted."""
+    keep, aside = _filter([_haz(geometry=FAR_AWAY)])
+    assert not keep and not aside
 
 
 def test_high_altitude_turbulence_does_not_reach_a_low_flight():
@@ -286,11 +296,11 @@ def test_an_advisory_with_no_geometry_at_all_is_kept():
     assert keep[0].distance_nm is None
 
 
-def test_an_unplaceable_awc_record_for_another_region_is_set_aside():
+def test_an_unplaceable_awc_record_for_another_region_is_dropped():
     """AWC's SIGMET feed is global; without this every flight carries Reykjavik."""
     stray = _haz(source=ah.AWC, source_url="a", fir="BIRD", geometry=[])
     keep, aside = _filter([stray], known_firs={"CZYZ", "CZUL"})
-    assert not keep and aside[0].drop_reason == "fir"
+    assert not keep and not aside
 
 
 def test_a_stale_pirep_is_set_aside():
@@ -316,10 +326,24 @@ def test_relevant_advisories_come_back_nearest_first():
 
 
 def test_drop_counts_total_the_set_aside():
-    _, aside = _filter([_haz(geometry=FAR_AWAY),
-                        _haz(geometry=FAR_AWAY),
+    _, aside = _filter([_haz(geometry=NEAR_MISS),
+                        _haz(geometry=NEAR_MISS),
                         _haz(geometry=ON_ROUTE, base_ft=24000, top_ft=40000)])
     assert ah.drop_counts(aside) == {"geometry": 2, "altitude": 1}
+
+
+def test_drop_counts_ignore_what_was_never_in_scope():
+    """The count is of near misses, not of the national feed."""
+    _, aside = _filter([_haz(geometry=FAR_AWAY) for _ in range(200)]
+                       + [_haz(geometry=ON_ROUTE, base_ft=24000, top_ft=40000)])
+    assert ah.drop_counts(aside) == {"altitude": 1}
+
+
+def test_something_too_high_stays_on_the_card_however_far_it_reaches():
+    """Only distance puts an advisory out of scope. A SIGMET above your track is
+    exactly the sort of thing worth stating rather than silently withholding."""
+    _, aside = _filter([_haz(geometry=ON_ROUTE, base_ft=24000, top_ft=40000)])
+    assert len(aside) == 1 and aside[0].drop_reason == "altitude"
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +361,7 @@ def test_feature_collection_emits_lon_lat_and_closes_the_ring():
 
 def test_feature_collection_includes_the_set_aside_ones_flagged():
     keep, aside = _filter([_haz(geometry=ON_ROUTE, base_ft=0, top_ft=10000),
-                           _haz(geometry=FAR_AWAY)])
+                           _haz(geometry=NEAR_MISS)])
     fc = ah.to_feature_collection(keep + aside)
     flags = {f["properties"]["relevant"] for f in fc["features"]}
     assert flags == {True, False}

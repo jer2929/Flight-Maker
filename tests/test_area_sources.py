@@ -120,9 +120,38 @@ def test_awc_pirep_is_bounded_by_the_route_box(captured):
     asyncio.run(awc.pireps((42.0, -81.0, 44.0, -79.0), age_hr=2))
 
     params = dict(captured[0]["params"])
-    assert params["format"] == "json", "the JSON rows already carry lat/lon"
+    assert params["format"] == "geojson"
     assert params["age"] == 2
     assert params["bbox"] == "42.000,-81.000,44.000,-79.000"
+
+
+def test_awc_pirep_falls_back_to_station_and_radius(monkeypatch):
+    """This feed is the only one that says where a PIREP was, so losing it to a
+    rejected parameter costs every PIREP its position on the map."""
+    seen: list[dict] = []
+
+    async def picky(url, params, *, headers=None, attempts=2):
+        p = dict(params)
+        seen.append(p)
+        if "bbox" in p:
+            raise RuntimeError("bbox not accepted here")
+        return []
+
+    monkeypatch.setattr(_http, "get_json", picky)
+    asyncio.run(awc.pireps((42.0, -81.0, 44.0, -79.0), 3, near_ident="cyfd"))
+
+    assert len(seen) == 2, "it should try the box, then the station"
+    assert seen[1]["id"] == "CYFD"
+    assert seen[1]["distance"] >= 50
+
+
+def test_awc_pirep_still_raises_when_there_is_no_fallback(monkeypatch):
+    async def boom(*a, **k):
+        raise RuntimeError("upstream down")
+
+    monkeypatch.setattr(_http, "get_json", boom)
+    with pytest.raises(RuntimeError):
+        asyncio.run(awc.pireps((42.0, -81.0, 44.0, -79.0), 3))
 
 
 def test_awc_area_products_raise_instead_of_returning_empty(monkeypatch):

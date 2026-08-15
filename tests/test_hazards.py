@@ -129,7 +129,7 @@ def test_ice_pellets_and_no_ice_are_not_airframe_icing():
 def test_quiet_turbulence_row_passes_without_a_warning_triangle():
     c = _run()["turbulence"]
     assert c.passed and not c.advisory
-    assert "no AIRMET/PIREP turbulence" in c.actual_text
+    assert "no AIRMET/SIGMET turbulence" in c.actual_text
 
 
 def test_turbulence_row_reports_the_model_index():

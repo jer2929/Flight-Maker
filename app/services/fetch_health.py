@@ -33,14 +33,19 @@ HRDPS = "HRDPS hourly forecast"
 METAR = "NAV CANADA METAR"
 TAF = "NAV CANADA TAF"
 NOTAM = "NAV CANADA NOTAM"
-# Area advisories come from two independent upstreams across seven products, so
-# one label cannot say what was lost. Two can, and two is the most a pilot can
-# act on: either you have no advisory coverage at all, or you have it with gaps.
-# Naming all seven products would be noise, and a banner that cries wolf about a
-# G-AIRMET call while both SIGMET feeds are healthy teaches people to ignore it -
-# which is the same failure as saying nothing.
-AREA = "SIGMET / AIRMET / PIREP"                    # every source failed
-AREA_PARTIAL = "Some SIGMET/AIRMET/PIREP sources"   # at least one answered
+# Area advisories come from two independent upstreams across seven products, and
+# the honest question is not "did every request succeed" but **"is there any
+# product the pilot is now blind to"**. The two upstreams overlap deliberately,
+# so one of them dropping a product the other still covers costs nothing and is
+# not worth a banner. Reporting it anyway is how you train someone to click
+# past the banner on the day it means something.
+#
+# So these name a *kind of advisory with no working source left*, and the fold
+# underneath names the individual upstream that dropped, for diagnosis.
+SIGMET = "SIGMETs"
+AIRMET = "AIRMETs"
+PIREP = "PIREPs"
+AREA = "SIGMET / AIRMET / PIREP"     # nothing answered at all
 HISTORY = "METAR observation history"
 
 # The products whose absence changes what the decision card can say. The others

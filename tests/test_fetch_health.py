@@ -305,20 +305,39 @@ def test_cfps_products_are_named_individually(monkeypatch, quiet_upstreams, fore
 # "No active SIGMET/AIRMET/PIREP on the route." over a fetch that never landed.
 # Nothing tested that, because every fixture stubbed them to answer emptily.
 # ---------------------------------------------------------------------------
-def test_one_dead_area_source_is_reported_as_partial(monkeypatch, quiet_upstreams,
-                                                     forecast_fixture):
+def test_a_redundantly_covered_source_failing_is_not_reported(
+        monkeypatch, quiet_upstreams, forecast_fixture):
+    """The two upstreams overlap on purpose.
+
+    AWC's PIREP feed dropping while NAV CANADA's still answers costs the pilot
+    nothing, and a banner every single time is how you teach someone to click
+    past the banner on the day it means something.
+    """
     monkeypatch.setattr(openmeteo, "forecast", forecast_fixture["one"])
     monkeypatch.setattr(openmeteo, "forecast_many", forecast_fixture["many"])
-    quiet_hazards(monkeypatch, failing=("cfps.airmets",))
+    quiet_hazards(monkeypatch, failing=("awc.pireps",))
+
+    with fetch_health.collect() as health:
+        asyncio.run(orchestrator.assess_route("CYFD", "CYKF", "day", []))
+
+    assert health.ok is True, "PIREPs still have a working source - nothing was lost"
+    # Still recorded for diagnosis, just not raised as a loss.
+    assert any("AWC PIREP" in d for d in health.details)
+
+
+def test_losing_every_source_of_one_product_is_reported(monkeypatch, quiet_upstreams,
+                                                        forecast_fixture):
+    monkeypatch.setattr(openmeteo, "forecast", forecast_fixture["one"])
+    monkeypatch.setattr(openmeteo, "forecast_many", forecast_fixture["many"])
+    quiet_hazards(monkeypatch, failing=("cfps.pireps", "awc.pireps"))
 
     with fetch_health.collect() as health:
         r = asyncio.run(orchestrator.assess_route("CYFD", "CYKF", "day", []))
 
-    assert fetch_health.AREA_PARTIAL in health.failed
-    assert fetch_health.AREA not in health.failed, \
-        "the SIGMET feeds answered - saying all advisories are missing overstates it"
-    assert "CFPS AIRMET" in health.details
-    assert r.airmets == []
+    assert fetch_health.PIREP in health.failed
+    assert fetch_health.SIGMET not in health.failed, \
+        "the SIGMET feeds answered - naming them sends the pilot after the wrong thing"
+    assert r.pireps == []
 
 
 def test_every_area_source_down_is_reported_in_full(monkeypatch, quiet_upstreams,
@@ -331,7 +350,8 @@ def test_every_area_source_down_is_reported_in_full(monkeypatch, quiet_upstreams
         r = asyncio.run(orchestrator.assess_route("CYFD", "CYKF", "day", []))
 
     assert fetch_health.AREA in health.failed
-    assert fetch_health.AREA_PARTIAL not in health.failed
+    # One line, not three: losing everything is one thing that went wrong.
+    assert fetch_health.SIGMET not in health.failed
     # The card renders empty, but never without the banner saying why.
     assert r.sigmets == [] and r.airmets == [] and r.pireps == []
 

@@ -238,8 +238,8 @@ def _hazard_from_text(up: str) -> str:
     # "/IC LGT RIME". Neither contains "TURB" or "ICING", so without this a ride
     # report came through as an advisory about nothing in particular.
     ranked: dict[str, int] = {}
-    for field, key in (("TB", "turb"), ("IC", "ice")):
-        m = re.search(rf"/{field}\s+(\w+)", up)
+    for code, key in (("TB", "turb"), ("IC", "ice")):
+        m = re.search(rf"/{code}\s+(\w+)", up)
         if not m:
             continue
         # "/TB NEG" is a pilot reporting that it was smooth. Worth keeping as a
@@ -478,6 +478,26 @@ DROP_LABELS = {
 # just in; a hard edge at the ETA would hide a SIGMET issued mid-flight.
 _WINDOW_PAD = timedelta(minutes=30)
 
+# How far off track an advisory is still part of this flight's picture. Inside
+# this, a set-aside advisory is a near miss worth seeing on the map and counting
+# on the card; outside it, it is simply somewhere else.
+NEARBY_NM = 150.0
+
+
+def _out_of_scope(h: AreaHazard) -> bool:
+    """True when a set-aside advisory is too far away to be worth mentioning.
+
+    Only distance decides this. Something dropped for its *altitude* or its
+    *validity* is over the route and stays on the card - that a SIGMET is
+    FL240-FL400 above your track is exactly the sort of thing a pilot wants to
+    see stated rather than silently withheld.
+    """
+    if h.drop_reason == "fir":
+        return True
+    if h.drop_reason != "geometry":
+        return False
+    return h.distance_nm is None or h.distance_nm > NEARBY_NM
+
 
 def _dt(value: Optional[str]) -> Optional[datetime]:
     if not value:
@@ -519,6 +539,13 @@ def filter_relevant(
                               pirep_max_age_hr=pirep_max_age_hr)
         h.relevant = reason is None
         h.drop_reason = reason
+        if reason is not None and _out_of_scope(h):
+            # Not a near miss - a different part of the continent. The national
+            # feeds carry the whole country, and telling a pilot in southern
+            # Ontario that 268 advisories over Alberta and Nevada do not apply to
+            # them is not honesty, it is noise. These are dropped outright: not
+            # counted, not listed, not sent to the map.
+            continue
         (keep if reason is None else aside).append(h)
 
     # Nearest first among those that touch the route; the rest by how far off.

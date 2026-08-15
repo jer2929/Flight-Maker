@@ -145,12 +145,22 @@ the verdict through the icing and turbulence rows below instead, which grade
 severity against the altitudes actually flown. Any SIGMET anywhere used to force
 MITIGATE — survivable with one product, meaningless with seven.
 
-Advisories that downloaded but don't apply are **shown, not discarded**, under a
-line reading *"14 more fetched: 9 outside your altitudes, 3 not on your route, 2
-expired"* — because "we found fourteen and none reach you" and "we found none" are
-different statements, and only one of them is good news. Everything fetched is
-also drawn on the route map: solid polygons for the ones that apply, dashed and
-faint for the near misses, PIREPs as points, each with its full text on tap.
+**PIREPs never gate.** A SIGMET or AIRMET is a forecaster's statement about the
+airspace; a PIREP is what one aeroplane met at one moment, usually not an
+aeroplane like yours. They are read (including the coded `/TB` and `/IC` fields,
+where the word "turbulence" never appears) and reported on the icing and
+turbulence rows as advisories, but a single airliner's "MOD turb" in the climb
+does not cancel your flight.
+
+Advisories that downloaded but don't apply to *you* are **shown, not discarded**,
+under a line reading *"4 more fetched: 3 outside your altitudes, 1 not on your
+route"* — "we found four and none reach you" and "we found none" are different
+statements, and only one of them is good news. Anything more than 150 nm off
+track is dropped outright rather than counted: the feeds are national, and
+telling a pilot in southern Ontario that 268 advisories over the prairies don't
+apply is noise, not honesty. Everything kept is also drawn on the route map:
+solid polygons for the ones that apply, dashed and faint for the near misses,
+PIREPs as points, each with its full text on tap.
 
 ### Icing and turbulence
 Nothing can parse a GFA chart, so these two rows used to read *"review the GFA
@@ -367,6 +377,14 @@ Two upstreams stay deliberately quiet, because they degrade into a *smaller*
 card rather than a wrong one: the multi-model wind blend (the single-model wind
 is still there behind it), and the GFA/radar panels, which have carried their
 own "couldn't be loaded" fallbacks since they were added.
+
+Area advisories are judged the same way, by **what was lost rather than what
+failed**. The two upstreams overlap on purpose, so AWC's PIREP feed dropping
+while NAV CANADA's still answers costs nothing and raises nothing — a banner
+every single time is how you teach someone to click past the banner on the day
+it means something. The banner names a *kind* of advisory (`SIGMETs`,
+`AIRMETs`, `PIREPs`) only once no source for it is left, with the individual
+upstream and its HTTP status behind a **Which sources** fold for diagnosis.
 
 > **Known gaps:** The TAF parser doesn't recognise `INTER`, so such a group's conditions are
 > absorbed into the preceding one rather than windowed on their own; `CAVOK`, `NSW`
