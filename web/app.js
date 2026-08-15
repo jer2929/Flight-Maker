@@ -1213,7 +1213,12 @@ function rowCheck(c) {
   // saw as a ragged edge. The TAF group still rides along with the source chip,
   // and the raw TAF line is still the chip's tooltip.
   const bits = [];
-  if (c.location) bits.push(`<span class="loc">@ ${escapeHtml(c.location)}</span>`);
+  // Some rows already name their location in the value - the crosswind row reads
+  // "0 kt on RWY 05 (CYFD)" and carries location "05 (CYFD)". Saying it twice was
+  // easy to miss when it was inline; on its own line it is just noise.
+  if (c.location && !(c.actual_text || "").includes(c.location)) {
+    bits.push(`<span class="loc">@ ${escapeHtml(c.location)}</span>`);
+  }
   if (c.source && c.source !== "-") {
     const detail = c.source_detail ? ` ${escapeHtml(c.source_detail)}` : "";
     bits.push(`<span class="src-mini"${c.source_text ? ` title="${escapeHtml(c.source_text)}"` : ""}>${escapeHtml(c.source)}${detail}</span>`);
@@ -1222,13 +1227,13 @@ function rowCheck(c) {
   return `<div class="chk ${state}">
     <span class="mark">${mark}</span>
     <span class="lbl">${escapeHtml(c.label)}</span>
-    <span class="act">${escapeHtml(c.actual_text)}</span>
-    <span class="lim">${escapeHtml(c.limit_text)}</span>${sub}</div>`;
+    <span class="val"><span class="act">${escapeHtml(c.actual_text)}</span>${sub}</span>
+    <span class="lim">${escapeHtml(c.limit_text)}</span></div>`;
 }
 function rowThreat(t) {
   // Same four cells as rowCheck, so threat rows share the checklist's columns.
   // The empty limit cell is deliberate: it holds the column open.
-  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${escapeHtml(t.label)}</span><span class="act">${t.present ? "present" : "-"}</span><span class="lim"></span></div>`;
+  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${escapeHtml(t.label)}</span><span class="val"><span class="act">${t.present ? "present" : "-"}</span></span><span class="lim"></span></div>`;
 }
 
 // ---------- Wind-vs-runway diagram ----------
@@ -2427,7 +2432,7 @@ function renderMinimums() {
   const row = (label, cur, def, unit, diff) => `<div class="chk ${diff ? "custom" : "pass"}">
       <span class="mark">${diff ? "★" : "–"}</span>
       <span class="lbl">${label}</span>
-      <span class="act">${cur}${unit ? " " + unit : ""}</span>
+      <span class="val"><span class="act">${cur}${unit ? " " + unit : ""}</span></span>
       <span class="lim">${diff ? `default ${def}${unit ? " " + unit : ""}` : "default"}</span>
     </div>`;
   const baseRow = row("Home base", baseIdent(), CONFIG.departure, "", baseIdent() !== CONFIG.departure);

@@ -18,11 +18,14 @@
   /* Spacing scale */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
 
-  /* One text-x for every block. A block with a state bar pays for the bar out of
-     its own padding, so barred and unbarred blocks start their text at the same x. */
+  /* One text-x for every block. --pad-x is the total distance from a block's
+     border box to its text, so each block subtracts whatever left border it
+     happens to carry - 1px hairline, 3px state bar, or none. That is what keeps
+     a bordered card's text on the same x as a bare "no data" line's. */
   --pad-x: 16px; --pad-y: 12px;
   --state-bar: 3px;
-  --pad-x-bar: calc(var(--pad-x) - var(--state-bar));
+  --pad-x-hair: calc(var(--pad-x) - 1px);            /* 1px all-round border */
+  --pad-x-bar: calc(var(--pad-x) - var(--state-bar)); /* left state bar */
   --row-inset: 8px;                          /* rows nested inside a block */
   --row-pad-x: calc(var(--row-inset) - var(--state-bar));
 
@@ -31,11 +34,13 @@
   --fs-2xs: .7rem; --fs-xs: .78rem; --fs-sm: .84rem;
   --fs-md: .9rem;  --fs-lg: .95rem; --fs-xl: 1.05rem;
 
-  /* The checklist column template. Declared once here so every .chk resolves the
-     same edges - see the .chk rule for why none of these tracks may be `auto`. */
+  /* The checklist column tracks. Kept as separate tokens rather than one
+     pre-composed template: a var() nested inside another custom property is
+     resolved against the element that *declares* it, so a --chk-lim override
+     further down the tree would never reach a template composed up here. */
   --chk-mark: 1.25rem;
-  --chk-lim: 7.5rem;
-  --chk-cols: var(--chk-mark) minmax(0, 1.2fr) minmax(0, 1fr) var(--chk-lim);
+  --chk-label: 19rem;   /* fits the longest rule name without stranding the value */
+  --chk-lim: 8.5rem;
 }
 * { box-sizing: border-box; }
 /* overflow-x: clip (not hidden) stops sideways scroll without creating a scroll
@@ -110,7 +115,7 @@ header p { margin: 4px 0 0; color: var(--muted); }
   .aircraft-row:first-child .aircraft-label { display: none; }
 }
 .panel {
-  margin: 0 auto; max-width: var(--page); padding: var(--pad-y) var(--pad-x);
+  margin: 0 auto; max-width: var(--page); padding: var(--pad-y) var(--pad-x-hair);
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
 }
 /* The tabs panel is a <body> child, so it never got the tab-pane's gutters and
@@ -128,7 +133,7 @@ fieldset { border: 1px solid var(--line); border-radius: var(--r-md); }
 legend { color: var(--muted); font-size: .85rem; padding: 0 6px; }
 label { display: block; font-size: .9rem; margin: 4px 0; }
 .banner {
-  margin-top: var(--sp-3); padding: var(--pad-y) var(--pad-x); border-radius: var(--r-md);
+  margin-top: var(--sp-3); padding: var(--pad-y) var(--pad-x-hair); border-radius: var(--r-md);
   background: rgba(192, 57, 43, .15); border: 1px solid var(--nogo); color: #ffb4ab;
 }
 .controls { display: flex; gap: 24px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
@@ -180,7 +185,9 @@ select, input[type=text], .route-inputs input {
 .ac-item .nm { color: var(--muted); font-size: .8rem; }
 .ac-item.active .nm { color: #dbeafe; }
 
-.results { display: grid; gap: var(--sp-3); margin: 0; }
+/* No margin of its own - both users (#route-endpoints, #discovery-results) are
+   pane children, and the pane owns the gaps between blocks. */
+.results { display: grid; gap: var(--sp-3); }
 .two-col { grid-template-columns: 1fr 1fr; }
 @media (max-width: 780px) {
   .two-col { grid-template-columns: 1fr; }
@@ -250,7 +257,8 @@ select, input[type=text], .route-inputs input {
    minmax(0, ...) is required - the default min-width:auto on a grid item lets one
    long unbreakable token blow a track out and re-introduce the per-row variance. */
 .chk {
-  display: grid; grid-template-columns: var(--chk-cols);
+  display: grid;
+  grid-template-columns: var(--chk-mark) var(--chk-label) minmax(0, 1fr) var(--chk-lim);
   gap: 2px var(--sp-3); align-items: baseline;
   padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--row-pad-x);
   border-left: var(--state-bar) solid transparent;
@@ -258,13 +266,16 @@ select, input[type=text], .route-inputs input {
 }
 .chk .mark { font-weight: 700; text-align: center; }
 .chk .lbl { color: var(--ink); overflow-wrap: break-word; }
+/* The value and its provenance are one stacked cell, not two grid rows: as two
+   rows, a limit that wrapped to two lines made row 1 tall and stranded the
+   sub-line halfway down the row, away from the number it belongs to. */
+.chk .val { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .chk .act { color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: break-word; }
 .chk .lim { color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
-/* Provenance, on a second line under the value it annotates rather than crammed
-   into the same cell - which is what made the value column's content swing by 30
-   characters row to row. Starts at column 3 so number and source read as one
-   cluster and the rule name keeps a clean column of its own. */
-.chk .sub { grid-column: 3 / -1; color: var(--muted); font-size: var(--fs-xs); }
+/* Provenance, under the value it annotates rather than crammed into the same
+   line - which is what made the value column's content swing by 30 characters
+   row to row, and what kept the limit column ragged. */
+.chk .sub { color: var(--muted); font-size: var(--fs-xs); }
 .chk.pass { border-left-color: var(--go); } .chk.pass .mark { color: var(--go-ink); }
 .chk.fail { border-left-color: var(--nogo); background: rgba(192,57,43,.10); } .chk.fail .mark { color: var(--nogo-ink); }
 .chk.advisory { border-left-color: var(--mitigate); } .chk.advisory .mark { color: var(--mit-ink); }
@@ -358,11 +369,19 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
      line 2 - so the two numbers you compare stay adjacent, and both still line up
      down the page. */
   :root { --chk-lim: 6.5rem; }
+  /* "default 12,000 ft" still needs more room than "≤ 9 kt", but not the 10rem
+     it gets on a desktop - that is half a phone. */
+  #minimums-readout { --chk-lim: 7.5rem; }
   .chk { grid-template-columns: var(--chk-mark) minmax(0, 1fr) var(--chk-lim); }
   .chk .lbl { grid-column: 2 / -1; }
-  .chk .act { grid-column: 2; font-weight: 600; }
+  .chk .val { grid-column: 2; }
   .chk .lim { grid-column: 3; text-align: right; }
-  .chk .sub { grid-column: 2 / -1; }
+  .chk .act { font-weight: 600; }
+  /* The hint and the badge are too wide to sit beside the title here, and
+     centring them on a flex line pushed the title itself out of place. */
+  .cl-group h3 { flex-wrap: wrap; align-items: baseline; gap: 2px var(--sp-2); }
+  .cl-group h3 .hint, .cl-group h3 .badge { flex-basis: 100%; }
+  .cl-group h3 .badge { align-self: flex-start; flex-basis: auto; }
 }
 
 /* The ETD this card was assessed for, beside the aerodrome it applies to. */
@@ -375,7 +394,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 
 /* big route verdict banner. No max-width of its own: it only ever renders inside
    a .tab-pane, which already constrains and gutters it. */
-.verdict-banner { padding: var(--pad-y) var(--pad-x); border-radius: var(--r-lg); font-weight: 700; }
+.verdict-banner { padding: var(--pad-y) var(--pad-x-hair); border-radius: var(--r-lg); font-weight: 700; }
 .verdict-banner.GO { background: rgba(31,138,76,.18); border: 1px solid var(--go); color: var(--go-ink); }
 .verdict-banner.MITIGATE { background: rgba(201,138,0,.18); border: 1px solid var(--mitigate); color: var(--mit-ink); }
 .verdict-banner.NOGO { background: rgba(192,57,43,.18); border: 1px solid var(--nogo); color: var(--nogo-ink); }
@@ -412,7 +431,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 }
 .window-card {
   background: rgba(31,138,76,.12); border: 1px solid var(--go); border-radius: var(--r-lg);
-  padding: var(--sp-2) var(--pad-x); margin: 6px 0; font-size: var(--fs-md);
+  padding: var(--sp-2) var(--pad-x-hair); margin: 6px 0; font-size: var(--fs-md);
 }
 /* The ETD nudge - one specific better departure time for this flight. Coloured
    by the verdict it actually reaches, not always green: a nudge that only gets
@@ -740,7 +759,8 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 /* Outside .tab-pane, so this one keeps its own frame. */
 footer { max-width: var(--page); margin: var(--sp-5) auto; padding: 0 var(--gutter) var(--sp-6);
   color: var(--muted); font-size: var(--fs-sm); }
-.empty { color: var(--muted); padding: 14px; }
+/* Bare text, no border of its own - so it takes the full inset. */
+.empty { color: var(--muted); padding: var(--pad-y) var(--pad-x); }
 
 /* ETD picker (route inputs + discovery filters) */
 .etd-sel { width: 100%; min-width: 150px; }
