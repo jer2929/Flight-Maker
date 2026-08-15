@@ -20,6 +20,15 @@ def test_parse_basic_metar():
     assert p["visibility_sm"] == 15
 
 
+def test_parse_metar_temperature_and_altimeter():
+    """Load-bearing since density altitude is derived from these two."""
+    raw = "CYFD 171800Z 05012KT 15SM FEW040 SCT250 22/12 A2998 RMK"
+    p = parse_metar(raw)
+    assert p["temp_c"] == 22
+    assert p["dewpoint_c"] == 12
+    assert p["altimeter_inhg"] == 29.98
+
+
 def test_parse_metar_gust_and_ceiling():
     raw = "CYHM 171800Z 24018G28KT 8SM OVC012 18/14 A2990"
     p = parse_metar(raw)
