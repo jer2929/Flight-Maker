@@ -160,10 +160,23 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
 
     elevation_ft = openmeteo.field_elevation_ft(fc)
     ceiling = openmeteo.cloud_base_to_ceiling_ft(at("cloud_base"))
-    if ceiling is None:  # GEM lacks cloud_base -> infer from saturated layers
-        ceiling = openmeteo.derive_ceiling_ft(hourly, i, elevation_ft)
+    layer = openmeteo.lowest_layer(hourly, i, elevation_ft)
+    if ceiling is None:  # GEM lacks cloud_base -> infer from the pressure levels
+        ceiling = layer["ceiling_ft"]
+    # Whether this point produced a usable reading at all. A failed fetch and a
+    # genuinely clear sky both leave ``ceiling_ft`` None, and the difference is
+    # the whole distance between "nothing to worry about" and "you are flying
+    # blind" - so it is recorded rather than inferred from the dict being
+    # non-empty, which was always true.
+    sampled = bool(layer["sampled"] or at("cloud_base") is not None
+                   or at("visibility") is not None or at("windspeed_10m") is not None)
     return {
         "ceiling_ft": ceiling,
+        "ceiling_source": Source.MODEL.value if ceiling is not None else None,
+        "sct_base_ft": layer["sct_base_ft"],
+        "max_cover_pct": layer["max_cover_pct"],
+        "scan_top_ft": layer["scan_top_ft"],
+        "sampled": sampled,
         "vis_sm": openmeteo.visibility_to_sm(at("visibility")),
         "wind_kt": at("windspeed_10m"),
         "gust_kt": at("windgusts_10m"),
@@ -178,16 +191,68 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
     }
 
 
+def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
+                          metar: str | None, taf_segs: list[dict],
+                          when: datetime, use_metar: bool) -> None:
+    """Fold a real report from under the route into a model sample, in place.
+
+    **Worst-of, and deliberately asymmetric.** An observed broken or overcast
+    layer *lowers* the route ceiling, because a station that has looked at the
+    sky beats a derivation that infers cloud from pressure-level humidity. An
+    observed clear sky never *raises* it: a field 30 nm off track being clear is
+    not evidence that the deck over the course has gone. The same asymmetry the
+    rest of the app applies through ``weather.worse``.
+
+    A METAR is used only while an observation still describes the moment being
+    assessed (the existing ``show_obs`` / ``is_now`` rule). Past that, the
+    station's TAF is read at the hour the flight is actually over the point -
+    which is the honest forecast for that place and time, and the thing the model
+    was standing in for.
+    """
+    cond: dict | None = None
+    kind = ""
+    if use_metar and metar:
+        cond, kind = wx.parse_metar(metar), "METAR"
+    elif taf_segs:
+        cond, kind = wx.conditions_at(taf_segs, when), "TAF"
+    if not cond:
+        return
+
+    label = f"{station.ident} {kind}, {round(dist_nm)} nm"
+    obs_ceil = cond.get("ceiling_agl_ft")
+    if obs_ceil is not None and (pt.get("ceiling_ft") is None
+                                 or obs_ceil < pt["ceiling_ft"]):
+        pt["ceiling_ft"] = obs_ceil
+        pt["ceiling_source"] = label
+    obs_vis = cond.get("visibility_sm")
+    if obs_vis is not None and (pt.get("vis_sm") is None or obs_vis < pt["vis_sm"]):
+        pt["vis_sm"] = obs_vis
+    # A real report is data even when it changed nothing, so the row can never
+    # claim the route went unsampled.
+    pt["sampled"] = True
+    pt["obs_station"] = station.ident
+    pt["obs_kind"] = kind
+
+
 def _ceiling_dropping(fc: dict, from_dt: datetime | None = None) -> bool:
     """True if the model ceiling falls > 1500 ft (and below 5000) over the
     ~4 hours following ``from_dt`` (default now) - 'rapidly lowering ceilings'."""
     if not fc:
         return False
-    base = fc.get("hourly", {}).get("cloud_base", [])
-    if not base:
-        return False
+    hourly = fc.get("hourly", {})
     i = _current_index(fc) if from_dt is None else _index_for_utc(fc, from_dt)[0]
-    window = [openmeteo.cloud_base_to_ceiling_ft(b) for b in base[i:i + 5]]
+    base = hourly.get("cloud_base") or []
+    if base:
+        window = [openmeteo.cloud_base_to_ceiling_ft(b) for b in base[i:i + 5]]
+    else:
+        # GEM carries no ``cloud_base``, and reading only that series is why this
+        # check silently answered False on every route the app has ever run: the
+        # model it actually uses has never served the field. Fall back to the same
+        # pressure-level derivation the ceiling rows are built on.
+        elev = openmeteo.field_elevation_ft(fc)
+        n = len(hourly.get("time") or [])
+        window = [openmeteo.derive_ceiling_ft(hourly, j, elev)
+                  for j in range(i, min(i + 5, n))]
     window = [c for c in window if c is not None]
     if len(window) < 2:
         return False
@@ -796,6 +861,36 @@ def _reporting_candidates(airport: Airport, max_nm: float = 90.0, limit: int = 5
     return out
 
 
+# How near a route midpoint a station has to be for its report to say anything
+# about the air the flight passes through. Wide enough to find one in most of
+# southern Ontario, tight enough that the observation is about this route.
+ENROUTE_OBS_NM = 40.0
+
+
+def _enroute_candidates(mids: list[tuple[float, float]],
+                        exclude: set[str]) -> list[tuple[Airport, float, int]]:
+    """The nearest reporting station to each route midpoint.
+
+    The enroute ceiling was model-only, which is the largest single source of the
+    "no ceiling (clear)" error: the pressure-level derivation is blind to decks
+    thinner than its level spacing, while a station under the route has simply
+    looked at the sky. These idents ride the METAR/TAF batch the route already
+    issues, so the accuracy costs no extra round trip.
+
+    Returns ``(airport, distance_nm, midpoint_index)`` so a merged sample can say
+    which station it used and how far away it was.
+    """
+    out: list[tuple[Airport, float, int]] = []
+    seen = set(exclude)
+    for k, (mlat, mlon) in enumerate(mids):
+        for a, d in ap.nearest_airports(mlat, mlon, seen, ENROUTE_OBS_NM, 10):
+            if _REPORTING_RE.match(a.ident):
+                out.append((a, d, k))
+                seen.add(a.ident)
+                break
+    return out
+
+
 def _station_position(ident: str) -> tuple[float, float] | None:
     """Where a station is, for PIREPs that report position off one."""
     a = ap.get_airport(ident.upper())
@@ -922,8 +1017,12 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     # All points (ends + enroute samples) - ceiling/vis apply along the route.
     pts = [endpoint_pts[0]]
     for i, e in enumerate(enroute, 1):
+        # The sample's own provenance, not a hardcoded "HRDPS" - a midpoint whose
+        # ceiling came from a station under the route says so, and a pilot can
+        # tell a real observation from an inference.
         pts.append((e.get("label") or f"enroute {i}", e.get("wind_kt"), e.get("gust_kt"),
-                    e.get("ceiling_ft"), e.get("vis_sm"), "HRDPS"))
+                    e.get("ceiling_ft"), e.get("vis_sm"),
+                    e.get("ceiling_source") or Source.MODEL.value))
     pts.append(endpoint_pts[1])
 
     checks: list[LimitCheck] = []
@@ -975,13 +1074,38 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                                  actual_text=f"{round(val / 100) * 100:,} ft AGL",
                                  passed=val >= ceil_limit, location=lbl, source=src))
     else:
-        # The route was sampled but no broken+ layer was found → clear (unlimited),
-        # which is a pass. "no data" only when there were no points at all.
-        sampled = any(e for e in enroute)
+        # No ceiling value anywhere on the route. That single fact has four very
+        # different meanings and this row used to print one sentence for all of
+        # them - the worst of which rendered a failed fetch as a clear sky.
+        #
+        # ``any(e for e in enroute)`` was the old test, and it was always true:
+        # ``_point_at`` returns an all-None dict on a failed fetch, and a
+        # non-empty dict is truthy. So a route with no model data at all reported
+        # "no ceiling (clear)" - precisely the class of bug commit 97a48f5 set
+        # out to kill. Ask the samples whether they actually held a reading.
+        sampled = any(e.get("sampled") for e in enroute)
+        obs_backed = any(e.get("obs_station") for e in enroute)
+        scan_tops = [e.get("scan_top_ft") for e in enroute if e.get("scan_top_ft")]
+        scts = [e.get("sct_base_ft") for e in enroute if e.get("sct_base_ft")]
+        if not sampled:
+            # Not a statement about the weather. Say so, and let the banner fire.
+            fetch_health.record(fetch_health.HRDPS)
+            text, src = "no data - forecast did not download", None
+        elif scts:
+            # A scattered layer is not a ceiling, but "clear" is a lie about it.
+            text = (f"no broken layer - scattered cloud near "
+                    f"{round(min(scts) / 100) * 100:,} ft AGL")
+            src = Source.OBSERVED.value if obs_backed else Source.MODEL.value
+        else:
+            # Genuinely nothing found. Name the top of the scan: this derivation
+            # has never been able to see above it, and "no ceiling" without that
+            # caveat claims more than the data supports.
+            top = f" below {round(min(scan_tops) / 1000) * 1000:,} ft AGL" if scan_tops else ""
+            text = f"no ceiling{top}"
+            src = Source.OBSERVED.value if obs_backed else Source.MODEL.value
         checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, route)",
                                  limit_text=f"≥ {ceil_limit:,} ft AGL",
-                                 actual_text="no ceiling (clear)" if sampled else "no data",
-                                 passed=True, source="HRDPS" if sampled else None))
+                                 actual_text=text, passed=True, source=src))
 
     # Departure/destination ceiling against the *circuit* minimum. The XC row above
     # already fails anything below the XC minimum; this row says whether the end in
@@ -1085,7 +1209,14 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # Nearby reporting-station candidates (used when an endpoint has no METAR).
     dep_cands = _reporting_candidates(dep)
     dest_cands = _reporting_candidates(dest)
-    all_sites = list(dict.fromkeys(sites + [c.ident for c in dep_cands + dest_cands]))
+    mids = _route_midpoints(dep, dest)
+    # Stations under the route itself. Added to the same batch as the endpoint
+    # candidates - CFPS chunks at 10 sites, so on a typical route these three
+    # ride along in requests already being made.
+    enroute_cands = _enroute_candidates(mids, {dep.ident, dest.ident})
+    all_sites = list(dict.fromkeys(
+        sites + [c.ident for c in dep_cands + dest_cands]
+        + [a.ident for a, _d, _k in enroute_cands]))
     # The route as an actual line, not three points on it. Area advisories are
     # tested against this: a polygon the course crosses between the samples is
     # still a polygon the flight goes through.
@@ -1115,7 +1246,6 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # Fetch far enough ahead that a late ETD plus a long leg still lands inside
     # the forecast we asked for.
     days = days_for(settings.timeline_hours + int(t_prov) + 1)
-    mids = _route_midpoints(dep, dest)
     corridor = _corridor_airports(dep, dest, distance)
 
     # Every product below depends only on the route geometry, never on another
@@ -1227,13 +1357,25 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # "worst point on the route" row can't report a right-now ceiling for a
     # flight eight hours out and silently contradict the endpoint rows.
     enroute = []
+    obs_by_mid = {k: (a, d) for a, d, k in enroute_cands}
     for k, ((mlat, mlon), fc) in enumerate(zip(mids, mid_fcs), 1):
         frac = k / (len(mids) + 1)
-        pt = _point_at(fc, etd_utc + timedelta(hours=t_prov * frac))
+        over_at = etd_utc + timedelta(hours=t_prov * frac)
+        pt = _point_at(fc, over_at)
         dist_along = round(distance * frac)
         near = ap.nearest_airports(mlat, mlon, {dep.ident, dest.ident}, 35.0, 1)
         near_txt = f" near {near[0][0].ident}" if near else ""
         pt["label"] = f"~{dist_along} nm from {dep.ident}{near_txt}"
+        # Cross-reference the model against a station under the route. This is
+        # the largest accuracy win available here and it costs no extra fetch -
+        # these idents were added to the METAR/TAF batch above.
+        station = obs_by_mid.get(k - 1)
+        if station is not None:
+            a, d = station
+            _merge_enroute_report(
+                pt, a, d, metars.get(a.ident),
+                wx.parse_taf_segments(tafs.get(a.ident) or ""),
+                over_at, use_metar=bool(is_now and show_obs))
         enroute.append(pt)
 
     # Gate the (VFR) cruising altitude on the minimum ceiling along the whole

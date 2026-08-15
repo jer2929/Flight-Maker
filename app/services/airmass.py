@@ -101,9 +101,15 @@ def icing_bands(hourly: dict, i: int) -> list[dict]:
     current: Optional[dict] = None
     for lvl, msl_ft in ordered:
         temp = _at(hourly, f"temperature_{lvl}", i)
-        icy = (temp is not None
-               and ICING_COLD_C <= temp <= ICING_WARM_C
-               and _moist(hourly, lvl, i))
+        if temp is None:
+            # No data at this level is *unknown*, not "known ice-free", so it must
+            # not break a run. Which levels a model serves varies, and a level it
+            # happens to omit between two icing layers is no reason to report two
+            # bands where the air holds one. Leaving ``current`` intact merges
+            # across the gap, which is both the conservative reading for an
+            # advisory and what this function did when the level list was sparser.
+            continue
+        icy = (ICING_COLD_C <= temp <= ICING_WARM_C and _moist(hourly, lvl, i))
         if not icy:
             current = None       # break the run; a dry or warm level ends a band
             continue
