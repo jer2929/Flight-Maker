@@ -1089,7 +1089,10 @@ function clearRoute() {
   // route-self-check is a standing pre-check rendered on load - never cleared here,
   // so the pilot's ticked items survive a route assessment.
   if (typeof destroyRadar === "function") destroyRadar();  // tear down any live Leaflet map
-  ["route-data-health", "route-verdict", "route-checklist", "route-mitigation", "route-summary", "route-gfa", "route-radar", "route-endpoints", "route-enroute", "route-windows", "route-timeline"]
+  // Circuits fills only some of these, so every mount a route run can write has
+  // to be listed - otherwise route-then-circuits leaves the previous flight's
+  // panel on screen under the new verdict.
+  ["route-data-health", "route-verdict", "route-summary", "route-etd-suggestion", "route-checklist", "route-advisories", "route-mitigation", "route-endpoints", "route-enroute", "route-gfa", "route-radar", "route-windows", "route-timeline"]
     .forEach((id) => ($("#" + id).innerHTML = ""));
 }
 
@@ -1122,7 +1125,7 @@ function renderRoute(r) {
       ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${windDir(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
     </div>`;
 
-  $("#route-summary").innerHTML += advisoriesBlock(r);
+  $("#route-advisories").innerHTML = advisoriesBlock(r);
   $("#route-endpoints").innerHTML =
     endpointCard(r.departure, "Departure", winLabel(win)) +
     endpointCard(r.destination, "Destination", winLabel(win));
@@ -1204,21 +1207,33 @@ const labelVerdict = (label) => /no-go/i.test(label) ? "NOGO" : /mitigate/i.test
 function rowCheck(c) {
   const state = !c.applicable ? "na" : c.advisory ? "advisory" : c.passed ? "pass" : "fail";
   const mark = { pass: "✓", fail: "✗", advisory: "⚠", na: "–" }[state];
-  const loc = c.location ? ` <span class="loc">@ ${c.location}</span>` : "";
-  // The TAF group behind the value rides along with the source chip, so the
-  // route checklist and the discovery card attribute a limit the same way.
-  const detail = c.source_detail ? ` ${escapeHtml(c.source_detail)}` : "";
-  const src = c.source && c.source !== "-"
-    ? ` <span class="src-mini"${c.source_text ? ` title="${escapeHtml(c.source_text)}"` : ""}>${c.source}${detail}</span>`
-    : "";
+  // Where the value came from goes on a second, muted line under it rather than
+  // inside the value cell. Three things of different weights in one cell made
+  // that column's content swing by 30 characters row to row, which is what you
+  // saw as a ragged edge. The TAF group still rides along with the source chip,
+  // and the raw TAF line is still the chip's tooltip.
+  const bits = [];
+  // Some rows already name their location in the value - the crosswind row reads
+  // "0 kt on RWY 05 (CYFD)" and carries location "05 (CYFD)". Saying it twice was
+  // easy to miss when it was inline; on its own line it is just noise.
+  if (c.location && !(c.actual_text || "").includes(c.location)) {
+    bits.push(`<span class="loc">@ ${escapeHtml(c.location)}</span>`);
+  }
+  if (c.source && c.source !== "-") {
+    const detail = c.source_detail ? ` ${escapeHtml(c.source_detail)}` : "";
+    bits.push(`<span class="src-mini"${c.source_text ? ` title="${escapeHtml(c.source_text)}"` : ""}>${escapeHtml(c.source)}${detail}</span>`);
+  }
+  const sub = bits.length ? `<span class="sub">${bits.join(" ")}</span>` : "";
   return `<div class="chk ${state}">
     <span class="mark">${mark}</span>
-    <span class="lbl">${c.label}</span>
-    <span class="act">${c.actual_text}${loc}${src}</span>
-    <span class="lim">${c.limit_text}</span></div>`;
+    <span class="lbl">${escapeHtml(c.label)}</span>
+    <span class="val"><span class="act">${escapeHtml(c.actual_text)}</span>${sub}</span>
+    <span class="lim">${escapeHtml(c.limit_text)}</span></div>`;
 }
 function rowThreat(t) {
-  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${t.label}</span><span class="act">${t.present ? "present" : "-"}</span><span class="lim"></span></div>`;
+  // Same four cells as rowCheck, so threat rows share the checklist's columns.
+  // The empty limit cell is deliberate: it holds the column open.
+  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${escapeHtml(t.label)}</span><span class="val"><span class="act">${t.present ? "present" : "-"}</span></span><span class="lim"></span></div>`;
 }
 
 // ---------- Wind-vs-runway diagram ----------
@@ -2417,7 +2432,7 @@ function renderMinimums() {
   const row = (label, cur, def, unit, diff) => `<div class="chk ${diff ? "custom" : "pass"}">
       <span class="mark">${diff ? "★" : "–"}</span>
       <span class="lbl">${label}</span>
-      <span class="act">${cur}${unit ? " " + unit : ""}</span>
+      <span class="val"><span class="act">${cur}${unit ? " " + unit : ""}</span></span>
       <span class="lim">${diff ? `default ${def}${unit ? " " + unit : ""}` : "default"}</span>
     </div>`;
   const baseRow = row("Home base", baseIdent(), CONFIG.departure, "", baseIdent() !== CONFIG.departure);
