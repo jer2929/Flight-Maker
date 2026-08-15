@@ -114,6 +114,44 @@ covering panel stays marked (✈) after you click to another, and if your ETD is
 past the reach of the latest issuance the caption says so rather than showing a
 chart that doesn't describe your flight.
 
+### SIGMETs, AIRMETs and PIREPs
+Two independent, free, no-key feeds, fetched together and merged:
+
+* **NAV CANADA CFPS** — the authoritative Canadian source, queried for the route's
+  aerodromes *and* all seven Canadian FIRs (`CZVR CZEG CZWG CZYZ CZUL CZQM CZQX`),
+  since SIGMETs and AIRMETs are issued per FIR.
+* **aviationweather.gov (NOAA/AWC)** — international SIGMETs (which cover the
+  Canadian FIRs too, so the two feeds cross-check each other), plus the US
+  domestic SIGMET/AIRMET, G-AIRMET, CWA and PIREP products a cross-border leg
+  needs and CFPS knows nothing about. Requested as **GeoJSON**, so each advisory
+  arrives with the polygon the forecaster drew.
+
+The same product reaching us from both sources is **merged, not deduplicated
+away**: NAV CANADA's wording is authoritative, AWC is the one carrying a polygon,
+and both halves are kept.
+
+**Relevance is geometric.** The route is sampled into ≤25 nm legs and each
+advisory's area is tested against that line — inside it, crossing it, or within a
+25 nm corridor of it. The old test measured the distance from three route points
+to each polygon *vertex*, which dropped a SIGMET big enough to contain the whole
+flight and admitted one the route never entered. On top of geometry, the altitude
+band must overlap your slab (surface to cruise + 2,000 ft) and the validity window
+must overlap ETD→ETA. Every test **fails open**: an advisory whose position, band
+or validity can't be parsed is kept and shown.
+
+Only a **SIGMET or CWA that passes all three** moves the verdict, and the reason
+names it (`CZYZ SIGMET A1 SFC-FL180 on your route`). AIRMETs and G-AIRMETs reach
+the verdict through the icing and turbulence rows below instead, which grade
+severity against the altitudes actually flown. Any SIGMET anywhere used to force
+MITIGATE — survivable with one product, meaningless with seven.
+
+Advisories that downloaded but don't apply are **shown, not discarded**, under a
+line reading *"14 more fetched: 9 outside your altitudes, 3 not on your route, 2
+expired"* — because "we found fourteen and none reach you" and "we found none" are
+different statements, and only one of them is good news. Everything fetched is
+also drawn on the route map: solid polygons for the ones that apply, dashed and
+faint for the near misses, PIREPs as points, each with its full text on tap.
+
 ### Icing and turbulence
 Nothing can parse a GFA chart, so these two rows used to read *"review the GFA
 icing chart"* with an amber ⚠ - on every flight, in every season, whatever the
@@ -330,11 +368,7 @@ card rather than a wrong one: the multi-model wind blend (the single-model wind
 is still there behind it), and the GFA/radar panels, which have carried their
 own "couldn't be loaded" fallbacks since they were added.
 
-> **Known gaps:** SIGMET/AIRMET/PIREP are scoped by severity and altitude band
-> (see *Icing and turbulence*), but still applied whenever they're active, without
-> scoping to their own validity *times*. They're typically ≤6 h products, so the
-> window is much narrower than a 30 h TAF's, but it's the next thing to fix.
-> The TAF parser also doesn't recognise `INTER`, so such a group's conditions are
+> **Known gaps:** The TAF parser doesn't recognise `INTER`, so such a group's conditions are
 > absorbed into the preceding one rather than windowed on their own; `CAVOK`, `NSW`
 > and metric visibility are likewise unparsed.
 
@@ -369,7 +403,16 @@ The card (`data/limits.yaml`, fully editable) drives everything:
 pip install -r requirements-dev.txt
 uvicorn app.main:app --reload          # open http://127.0.0.1:8000
 pytest -q                              # offline logic tests (live tests auto-skip)
+python scripts/probe_area_products.py  # what the advisory upstreams actually return
 ```
+
+`probe_area_products.py` is the answer to *"is the SIGMET feed working?"*. NAV
+CANADA's API is undocumented, so the script asks it for each area product in every
+plausible request shape side by side and prints which ones answer and what they
+return, then does the same for each aviationweather.gov product in JSON and
+GeoJSON. Run it anywhere the network is open; `--save` writes the payloads into
+`tests/fixtures/area/` so the offline suite parses real responses rather than
+invented ones.
 
 ## Airport data
 
@@ -383,8 +426,8 @@ python scripts/refresh_airport_data.py
 ```
 
 > If hosting inside a sandbox with an egress allowlist, allow
-> `plan.navcanada.ca`, `api.open-meteo.com`, and (for the airport refresh)
-> `davidmegginson.github.io`.
+> `plan.navcanada.ca`, `aviationweather.gov`, `api.open-meteo.com`, and (for the
+> airport refresh) `davidmegginson.github.io`.
 
 ## Deploy on your own domain (installable PWA)
 
@@ -404,13 +447,18 @@ app/
   config.py          settings + limits loader
   models.py          pydantic models
   orchestrator.py    assembles live data into route assessment / discovery
-  sources/           cfps, openmeteo (HRDPS), airports, cache,
+  sources/           cfps, awc (aviationweather.gov), openmeteo (HRDPS),
+                     geomet (radar), airports, cache,
                      _http (one GET, retried once)
-  services/          geo, runway, winds_aloft, weather (+TAF segments),
+  services/          geo, geometry (does the route cross this area?),
+                     area_products (reading a bulletin), area_hazards (one shape
+                     for every advisory, and which ones reach this flight),
+                     runway, winds_aloft, weather (+TAF segments),
                      timeline, evaluator, density (density altitude),
                      fetch_health (what failed to download)
 data/                limits.yaml + bundled airport/runway seed
-scripts/             refresh_airport_data.py (+ ensure_airport_data bootstrap)
+scripts/             refresh_airport_data.py (+ ensure_airport_data bootstrap),
+                     probe_area_products.py (what the advisory feeds return)
 web/                 single-page dashboard (Route + Discovery tabs)
 tests/               offline logic tests + auto-skipping live smoke tests
 ```

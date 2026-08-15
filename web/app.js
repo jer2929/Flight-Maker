@@ -807,6 +807,75 @@ const radarFallback = () => `<div class="panel radar-panel"><h3>Radar</h3>
   <p class="hint">Radar map couldn't load.
   <a href="https://weather.gc.ca/radar/index_e.html" target="_blank" rel="noopener">Open Environment Canada radar ↗</a></p></div>`;
 
+// ---------- Area hazards drawn on the same map ----------
+// The polygons a SIGMET or AIRMET is actually drawn as. A bulletin's "WI N4200
+// W08100 - N4400 W08100 - ..." is a shape, and reading it as a shape is the
+// difference between "there is weather somewhere in Ontario" and "it is forty
+// miles north of your track".
+const HAZARD_COLORS = {
+  conv: "#e0483a", ts: "#e0483a", ice: "#4aa3df", turb: "#e8a33d",
+  ifr: "#8f6fd6", mtn_obs: "#7d8c99", llws: "#d46fa8", sfc_wind: "#d46fa8",
+  fzlvl: "#5bc0be", pcpn: "#6b8fb5", ash: "#9b7653", unknown: "#8a8a8a",
+};
+const hazardColor = (p) => HAZARD_COLORS[p.hazard] || HAZARD_COLORS.unknown;
+
+// Relevant areas are drawn solid; the ones that were set aside stay on the map,
+// dashed and faint. Seeing a line of convective SIGMETs sitting just north of
+// track is worth more than being told there is nothing on it.
+function hazardStyle(f) {
+  const p = f.properties || {};
+  const c = hazardColor(p);
+  return p.relevant
+    ? { color: c, weight: 2, opacity: 0.9, fillColor: c, fillOpacity: 0.18 }
+    : { color: c, weight: 1, opacity: 0.45, fillColor: c, fillOpacity: 0.06, dashArray: "4 4" };
+}
+
+function hazardPopup(p) {
+  const bits = [];
+  if (p.band_label && p.band_label !== "no altitude given") bits.push(p.band_label);
+  if (p.distance_nm === 0) bits.push("on your route");
+  else if (p.distance_nm > 0) bits.push(`${Math.round(p.distance_nm)} NM off track`);
+  if (p.valid_to) {
+    const t = new Date(p.valid_to);
+    if (!isNaN(t)) bits.push(`until ${String(t.getUTCHours()).padStart(2, "0")}${String(t.getUTCMinutes()).padStart(2, "0")}Z`);
+  }
+  if (!p.relevant && p.drop_label) bits.push(p.drop_label);
+  const head = [p.kind, p.hazard_label, p.severity].filter(Boolean).join(" · ");
+  return `<div class="hz-pop"><strong>${escapeHtml(head)}</strong>
+    <div class="hint">${escapeHtml(bits.join(" · "))}</div>
+    <pre>${escapeHtml((p.text || "").trim())}</pre>
+    ${p.source_url ? `<a href="${p.source_url}" target="_blank" rel="noopener">${escapeHtml(p.source || "source")} ↗</a>` : ""}</div>`;
+}
+
+function hazardLayers(gj) {
+  const make = (filter) => L.geoJSON(gj, {
+    filter,
+    style: hazardStyle,
+    pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+      radius: 6, ...hazardStyle(f), fillOpacity: f.properties.relevant ? 0.7 : 0.25,
+    }),
+    onEachFeature: (f, layer) => layer.bindPopup(hazardPopup(f.properties || {}),
+                                                 { maxWidth: 360 }),
+  });
+  return {
+    areas: make((f) => f.geometry && f.geometry.type !== "Point"),
+    pireps: make((f) => f.geometry && f.geometry.type === "Point"),
+  };
+}
+
+function hazardLegend(gj) {
+  const seen = [];
+  (gj.features || []).forEach((f) => {
+    const p = f.properties || {};
+    const label = p.hazard_label || p.hazard;
+    if (label && !seen.some((s) => s.label === label)) seen.push({ label, color: hazardColor(p) });
+  });
+  if (!seen.length) return "";
+  return `<div class="hz-legend">${seen.map((s) =>
+    `<span class="hz-key"><i style="background:${s.color}"></i>${escapeHtml(s.label)}</span>`).join("")}
+    <span class="hz-key hz-key-dash"><i></i>not on your route</span></div>`;
+}
+
 function parseISODurationMin(s) {
   const m = /^P(?:T)?(?:(\d+)H)?(?:(\d+)M)?/.exec(s || "");
   return m ? (+(m[1] || 0)) * 60 + (+(m[2] || 0)) : 0;
@@ -843,15 +912,18 @@ async function loadRadar(r) {
   if (typeof L === "undefined") { host.innerHTML = radarFallback(); return; }
   const dep = r.departure.airport, dest = r.destination.airport;
   const midLat = (dep.lat + dest.lat) / 2, midLon = (dep.lon + dest.lon) / 2;
+  const hazardsGeo = r.hazards_geojson && (r.hazards_geojson.features || []).length
+    ? r.hazards_geojson : null;
   host.innerHTML = `<div class="panel radar-panel">
     <div class="radar-head">
-      <h3>Radar <span class="hint">Environment Canada · last 3 h</span></h3>
+      <h3>Radar${hazardsGeo ? " &amp; hazards" : ""} <span class="hint">Environment Canada · last 3 h</span></h3>
       <div class="radar-types">
         ${Object.entries(RADAR_LABELS).map(([k, v]) =>
           `<button class="radar-type ${k === RADAR.layer ? "active" : ""}" data-layer="${k}">${v}</button>`).join("")}
       </div>
     </div>
     <div id="radar-map" class="radar-map"></div>
+    ${hazardsGeo ? hazardLegend(hazardsGeo) : ""}
     <div class="radar-controls">
       <button id="radar-play" class="radar-play" title="Play / pause">▶</button>
       <input type="range" id="radar-slider" min="0" max="0" value="0" />
@@ -867,6 +939,29 @@ async function loadRadar(r) {
   RADAR.wms = L.tileLayer.wms(GEOMET_WMS, {
     layers: RADAR.layer, format: "image/png", transparent: true, version: "1.3.0", opacity: 0.7,
   }).addTo(RADAR.map);
+  // The course line. A hazard polygon means nothing without the track it does
+  // or does not cross, and the map used to show only the two end markers.
+  if (dest.ident !== dep.ident) {
+    L.polyline([[dep.lat, dep.lon], [dest.lat, dest.lon]],
+      { color: "#e8eef7", weight: 2, opacity: 0.8, dashArray: "6 4" }).addTo(RADAR.map);
+  }
+  if (hazardsGeo) {
+    const layers = hazardLayers(hazardsGeo);
+    layers.areas.addTo(RADAR.map);
+    layers.pireps.addTo(RADAR.map);
+    L.control.layers(null, {
+      "SIGMET / AIRMET areas": layers.areas,
+      "PIREPs": layers.pireps,
+    }, { collapsed: false, position: "topright" }).addTo(RADAR.map);
+    const bounds = layers.areas.getBounds();
+    if (bounds.isValid()) {
+      // Show the route first; widen only far enough to keep the relevant areas
+      // in frame, never so far that the route becomes a dot.
+      RADAR.map.fitBounds(
+        L.latLngBounds([[dep.lat, dep.lon], [dest.lat, dest.lon]]).pad(0.4),
+        { maxZoom: 8 });
+    }
+  }
   setTimeout(() => RADAR.map && RADAR.map.invalidateSize(), 150);
 
   $$("#route-radar .radar-type").forEach((b) => b.addEventListener("click", () => {
@@ -994,6 +1089,7 @@ function renderRoute(r) {
       <span>📏 ${r.distance_nm} nm · course ${dirM(r.bearing_mag, r.bearing_true)}</span>
       <span>⏱ ${fmtHrMin(r.flight_time_hr)}</span>
       ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud">⬆ Best alt ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
+      ${daylightSpan(r.daylight_margin)}
       ${r.enroute_ceiling_ft != null ? `<span>☁ Enroute ceiling ${fmtCeil(r.enroute_ceiling_ft)}</span>` : ""}
       ${r.cloud_at_cruise ? `<span class="warn">⚠️ Cloud below planned cruise altitude</span>` : ""}
       ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${windDir(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
@@ -1006,17 +1102,26 @@ function renderRoute(r) {
   $("#route-enroute").innerHTML = enrouteBlock(r);
   loadRadar(r);
 
+  // The nudge leads, because "when instead" is the question a non-GO raises and
+  // the window list answers a broader one. It renders above whichever of the
+  // three window states applies - including the failed-fetch state, where the
+  // backend returns no nudge at all and this contributes nothing.
+  let windowsHtml;
   if (r.best_windows.length) {
-    $("#route-windows").innerHTML = `<div class="timeline-wrap"><h3>Best windows (next ${CONFIG.timeline_hours} h) - wind, ceiling &amp; visibility</h3>` +
-      r.best_windows.map((w) => `<div class="window-card">🟢 <strong>${fmtRange(w.start, w.end)}</strong> - ${w.summary}</div>`).join("") + `</div>`;
+    windowsHtml = `<h3>Best windows (next ${CONFIG.timeline_hours} h) - wind, ceiling &amp; visibility</h3>` +
+      r.best_windows.map((w) => `<div class="window-card">🟢 <strong>${fmtRange(w.start, w.end)}</strong> - ${w.summary}</div>`).join("");
   } else if ((r.timeline || []).length) {
-    $("#route-windows").innerHTML = `<div class="timeline-wrap"><div class="empty">No clearly favourable window in the next ${CONFIG.timeline_hours} h.</div></div>`;
+    // Windows are filtered to those long enough to hold this flight, so say so:
+    // otherwise a pilot who saw a window on a shorter leg wonders where it went.
+    windowsHtml = `<div class="empty">No clearly favourable window long enough for this flight in the next ${CONFIG.timeline_hours} h.</div>`;
   } else {
     // No timeline means no hourly forecast came back - "no favourable window" is
     // a statement about the weather, and there is no weather here to make it
     // about. This is the sentence that used to be wrong.
-    $("#route-windows").innerHTML = `<div class="timeline-wrap"><div class="empty fetch-empty">⚠ Best windows unavailable - the hourly forecast did not download, so none could be searched for. This is <strong>not</strong> "no good window": pull the data again.</div></div>`;
+    windowsHtml = `<div class="empty fetch-empty">⚠ Best windows unavailable - the hourly forecast did not download, so none could be searched for. This is <strong>not</strong> "no good window": pull the data again.</div>`;
   }
+  $("#route-windows").innerHTML =
+    `<div class="timeline-wrap">${etdNudgeCard(r.etd_suggestion)}${windowsHtml}</div>`;
   renderTimeline(r.timeline, r.best_windows);
 }
 
@@ -1371,12 +1476,20 @@ function dataHealthBanner(health, retry) {
   const list = failed.length
     ? `<ul class="reasons">${failed.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>`
     : "";
+  // Which of the seven advisory feeds actually dropped. Kept behind a fold: the
+  // pilot needs to know what is missing, not which coroutine raised - but when
+  // only some sources are down, "which ones" is the difference between a gap
+  // and a blackout.
+  const detail = (health.details || []).length
+    ? `<details class="fetch-detail"><summary>Which sources</summary><ul class="reasons">${
+        health.details.map((d) => `<li>${escapeHtml(d)}</li>`).join("")}</ul></details>`
+    : "";
   return `<div class="fetch-fail" role="alert">
     <div class="fetch-fail-title">⚠ Failed to fetch some data</div>
     <p>These did not download, so anything below was assessed without them - and
        a missing forecast looks the same on the page as a clear sky. Pull the
        data again before you use this.</p>
-    ${list}
+    ${list}${detail}
     <button type="button" class="fetch-retry" onclick="${retry}()">Pull the data again</button>
   </div>`;
 }
@@ -1432,7 +1545,7 @@ function nearbyBlock(n, timeLabel) {
 // text plus a deep link back to the source feed it was fetched from.
 function advisoryItem(a) {
   const full = (a.text || "").trim();
-  // Teaser: the hazard/header before the first colon (from _fmt_sigmet), else
+  // Teaser: the hazard/header before the first colon (from display_text), else
   // the first line - truncated so the summary stays one line.
   const head = full.includes(":") ? full.slice(0, full.indexOf(":")) : full.split("\n")[0];
   let teaser = (head || full).trim();
@@ -1440,12 +1553,49 @@ function advisoryItem(a) {
   const link = a.source_url
     ? `<a class="adv-src" href="${a.source_url}" target="_blank" rel="noopener">source: ${escapeHtml(a.source || "feed")} ↗</a>`
     : "";
-  return `<details class="adv"><summary><span class="adv-k">${escapeHtml(a.kind)}</span> ${escapeHtml(teaser)}</summary><pre class="adv-text">${escapeHtml(full)}</pre>${link}</details>`;
+  return `<details class="adv"><summary><span class="adv-k">${escapeHtml(a.kind)}</span> ${escapeHtml(teaser)}${advisoryChips(a)}</summary><pre class="adv-text">${escapeHtml(full)}</pre>${link}</details>`;
+}
+// The three facts that decide whether a bulletin is yours, shown without making
+// the pilot decode the bulletin: how high, how far off track, and until when.
+function advisoryChips(a) {
+  const chips = [];
+  if (a.band_label && a.band_label !== "no altitude given") chips.push(a.band_label);
+  if (a.distance_nm === 0) chips.push("on route");
+  else if (a.distance_nm > 0) chips.push(`${Math.round(a.distance_nm)} NM off track`);
+  if (a.valid_to) {
+    const t = new Date(a.valid_to);
+    if (!isNaN(t)) chips.push(`until ${String(t.getUTCHours()).padStart(2, "0")}${String(t.getUTCMinutes()).padStart(2, "0")}Z`);
+  }
+  if (a.drop_label) chips.push(a.drop_label);
+  return chips.map((c) => `<span class="adv-chip">${escapeHtml(c)}</span>`).join("");
+}
+// "9 outside your altitudes, 3 not on your route" - the line that keeps the
+// empty state honest. Something was found; it just does not reach this flight,
+// and that is a different sentence from "there is nothing out there".
+const DROP_ORDER = ["altitude", "geometry", "time", "fir"];
+const DROP_WORDS = {
+  altitude: "outside your altitudes", geometry: "not on your route",
+  time: "not valid during your flight", fir: "another region",
+};
+function filteredLine(counts) {
+  const keys = DROP_ORDER.filter((k) => counts[k]);
+  if (!keys.length) return "";
+  const total = Object.values(counts).reduce((n, v) => n + v, 0);
+  return `${total} more fetched: ${keys.map((k) => `${counts[k]} ${DROP_WORDS[k]}`).join(", ")}`;
 }
 function advisoriesBlock(r) {
   const items = [...(r.sigmets || []), ...(r.airmets || []), ...(r.pireps || [])];
-  if (!items.length) return `<div class="panel adv-none">No active SIGMET/AIRMET/PIREP on the route.</div>`;
-  return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(tap an item for the full text - check the altitudes, many apply only to higher levels)</span></summary>${items.map(advisoryItem).join("")}</details>`;
+  const nearby = r.nearby_advisories || [];
+  const line = filteredLine(r.hazards_filtered || {});
+  const aside = nearby.length
+    ? `<details class="adv-aside"><summary>${escapeHtml(line || `${nearby.length} more fetched`)}</summary>${nearby.map(advisoryItem).join("")}</details>`
+    : "";
+  if (!items.length) {
+    // Only ever reached when the fetch actually succeeded - a failed one raises
+    // the data-health banner above this panel instead.
+    return `<div class="panel adv-none">No active SIGMET/AIRMET/PIREP on the route.${aside}</div>`;
+  }
+  return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(tap an item for the full text - check the altitudes, many apply only to higher levels)</span></summary>${items.map(advisoryItem).join("")}${aside}</details>`;
 }
 function metarHistory(a) {
   return metarHistoryList(a.metar_history);
@@ -1511,6 +1661,56 @@ function notamItems(a) {
   }).join("");
 }
 window.toggleNotams = (id) => $("#notams-" + id).classList.toggle("hidden");
+
+// ---------- "When instead?" ----------
+//
+// The best-windows list answers "when is the weather good in the next 48 h".
+// A pilot looking at a MITIGATE has a narrower question: how far am I from a
+// GO, and is the good spell long enough for my leg. The backend answers it
+// against the ETD actually picked (services/timeline.etd_nudge), and only when
+// the hour-by-hour strip agrees with the card about that ETD - so this card
+// speaks for the strip, and says so, rather than promising a verdict the card
+// might not give.
+// A time offset, read aloud: "45 min", "3 h", "1 h 15 min". fmtHrMin is the
+// wrong shape here - it prints a flight time, where "1 h 0 min" is a duration
+// nobody says out loud but every leg has, so it always carries the minutes.
+function fmtDelta(min) {
+  const h = Math.floor(min / 60), m = min % 60;
+  if (!h) return `${m} min`;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+function etdNudgeCard(s) {
+  if (!s) return "";
+  const dir = s.delta_min >= 0 ? "later" : "earlier";
+  const mag = fmtDelta(Math.abs(s.delta_min));
+  const why = s.reason
+    ? `<div class="nudge-why">Stops applying: ${escapeHtml(s.reason)}</div>` : "";
+  return `<div class="window-card etd-nudge ${cls(s.verdict)}">
+    🕑 <strong>Depart ${mag} ${dir} (${zDayTime(s.etd_utc)})</strong> and the
+    hour-by-hour forecast turns ${s.verdict} - ${s.hours_available} h available.
+    ${why}</div>`;
+}
+
+// Daylight left at the destination on arrival. The app already computes civil
+// twilight to choose day or night minimums; this is that instant, stated, plus
+// the departure time that would still land inside it. The latest ETD only
+// appears when the margin is tight enough for it to be a decision.
+function daylightSpan(m) {
+  if (!m) return "";
+  const late = m.margin_min < 0;
+  const state = late
+    ? `lands ${fmtDelta(Math.abs(m.margin_min))} after dark`
+    : `${fmtDelta(m.margin_min)} of daylight left`;
+  // Bare Zulu, like the ETD and ETA it sits beside in this strip. The latest
+  // departure is always within hours of the dusk it is derived from, so the
+  // weekday the nudge card carries would be noise here.
+  const latest = m.margin_min < 60
+    ? ` · latest ETD ${zHM(m.latest_etd_utc)}` : "";
+  const title = "End of evening civil twilight at the destination (CARs 101.01). "
+    + "The latest ETD keeps the same 30 min arrival allowance the flight window uses.";
+  return `<span class="${m.margin_min < 30 ? "warn" : ""}" title="${title}">🌇 Last light ${zHM(m.dusk_utc)} · ${state}${latest}</span>`;
+}
 
 function renderTimeline(timeline, windows) {
   // An empty grid used to be drawn as no grid at all, silently - the same blank
@@ -2344,17 +2544,17 @@ function wxPopHas(a, kind) {
   const w = a.weather || {};
   return kind === "TAF" ? !!w.raw_taf : !!(a.model_hours || []).length;
 }
-// A timeline range, in Zulu. The timeline's own times are UTC without a "Z"
-// suffix (Open-Meteo is queried with timezone=UTC), so they are parsed as UTC
-// explicitly - `new Date("2026-08-13T04:00")` would read them as browser-local
-// and print a range hours away from the flight.
+// One timeline instant as "Mon 0430Z". The timeline's own times are UTC without
+// a "Z" suffix (Open-Meteo is queried with timezone=UTC), so they go through
+// utcDate explicitly - `new Date("2026-08-13T04:00")` would read them as
+// browser-local and print a time hours away from the flight.
+function zDayTime(t) {
+  const d = utcDate(t);
+  if (!d) return t;
+  return `${d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })} ${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z`;
+}
 function fmtRange(a, b) {
-  const f = (t) => {
-    const d = utcDate(t);
-    if (!d) return t;
-    return `${d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })} ${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z`;
-  };
-  return `${f(a)} → ${f(b)}`;
+  return `${zDayTime(a)} → ${zDayTime(b)}`;
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

@@ -138,7 +138,11 @@ the edge; only `/api/*` must bypass.
 
 If you ever run this behind an egress allowlist, Minima needs outbound HTTPS to:
 
-- `plan.navcanada.ca` — METAR/TAF/NOTAM/SIGMET/GFA
+- `plan.navcanada.ca` — METAR/TAF/NOTAM/SIGMET/AIRMET/PIREP/GFA
+- `aviationweather.gov` — METAR history, and the second advisory feed
+  (international + US SIGMET/AIRMET, G-AIRMET, CWA, PIREP). Blocking it does not
+  break the page, but it removes the cross-border coverage and the polygons the
+  map is drawn from.
 - `api.open-meteo.com` — HRDPS hourly model
 - `geo.weather.gc.ca` / GeoMet — radar tiles & times
 - `davidmegginson.github.io` — OurAirports dataset (first-run airport bootstrap)

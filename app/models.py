@@ -39,6 +39,9 @@ class DataHealth(BaseModel):
 
     ok: bool = True
     failed: list[str] = []
+    # Which individual upstreams were behind a partial failure, for the banner's
+    # detail line. ``failed`` stays the short pilot-facing list.
+    details: list[str] = []
 
 
 class Airport(BaseModel):
@@ -407,13 +410,67 @@ class BestWindow(BaseModel):
     summary: str
 
 
+class EtdSuggestion(BaseModel):
+    """A better departure time for the flight the pilot actually entered.
+
+    ``best_windows`` answers "when is the weather good in the next 48 h", which
+    is a different question from "how far am I from a GO". A pilot looking at a
+    MITIGATE wants the delta against *their* ETD, and a window at least as long
+    as *their* leg - a one-hour hole is not a window for a two-hour flight.
+
+    ``from_verdict`` is the timeline's verdict at the picked ETD, not the route
+    card's. The two can differ (a SIGMET moves the card and not the strip), and
+    the suggestion is only ever offered when they agree - see
+    ``timeline.etd_nudge``.
+    """
+
+    etd_utc: str            # ISO UTC, matching HourCondition.time
+    delta_min: int          # signed minutes from the picked ETD; + = later
+    verdict: Verdict        # what the hour-by-hour forecast says it becomes
+    from_verdict: Verdict   # what it says about the ETD the pilot picked
+    hours_available: int    # length of the usable run starting there
+    # What stops applying at the suggested time, in the strip's own words.
+    reason: Optional[str] = None
+
+
+class DaylightMargin(BaseModel):
+    """How much daylight is left at the destination when you get there.
+
+    Every VFR pilot does this subtraction by hand. The app already computes
+    civil twilight (``services.solar``) to pick day or night minimums; this is
+    the same instant, stated.
+
+    ``margin_min`` is signed: negative means the arrival is after last light.
+    ``latest_etd_utc`` is the departure time that would put the arrival exactly
+    at last light, so it already carries the flight time and the same arrival
+    pad every other window in the app uses (``orchestrator.WINDOW_PAD_MIN``).
+    """
+
+    dusk_utc: str               # end of evening civil twilight at the destination
+    margin_min: int             # signed minutes from ETA to dusk
+    latest_etd_utc: str         # last ETD that still lands in daylight
+
+
 class Advisory(BaseModel):
     """An area advisory (SIGMET/AIRMET/PIREP) with its full text and a deep link
     back to the source it was fetched from, so the pilot can read and verify it."""
-    kind: str          # SIGMET / AIRMET / PIREP
+    kind: str          # SIGMET / AIRMET / G-AIRMET / CWA / PIREP
     text: str          # full raw product text
     source: str        # human-readable source name
     source_url: str    # deep link to where the product came from
+    # What the product actually claims, parsed out so the card can show why it
+    # does (or doesn't) apply without the pilot decoding the bulletin first.
+    # All optional: a product we couldn't parse still renders as it always did.
+    hazard: Optional[str] = None          # "icing", "turbulence", "convective", ...
+    severity: Optional[str] = None        # light / moderate / severe
+    band_label: Optional[str] = None      # "SFC-FL100"
+    valid_from: Optional[str] = None      # ISO8601 Z
+    valid_to: Optional[str] = None
+    distance_nm: Optional[float] = None   # 0 = the route goes through it
+    product_id: Optional[str] = None      # "CZYZ SIGMET A1"
+    # Set only on advisories that were fetched but set aside, saying why:
+    # "outside your altitudes", "not on your route", ...
+    drop_label: Optional[str] = None
 
 
 class EnrouteAirport(BaseModel):
@@ -460,8 +517,20 @@ class RouteAssessment(BaseModel):
     sigmets: list[Advisory] = []
     airmets: list[Advisory] = []
     pireps: list[Advisory] = []
+    # Advisories that downloaded fine but do not apply to this flight, with the
+    # reason. Shown, not discarded: "we found fourteen and none reach you" and
+    # "we found none" are different statements, and only one of them is good news.
+    nearby_advisories: list[Advisory] = []
+    hazards_filtered: dict[str, int] = {}     # drop reason -> count
+    # Every advisory fetched, relevant or not, as GeoJSON for the map.
+    hazards_geojson: Optional[dict] = None
     timeline: list[HourCondition] = []
     best_windows: list[BestWindow] = []
+    # A better ETD for this flight, when the strip offers one. None means either
+    # "no better time was found" or "there was no forecast to search" - the page
+    # tells those apart from ``timeline`` being empty, never from this field.
+    etd_suggestion: Optional[EtdSuggestion] = None
+    daylight_margin: Optional[DaylightMargin] = None
     window: Optional[FlightWindow] = None
     # Situational awareness only - never gates the verdict (see
     # orchestrator._corridor_airports).

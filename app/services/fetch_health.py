@@ -33,7 +33,14 @@ HRDPS = "HRDPS hourly forecast"
 METAR = "NAV CANADA METAR"
 TAF = "NAV CANADA TAF"
 NOTAM = "NAV CANADA NOTAM"
-AREA = "SIGMET / AIRMET / PIREP"
+# Area advisories come from two independent upstreams across seven products, so
+# one label cannot say what was lost. Two can, and two is the most a pilot can
+# act on: either you have no advisory coverage at all, or you have it with gaps.
+# Naming all seven products would be noise, and a banner that cries wolf about a
+# G-AIRMET call while both SIGMET feeds are healthy teaches people to ignore it -
+# which is the same failure as saying nothing.
+AREA = "SIGMET / AIRMET / PIREP"                    # every source failed
+AREA_PARTIAL = "Some SIGMET/AIRMET/PIREP sources"   # at least one answered
 HISTORY = "METAR observation history"
 
 # The products whose absence changes what the decision card can say. The others
@@ -43,6 +50,8 @@ CRITICAL = (HRDPS, METAR, TAF)
 
 _failures: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
     "fetch_failures", default=None)
+_details: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "fetch_failure_details", default=None)
 
 
 @contextmanager
@@ -55,14 +64,18 @@ def collect() -> Iterator[DataHealth]:
     """
     health = DataHealth()
     token = _failures.set([])
+    dtoken = _details.set([])
     try:
         yield health
     finally:
         failed = _failures.get() or []
+        details = _details.get() or []
         _failures.reset(token)
+        _details.reset(dtoken)
         # Deduplicate while keeping the order they were hit in: one Open-Meteo
         # outage trips a dozen call sites and is still one line for the pilot.
         health.failed = list(dict.fromkeys(failed))
+        health.details = list(dict.fromkeys(details))
         health.ok = not health.failed
 
 
@@ -73,6 +86,18 @@ def record(label: str | None) -> None:
     failures = _failures.get()
     if failures is not None:
         failures.append(label)
+
+
+def detail(name: str | None) -> None:
+    """Note *which* upstream was behind a failure, for the banner's detail line.
+
+    Separate from :func:`record` because the two answer different questions: the
+    label says what the pilot lost, the detail says what to blame for it."""
+    if not name:
+        return
+    details = _details.get()
+    if details is not None:
+        details.append(name)
 
 
 def failures() -> list[str]:

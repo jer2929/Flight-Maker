@@ -62,6 +62,27 @@ def forecast_fixture():
     return {"fc": fc, "one": one, "many": many}
 
 
+#: Every area-advisory source, in one place. Adding a product to the fetch means
+#: adding it here too - a source left live in a test would reach the real network
+#: and fail, which is exactly the signal these tests are meant to isolate.
+HAZARD_SOURCES = (("cfps.sigmets", cfps, "sigmets"), ("cfps.airmets", cfps, "airmets"),
+                  ("cfps.pireps", cfps, "pireps"), ("awc.isigmets", awc, "isigmets"),
+                  ("awc.airsigmets", awc, "airsigmets"), ("awc.cwas", awc, "cwas"),
+                  ("awc.pireps", awc, "pireps"), ("awc.gairmets", awc, "gairmets"))
+
+
+def quiet_hazards(monkeypatch, *, failing=()):
+    """Stub every area source to answer emptily, except the named ones, which raise.
+
+    ``failing`` takes qualified names ("cfps.sigmets"), because both upstreams
+    have a product called ``pireps`` and a test that means one must not silently
+    break the other.
+    """
+    for label, module, name in HAZARD_SOURCES:
+        monkeypatch.setattr(module, name,
+                            _boom if label in failing else _empty_l)
+
+
 @pytest.fixture
 def quiet_upstreams(monkeypatch):
     """Every upstream answers, with nothing in it. No failure to report."""
@@ -73,7 +94,7 @@ def quiet_upstreams(monkeypatch):
     monkeypatch.setattr(cfps, "airmets", _empty_l)
     monkeypatch.setattr(cfps, "pireps", _empty_l)
     monkeypatch.setattr(awc, "metar_history", _empty_d)
-    monkeypatch.setattr(awc, "isigmets", _empty_l)
+    quiet_hazards(monkeypatch)
     monkeypatch.setattr(openmeteo, "ensemble_wind_now", _empty_d)
     monkeypatch.setattr(openmeteo, "ensemble_wind_many", _empty_l)
 
@@ -274,6 +295,68 @@ def test_cfps_products_are_named_individually(monkeypatch, quiet_upstreams, fore
 
     assert health.failed == [fetch_health.TAF], \
         "only the TAF failed - naming anything else sends the pilot after the wrong thing"
+
+
+# ---------------------------------------------------------------------------
+# Area advisories
+#
+# The gap that let the bug ship: these sources used to catch their own
+# exceptions and return [], so ``_safe`` never saw a failure and the page drew
+# "No active SIGMET/AIRMET/PIREP on the route." over a fetch that never landed.
+# Nothing tested that, because every fixture stubbed them to answer emptily.
+# ---------------------------------------------------------------------------
+def test_one_dead_area_source_is_reported_as_partial(monkeypatch, quiet_upstreams,
+                                                     forecast_fixture):
+    monkeypatch.setattr(openmeteo, "forecast", forecast_fixture["one"])
+    monkeypatch.setattr(openmeteo, "forecast_many", forecast_fixture["many"])
+    quiet_hazards(monkeypatch, failing=("cfps.airmets",))
+
+    with fetch_health.collect() as health:
+        r = asyncio.run(orchestrator.assess_route("CYFD", "CYKF", "day", []))
+
+    assert fetch_health.AREA_PARTIAL in health.failed
+    assert fetch_health.AREA not in health.failed, \
+        "the SIGMET feeds answered - saying all advisories are missing overstates it"
+    assert "CFPS AIRMET" in health.details
+    assert r.airmets == []
+
+
+def test_every_area_source_down_is_reported_in_full(monkeypatch, quiet_upstreams,
+                                                    forecast_fixture):
+    monkeypatch.setattr(openmeteo, "forecast", forecast_fixture["one"])
+    monkeypatch.setattr(openmeteo, "forecast_many", forecast_fixture["many"])
+    quiet_hazards(monkeypatch, failing=tuple(lbl for lbl, _, _ in HAZARD_SOURCES))
+
+    with fetch_health.collect() as health:
+        r = asyncio.run(orchestrator.assess_route("CYFD", "CYKF", "day", []))
+
+    assert fetch_health.AREA in health.failed
+    assert fetch_health.AREA_PARTIAL not in health.failed
+    # The card renders empty, but never without the banner saying why.
+    assert r.sigmets == [] and r.airmets == [] and r.pireps == []
+
+
+def test_area_sources_do_not_swallow_their_own_failures(monkeypatch):
+    """The regression test proper: the clients must raise, not return []."""
+    async def boom(*a, **k):
+        raise RuntimeError("upstream down")
+
+    monkeypatch.setattr(_http, "get_json", boom)
+    for coro in (cfps.airmets(["CYYZ"]), cfps.pireps(["CYYZ"]), cfps.sigmets(["CYYZ"]),
+                 awc.isigmets(), awc.gairmets(0), awc.cwas(), awc.airsigmets()):
+        with pytest.raises(RuntimeError):
+            asyncio.run(coro)
+
+
+def test_cfps_reraises_when_every_chunk_failed(monkeypatch):
+    """Chunk fault-isolation is for one chunk failing, not all of them."""
+    async def boom(*a, **k):
+        raise RuntimeError("upstream down")
+
+    monkeypatch.setattr(_http, "get_json", boom)
+    many = [f"CY{i:02d}" for i in range(25)]     # three chunks
+    with pytest.raises(RuntimeError):
+        asyncio.run(cfps._fetch("metar", many))
 
 
 # ---------------------------------------------------------------------------

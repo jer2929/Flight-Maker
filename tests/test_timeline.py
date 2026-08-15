@@ -3,7 +3,7 @@ HRDPS-shaped forecasts, no TAF)."""
 from datetime import datetime, timedelta, timezone
 
 from app.models import Runway, Verdict
-from app.services.timeline import best_windows, build_timeline
+from app.services.timeline import best_windows, build_timeline, etd_nudge
 
 RWY = [Runway(airport_ident="T", le_ident="05", le_heading_true=50, he_ident="23", he_heading_true=230)]
 
@@ -265,3 +265,114 @@ def test_the_strip_and_the_card_label_a_prob_group_identically():
     labelled = [h for h in hours if h.prob]
     assert labelled, "expected the PROB group to reach the strip"
     assert all(period_label(prob) in h.prob for h in labelled)
+
+
+# ---- Windows long enough for the flight ----------------------------------
+
+def test_a_window_shorter_than_the_flight_is_not_offered():
+    """A one-hour hole in the weather is not a window for a two-hour leg. The
+    window list used to offer it anyway, because it never knew the flight time."""
+    # calm, blow, calm-calm-calm: a 1 h window then a 3 h one.
+    winds = [(50, 5), (50, 30), (50, 5), (50, 5), (50, 5)]
+    fc = _fc(winds, [1] * 5)
+    tldata = build_timeline(fc, fc, [], [], RWY, RWY, hours=5)
+
+    assert [w.hours for w in best_windows(tldata, daylight_only=True)] == [1, 3]
+    assert [w.hours for w in best_windows(tldata, daylight_only=True, min_hours=3)] == [3]
+
+
+def test_the_default_min_hours_keeps_every_window():
+    """The parameter is opt-in: a caller that doesn't know the flight time gets
+    exactly what it got before."""
+    winds = [(50, 5), (50, 30), (50, 5), (50, 5)]
+    fc = _fc(winds, [1] * 4)
+    tldata = build_timeline(fc, fc, [], [], RWY, RWY, hours=4)
+    assert best_windows(tldata, daylight_only=True) == \
+        best_windows(tldata, daylight_only=True, min_hours=1)
+
+
+# ---- The ETD nudge -------------------------------------------------------
+
+def _nudge_tl(winds, day=None):
+    n = len(winds)
+    fc = _fc(winds, day or [1] * n)
+    return build_timeline(fc, fc, [], [], RWY, RWY, hours=n)
+
+
+def _etd_of(hour):
+    return datetime.strptime(hour.time, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
+
+
+def test_the_nudge_finds_the_nearest_better_hour_and_names_the_delta():
+    # Two hours of 30 kt, then calm. A 1 h flight leaving at hour 0.
+    tldata = _nudge_tl([(50, 30), (50, 30), (50, 5), (50, 5), (50, 5)])
+    etd = _etd_of(tldata[0])
+    s = etd_nudge(tldata, etd, 1.0, Verdict.NOGO, daylight_only=True, now=etd)
+    assert s is not None
+    assert s.etd_utc == tldata[2].time
+    assert s.delta_min == 120
+    assert s.verdict == Verdict.GO
+    assert s.from_verdict == Verdict.NOGO
+    assert s.hours_available == 3
+    assert "20 kt" in (s.reason or ""), s.reason   # the wind limit stops applying
+
+
+def test_the_nudge_will_not_offer_a_run_shorter_than_the_flight():
+    """A single calm hour between two blows is not a departure for a 2 h leg."""
+    tldata = _nudge_tl([(50, 30), (50, 5), (50, 30), (50, 5), (50, 5), (50, 5)])
+    etd = _etd_of(tldata[0])
+    near = etd_nudge(tldata, etd, 1.0, Verdict.NOGO, daylight_only=True, now=etd)
+    assert near.etd_utc == tldata[1].time          # 1 h flight takes the 1 h hole
+    far = etd_nudge(tldata, etd, 2.0, Verdict.NOGO, daylight_only=True, now=etd)
+    assert far.etd_utc == tldata[3].time           # 2 h flight waits for the 3 h run
+
+
+def test_the_nudge_never_offers_a_time_in_the_past():
+    tldata = _nudge_tl([(50, 30), (50, 5), (50, 30), (50, 5), (50, 5), (50, 5)])
+    etd = _etd_of(tldata[0])
+    late = _etd_of(tldata[2])                      # the 1 h hole is behind us now
+    s = etd_nudge(tldata, etd, 1.0, Verdict.NOGO, daylight_only=True, now=late)
+    assert s.etd_utc == tldata[3].time
+
+
+def test_an_empty_timeline_yields_no_suggestion_rather_than_no_better_time():
+    """No forecast means nothing was searched. Saying "no better time" would be
+    a finding about weather nobody downloaded - the same trap best_windows fell
+    into."""
+    assert etd_nudge([], datetime.now(timezone.utc), 1.0, Verdict.NOGO,
+                     daylight_only=True) is None
+
+
+def test_no_nudge_when_the_card_is_worse_than_its_own_etd_hour():
+    """The route verdict is the worse of things the strip cannot see - a SIGMET,
+    the endpoint cards. When the card is already worse than the hour it sits on,
+    moving the clock is not known to fix it, so the nudge stays quiet rather than
+    promising a GO the card will not give."""
+    tldata = _nudge_tl([(50, 30), (50, 5), (50, 5), (50, 5)])
+    etd = _etd_of(tldata[0])
+    assert tldata[0].verdict == Verdict.NOGO
+    assert etd_nudge(tldata, etd, 1.0, Verdict.MITIGATE, daylight_only=True, now=etd) is None
+
+
+def test_no_nudge_when_the_etd_hour_is_already_a_go():
+    tldata = _nudge_tl([(50, 5)] * 4)
+    etd = _etd_of(tldata[0])
+    assert etd_nudge(tldata, etd, 1.0, Verdict.GO, daylight_only=True, now=etd) is None
+
+
+def test_the_nudge_honours_daylight_only_like_the_window_list_does():
+    # Calm throughout, but the only improvement on a blowing first hour is dark.
+    tldata = _nudge_tl([(50, 30), (50, 5), (50, 5)], day=[1, 0, 0])
+    etd = _etd_of(tldata[0])
+    assert etd_nudge(tldata, etd, 1.0, Verdict.NOGO, daylight_only=True, now=etd) is None
+    assert etd_nudge(tldata, etd, 1.0, Verdict.NOGO, daylight_only=False, now=etd) is not None
+
+
+def test_the_nudge_can_point_backwards_to_an_earlier_departure():
+    """Nearest-first means both directions: a flight that could leave an hour
+    sooner should be told so."""
+    tldata = _nudge_tl([(50, 5), (50, 5), (50, 30), (50, 30)])
+    etd = _etd_of(tldata[2])
+    s = etd_nudge(tldata, etd, 1.0, Verdict.NOGO, daylight_only=True, now=_etd_of(tldata[0]))
+    assert s.etd_utc == tldata[1].time
+    assert s.delta_min == -60

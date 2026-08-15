@@ -12,10 +12,10 @@ from datetime import datetime, timedelta, timezone
 
 from app.config import get_cruise_kt, get_limits, get_settings
 from app.models import (
-    Advisory,
     AirportAssessment,
     AltitudeRecommendation,
     Airport,
+    DaylightMargin,
     LimitCheck,
     NearbyStation,
     Notam,
@@ -32,7 +32,9 @@ from app.models import (
     WindowForecast,
 )
 from app.services import airmass
-from app.services import cfs_links, hazards as hz
+from app.services import area_hazards as ah
+from app.services import area_products
+from app.services import cfs_links, geometry, hazards as hz
 from app.services import density
 from app.services import fetch_health
 from app.services import magvar
@@ -637,6 +639,23 @@ def _window_label(etd: datetime, eta: datetime) -> str:
     return f"{_zhm(etd)}-{_zhm(eta)}"
 
 
+def _daylight_margin(dusk: datetime, eta: datetime, flight_hr: float) -> DaylightMargin:
+    """Daylight left at the destination on arrival, and the latest ETD that
+    still lands in it.
+
+    ``latest_etd`` carries the same ``WINDOW_PAD_MIN`` the flight window uses at
+    its arrival end, so the departure this recommends leaves the identical
+    allowance for holding and an approach that every other span in the app does.
+    Pure arithmetic on a twilight already computed.
+    """
+    return DaylightMargin(
+        dusk_utc=dusk.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        margin_min=round((dusk - eta).total_seconds() / 60),
+        latest_etd_utc=(dusk - timedelta(hours=flight_hr)
+                        - timedelta(minutes=WINDOW_PAD_MIN)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+
+
 def _window_hazards(dep_segs: list[dict], dest_segs: list[dict],
                     etd: datetime, eta: datetime,
                     dep_ident: str = "", dest_ident: str = "",
@@ -777,65 +796,76 @@ def _reporting_candidates(airport: Airport, max_nm: float = 90.0, limit: int = 5
     return out
 
 
-def _coords_near_route(coords, area_pts, max_nm: float = 250.0) -> bool:
-    for (la, lo) in coords:
-        for (rla, rlo) in area_pts:
-            if haversine_nm(rla, rlo, la, lo) <= max_nm:
-                return True
-    return False
+def _station_position(ident: str) -> tuple[float, float] | None:
+    """Where a station is, for PIREPs that report position off one."""
+    a = ap.get_airport(ident.upper())
+    return (a.lat, a.lon) if a else None
 
 
-def _fl(ft) -> str:
-    if ft is None:
-        return "?"
-    if ft <= 100:
-        return "SFC"
-    return f"FL{round(ft / 100):03d}"
+async def _gather_hazards(sites: list[str], path: list[tuple[float, float]],
+                          buffer_nm: float, gairmet_hours: list[int],
+                          pirep_age_hr: int) -> list[ah.AreaHazard]:
+    """Every area advisory both upstreams have, normalised and merged.
+
+    Seven products across two independent services, all fetched at once. They are
+    gathered here rather than through ``_safe`` because the honest label depends
+    on *how many* failed: losing one of two SIGMET feeds is a gap, losing all of
+    them is flying with no advisory coverage, and the banner has to be able to
+    say which. A source that answers with nothing is not a failure - that is the
+    ordinary case, and it is the one the page may finally state truthfully.
+    """
+    bbox = geometry.bbox_of(path, buffer_nm)
+    jobs: list[tuple[str, str, object]] = [
+        ("cfps:sigmet", "CFPS SIGMET", cfps.sigmets(sites)),
+        ("cfps:airmet", "CFPS AIRMET", cfps.airmets(sites)),
+        ("cfps:pirep", "CFPS PIREP", cfps.pireps(sites)),
+        ("isigmet", "AWC international SIGMET", awc.isigmets()),
+        ("airsigmet", "AWC US SIGMET/AIRMET", awc.airsigmets()),
+        ("cwa", "AWC centre weather advisory", awc.cwas()),
+        ("pirep", "AWC PIREP", awc.pireps(bbox, pirep_age_hr)),
+    ]
+    for hour in gairmet_hours:
+        jobs.append(("gairmet", f"AWC G-AIRMET +{hour}h", awc.gairmets(hour)))
+
+    results = await asyncio.gather(*(j[2] for j in jobs), return_exceptions=True)
+
+    now = datetime.now(timezone.utc)
+    out: list[ah.AreaHazard] = []
+    failures = 0
+    for (product, label, _), result in zip(jobs, results):
+        if isinstance(result, BaseException):
+            failures += 1
+            fetch_health.detail(label)
+            continue
+        for item in result:
+            try:
+                if product.startswith("cfps:"):
+                    haz = ah.from_cfps_item(product.split(":")[1], item, now=now,
+                                            resolve_station=_station_position)
+                else:
+                    haz = ah.from_awc_feature(product, item)
+            except Exception:
+                haz = None   # one malformed row must not lose the other 200
+            if haz is not None:
+                out.append(haz)
+
+    if failures == len(jobs):
+        fetch_health.record(fetch_health.AREA)
+    elif failures:
+        fetch_health.record(fetch_health.AREA_PARTIAL)
+    return ah.dedupe(out)
 
 
-# Deep links back to the feed each advisory was fetched from, so the pilot can
-# read the source product and verify it.
-_AWC_ISIGMET_URL = "https://aviationweather.gov/api/data/isigmet?format=json"
-_CFPS_PORTAL_URL = "https://plan.navcanada.ca/"
+def _gairmet_hours(etd: datetime, eta: datetime, now: datetime) -> list[int]:
+    """The G-AIRMET forecast packages that bracket the flight.
 
-
-def _advisory(kind: str, text: str, *, from_awc: bool) -> Advisory:
-    if from_awc:
-        return Advisory(kind=kind, text=text, source="aviationweather.gov",
-                        source_url=_AWC_ISIGMET_URL)
-    return Advisory(kind=kind, text=text, source="NAV CANADA CFPS",
-                    source_url=_CFPS_PORTAL_URL)
-
-
-def _fmt_sigmet(s: dict) -> str:
-    """Render a SIGMET with hazard + altitude band so its relevance is obvious."""
-    haz = (s.get("hazard") or "").upper()
-    fir = s.get("fir") or ""
-    band = ""
-    if s.get("base_ft") is not None or s.get("top_ft") is not None:
-        band = f" [{_fl(s.get('base_ft'))}–{_fl(s.get('top_ft'))}]"
-    head = " ".join(p for p in (haz, fir) if p).strip()
-    raw = s.get("raw") or ""
-    return f"{head}{band}: {raw}".strip(": ").strip()
-
-
-async def _gather_area(fn, points: list[tuple[float, float]]) -> list[str]:
-    """Union of an area product (SIGMET/AIRMET/PIREP) queried at several points
-    along the route, so wide advisories near (not exactly on) the line aren't missed.
-
-    The points are queried concurrently and merged in point order, so the result is
-    identical to querying them one at a time - just without paying for each round
-    trip in sequence."""
-    per_point = await asyncio.gather(
-        *(_safe(fn(p), [], fetch_health.AREA) for p in points))
-    seen: set[str] = set()
-    out: list[str] = []
-    for texts in per_point:
-        for t in texts:
-            if t and t not in seen:
-                seen.add(t)
-                out.append(t)
-    return out
+    They come in 0/3/6/9/12-hour steps; a two-hour local flight needs one or two
+    of them, not all five - each is three products' worth of polygons.
+    """
+    start = max(0.0, (etd - now).total_seconds() / 3600.0)
+    end = max(start, (eta - now).total_seconds() / 3600.0)
+    hours = [h for h in (0, 3, 6, 9, 12) if h <= end + 3 and h >= start - 3]
+    return hours[:3] or [0]
 
 
 def _worst_crosswind(dep_a: AirportAssessment, dest_a: AirportAssessment) -> RunwayWind | None:
@@ -1031,9 +1061,11 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     dep_cands = _reporting_candidates(dep)
     dest_cands = _reporting_candidates(dest)
     all_sites = list(dict.fromkeys(sites + [c.ident for c in dep_cands + dest_cands]))
-    area_pts = [(dep.lat, dep.lon),
-                ((dep.lat + dest.lat) / 2, (dep.lon + dest.lon) / 2),
-                (dest.lat, dest.lon)]
+    # The route as an actual line, not three points on it. Area advisories are
+    # tested against this: a polygon the course crosses between the samples is
+    # still a polygon the flight goes through.
+    route_pts = geometry.route_path((dep.lat, dep.lon), (dest.lat, dest.lon),
+                                    settings.hazard_route_sample_nm)
     distance = haversine_nm(dep.lat, dep.lon, dest.lat, dest.lon)
     bearing = initial_bearing_true(dep.lat, dep.lon, dest.lat, dest.lon)
     bearing_mag = round(magvar.to_magnetic(bearing, dep.lat, dep.lon))
@@ -1067,8 +1099,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # enroute forecasts - which on a cold cache (i.e. every wake from scale-to-zero)
     # cost the better part of a minute before the pilot saw a verdict. Outbound
     # concurrency is bounded inside the CFPS client so this stays a polite client.
-    (metars, tafs, awc_hist, cfps_hist, notams, raw_isig,
-     cfps_sigmets, airmets, pireps, dep_fc, dest_fc, corridor_fcs,
+    (metars, tafs, awc_hist, cfps_hist, notams, raw_hazards,
+     dep_fc, dest_fc, corridor_fcs,
      *mid_fcs) = await asyncio.gather(
         _safe(cfps.metars(all_sites), {}, fetch_health.METAR),
         _safe(cfps.tafs(all_sites), {}, fetch_health.TAF),
@@ -1082,12 +1114,13 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         _safe(awc.metar_history(sites, 6), None) if show_obs else _noop({}),
         _safe(cfps.metar_history(sites), None) if show_obs else _noop({}),
         _safe(cfps.notams(sites), {}, fetch_health.NOTAM),
-        # SIGMETs: aviationweather.gov international SIGMETs (covers Canadian FIRs),
-        # filtered to those whose area is near the route, unioned with CFPS below.
-        _safe(awc.isigmets(), [], fetch_health.AREA),
-        _gather_area(cfps.sigmets, area_pts),
-        _gather_area(cfps.airmets, area_pts),
-        _gather_area(cfps.pireps, area_pts),
+        # Area advisories: NAV CANADA (aerodromes + all seven Canadian FIRs) and
+        # aviationweather.gov (international SIGMET, US SIGMET/AIRMET, G-AIRMET,
+        # CWA, PIREP) together. Scoped to the route below, once they are all in
+        # one shape - the fetch is deliberately wide, the filtering is not.
+        _gather_hazards(all_sites, route_pts, settings.hazard_corridor_nm,
+                        _gairmet_hours(etd_utc, eta_prov, now),
+                        settings.pirep_max_age_hr),
         _safe(openmeteo.forecast(dep.lat, dep.lon, days), {}, fetch_health.HRDPS),
         _safe(openmeteo.forecast(dest.lat, dest.lon, days), {}, fetch_health.HRDPS),
         # Corridor fields: one batched request, wind variables only (the cards
@@ -1114,17 +1147,6 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         fetch_health.record(fetch_health.HISTORY)
     awc_hist, cfps_hist = awc_hist or {}, cfps_hist or {}
     metar_hist = {s: (awc_hist.get(s) or cfps_hist.get(s, [])) for s in sites}
-    # The international SIGMET feed is global, so keep only entries whose plotted
-    # area is near the route. A SIGMET with no usable coordinates can't be tied to
-    # the route - dropping it avoids phantom advisories for distant FIRs (CFPS,
-    # queried per route point, is the local backstop). Blank renders (empty
-    # hazard/FIR/raw) are filtered so a contentless advisory never shows.
-    isig_strs = [t for s in raw_isig
-                 if s["coords"] and _coords_near_route(s["coords"], area_pts)
-                 for t in (_fmt_sigmet(s),) if t]
-    awc_sigmet_set = set(isig_strs)   # provenance, for the per-advisory source link
-    sigmets = list(dict.fromkeys(isig_strs + [t for t in cfps_sigmets if t]))
-
     # Parse each TAF once - the endpoint assessment, the hazard window, the
     # period highlight and the timeline all want the same segments.
     dep_segs = wx.parse_taf_segments(tafs.get(dep.ident) or "")
@@ -1303,7 +1325,28 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         vis_limit = _ifr.get("visibility_sm", L["visibility_sm"]).get("night_xc" if mode == "night" else "day_xc", 9)
     else:
         vis_limit = L["visibility_sm"].get("night_xc" if mode == "night" else "day_xc", 9)
-    area_text = " ".join([*sigmets, *airmets, *pireps])
+    # --- Which of the fetched advisories actually reach this flight ------------
+    # Surface up to cruise plus a 2,000 ft allowance: you climb through
+    # everything below the cruise level, and an icing layer just above it is one
+    # deviation away. Everything outside that slab, off the corridor, or expired
+    # is set aside *with its reason* rather than dropped.
+    haz_low_ft = 0.0
+    haz_high_ft = (cruise_alt + 2000.0) if cruise_alt else 10000.0
+    known_firs = {h.fir for h in raw_hazards if h.fir and h.source == ah.CFPS}
+    relevant_haz, aside_haz = ah.filter_relevant(
+        raw_hazards, path=route_pts, buffer_nm=settings.hazard_corridor_nm,
+        low_ft=haz_low_ft, high_ft=haz_high_ft, etd=etd_utc, eta=eta_utc,
+        now=now, known_firs=known_firs or None,
+        pirep_max_age_hr=settings.pirep_max_age_hr)
+    sigmets = [h for h in relevant_haz if h.kind in ("SIGMET", "CWA")]
+    airmets = [h for h in relevant_haz if h.kind in ("AIRMET", "G-AIRMET")]
+    pireps = [h for h in relevant_haz if h.kind == "PIREP"]
+
+    # One product per segment. Joined with a space, ``area_products._segments``
+    # re-split the blob on its own punctuation rules and could pair one SIGMET's
+    # "SEV" with another product's "TURB"; a blank line between them is a
+    # boundary it already respects.
+    area_text = "\n\n".join(h.text for h in relevant_haz)
     # Hazards are scoped to the flight window, from the parsed TAF segments -
     # NOT grepped out of the raw text. A TS group valid tomorrow used to fail
     # this check today and force a NO-GO on a flight that never met it.
@@ -1337,12 +1380,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         gfa_region=hz.gfa_region(dep.lat, dep.lon),
         icing_bands=route_icing,
         turbulence=route_turb,
-        # Surface up to cruise plus a 2,000 ft allowance: you climb through
-        # everything below the cruise level, and an icing layer just above it is
-        # one deviation away. An area product entirely outside that slab - the
-        # FL240-FL400 turbulence SIGMET - has nothing to do with this flight.
-        planned_low_ft=0.0,
-        planned_high_ft=(cruise_alt + 2000.0) if cruise_alt else 10000.0,
+        # The same slab the advisories were filtered against, so the icing and
+        # turbulence rows grade exactly the products the card is showing.
+        planned_low_ft=haz_low_ft,
+        planned_high_ft=haz_high_ft,
     )
 
     # What the TAF forecasts across the flight, at each end. On a future ETD the
@@ -1365,9 +1406,26 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     verdict_now = _worse_verdict(verdict_now, dest_a.verdict)
 
     reasons_now = [f"{c.label}: {c.actual_text}" for c in all_checks if not c.passed and c.applicable]
+    # A SIGMET or CWA is issued because the weather is hazardous to *all*
+    # aircraft, so one that reaches this flight moves the verdict on its own -
+    # but only one that reaches it. This used to fire on any SIGMET anywhere in
+    # the feed, which was survivable while the feed was one product and would be
+    # meaningless now that it is seven: every flight in the country would read
+    # MITIGATE and the word would stop carrying information.
+    #
+    # AIRMETs and G-AIRMETs are not gated here on purpose. They reach the verdict
+    # through the icing and turbulence rows above, which grade severity against
+    # the altitudes actually flown - the right test for a forecast of conditions
+    # rather than a warning about them.
     if sigmets:
         verdict_now = _worse_verdict(verdict_now, Verdict.MITIGATE)
-        reasons_now.append(f"{len(sigmets)} active SIGMET on/near route")
+        worst = max(sigmets, key=lambda x: area_products.SEVERITY_RANK.get(x.severity, 0))
+        label = worst.product_id or f"{worst.kind} {ah.HAZARD_LABELS.get(worst.hazard, '')}".strip()
+        where = ("on your route" if (worst.distance_nm or 0) <= 1
+                 else f"{worst.distance_nm:.0f} nm off track")
+        extra = f" (+{len(sigmets) - 1} more)" if len(sigmets) > 1 else ""
+        reasons_now.append(
+            f"{label} {ah.band_label(worst)} {where}{extra}")
 
     # Static route hazards (convective/icing/FZRA/LLWS found now) applied to every
     # hour so the best window reflects them, not just hourly wind/ceiling/vis.
@@ -1393,7 +1451,15 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # Record it so the page can say which of the two it is.
     if not timeline:
         fetch_health.record(fetch_health.HRDPS)
-    windows = tl.best_windows(timeline, daylight_only=(mode == "day"))
+    # Windows have to be long enough to hold the flight - a one-hour hole is not
+    # a window for a two-hour leg - and the nudge answers "how far am I from a
+    # GO" against the ETD the pilot actually picked, which the window list does
+    # not. Both read the timeline that was just built; neither costs a fetch.
+    daylight_only = mode == "day"
+    windows = tl.best_windows(timeline, daylight_only=daylight_only,
+                              min_hours=math.ceil(flight_hr))
+    etd_suggestion = tl.etd_nudge(timeline, etd_utc, flight_hr, verdict_now,
+                                  daylight_only=daylight_only)
 
     # En-route corridor. Built last, and deliberately NOT fed into all_checks,
     # ceiling_points, vis_points or route_ws: these are precautionary-landing
@@ -1417,12 +1483,17 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
             "does not apply")
     if beyond:
         notes.append(f"ETD is beyond the {settings.timeline_hours} h forecast horizon")
+    # How much daylight is left at the destination when you get there - the
+    # subtraction every VFR pilot does by hand, off the twilight the app already
+    # computes to pick day or night minimums. Only for a day flight: "margin to
+    # last light" means nothing once you have chosen to fly at night.
+    dusk = solar.end_of_daylight(dest.lat, dest.lon, eta_utc) if mode == "day" else None
+    daylight_margin = _daylight_margin(dusk, eta_utc, flight_hr) if dusk else None
     # A day departure can still be a night arrival. Say so rather than silently
     # overriding the day/night selection - which set of minimums to fly is the
     # pilot's call, but they should not learn about it in the circuit.
     if mode == "day" and solar.is_night(dest.lat, dest.lon, eta_utc):
-        dusk = solar.last_transition(dest.lat, dest.lon, eta_utc)
-        when = f" ({_zhm(dusk[0])})" if dusk and dusk[1] else ""
+        when = f" ({_zhm(dusk)})" if dusk else ""
         notes.append(
             f"ETA {_zhm(eta_utc)} is after evening civil twilight at {dest.ident}"
             f"{when} - the arrival is a night landing")
@@ -1456,10 +1527,14 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         altitude=alt, cruise_altitude_ft=cruise_alt,
         enroute_ceiling_ft=enroute_ceiling, enroute_visibility_sm=enroute_vis,
         cloud_at_cruise=cloud_at_cruise,
-        sigmets=[_advisory("SIGMET", t, from_awc=t in awc_sigmet_set) for t in sigmets[:8]],
-        airmets=[_advisory("AIRMET", t, from_awc=False) for t in airmets[:8]],
-        pireps=[_advisory("PIREP", t, from_awc=False) for t in pireps[:8]],
+        sigmets=[ah.to_advisory(h) for h in sigmets[:8]],
+        airmets=[ah.to_advisory(h) for h in airmets[:8]],
+        pireps=[ah.to_advisory(h) for h in pireps[:8]],
+        nearby_advisories=[ah.to_advisory(h) for h in aside_haz[:12]],
+        hazards_filtered=ah.drop_counts(aside_haz),
+        hazards_geojson=ah.to_feature_collection(relevant_haz + aside_haz),
         timeline=timeline, best_windows=windows,
+        etd_suggestion=etd_suggestion, daylight_margin=daylight_margin,
         window=window,
         enroute_airports=enroute_airports,
         enroute_airports_total=len(corridor),
