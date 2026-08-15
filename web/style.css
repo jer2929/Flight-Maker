@@ -80,7 +80,7 @@ header p { margin: 4px 0 0; color: var(--muted); }
 }
 .aircraft-sel, .aircraft-tas {
   background: #0f1419; color: var(--ink); border: 1px solid var(--line);
-  border-radius: 6px; padding: 3px 6px; font-size: .82rem; font-family: inherit;
+  border-radius: var(--r-sm); padding: 3px 6px; font-size: .82rem; font-family: inherit;
 }
 .aircraft-sel { max-width: 130px; }
 .aircraft-tas { width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -110,17 +110,25 @@ header p { margin: 4px 0 0; color: var(--muted); }
   .aircraft-row:first-child .aircraft-label { display: none; }
 }
 .panel {
-  margin: 16px auto; max-width: 1000px; padding: 16px 20px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  margin: 0 auto; max-width: var(--page); padding: var(--pad-y) var(--pad-x);
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
+}
+/* The tabs panel is a <body> child, so it never got the tab-pane's gutters and
+   sat 20px wider on each side than every panel below it - a visible jog down the
+   left edge of every page. Same content box now. */
+body > .panel {
+  width: calc(100% - 2 * var(--gutter));
+  max-width: calc(var(--page) - 2 * var(--gutter));
+  margin-block: var(--sp-4);
 }
 h2 { margin: 0 0 12px; font-size: 1.05rem; }
 .hint { color: var(--muted); font-weight: 400; font-size: .85rem; }
 .checks-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-fieldset { border: 1px solid var(--line); border-radius: 8px; }
+fieldset { border: 1px solid var(--line); border-radius: var(--r-md); }
 legend { color: var(--muted); font-size: .85rem; padding: 0 6px; }
 label { display: block; font-size: .9rem; margin: 4px 0; }
 .banner {
-  margin-top: 12px; padding: 12px 14px; border-radius: 8px;
+  margin-top: var(--sp-3); padding: var(--pad-y) var(--pad-x); border-radius: var(--r-md);
   background: rgba(192, 57, 43, .15); border: 1px solid var(--nogo); color: #ffb4ab;
 }
 .controls { display: flex; gap: 24px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
@@ -128,7 +136,7 @@ label { display: block; font-size: .9rem; margin: 4px 0; }
 .control input[type=range] { width: 180px; }
 select, input[type=text], .route-inputs input {
   background: #0f1419; color: var(--ink); border: 1px solid var(--line);
-  border-radius: 6px; padding: 8px;
+  border-radius: var(--r-sm); padding: 8px;
 }
 .control.threats { align-self: flex-start; }
 .threats-label { font-size: .85rem; color: var(--muted); }
@@ -137,13 +145,13 @@ select, input[type=text], .route-inputs input {
 .tabs { display: flex; gap: 8px; }
 .tab {
   background: transparent; color: var(--muted); border: none; padding: 8px 14px;
-  border-radius: 8px; cursor: pointer; font-size: .95rem;
+  border-radius: var(--r-md); cursor: pointer; font-size: .95rem;
 }
 .tab.active { background: var(--accent); color: white; }
-.tab-pane { max-width: 1000px; margin: 0 auto; padding: 0 20px; }
+.tab-pane { max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter); }
 .primary {
   background: var(--accent); color: white; border: none; padding: 10px 18px;
-  border-radius: 8px; cursor: pointer; font-size: .95rem;
+  border-radius: var(--r-md); cursor: pointer; font-size: .95rem;
 }
 .primary:disabled { opacity: .5; cursor: not-allowed; }
 
@@ -154,7 +162,7 @@ select, input[type=text], .route-inputs input {
 .ac input { width: 100%; }
 .ac-list {
   position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
-  background: #0f1419; border: 1px solid var(--line); border-radius: 8px;
+  background: #0f1419; border: 1px solid var(--line); border-radius: var(--r-md);
   max-height: 260px; overflow-y: auto; margin-top: 2px;
 }
 .ac-item { padding: 8px 10px; cursor: pointer; font-size: .88rem; }
@@ -166,16 +174,20 @@ select, input[type=text], .route-inputs input {
 .results { display: grid; gap: 12px; margin: 14px 0 24px; }
 .two-col { grid-template-columns: 1fr 1fr; }
 @media (max-width: 720px) { .two-col { grid-template-columns: 1fr; } }
+/* A card carries a verdict bar, so it pays for the bar out of its own left
+   padding - that is what keeps its text on the same x as a bar-less panel's. */
 .card {
-  background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--muted);
-  border-radius: 10px; padding: 14px 16px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: var(--state-bar) solid var(--muted);
+  border-radius: var(--r-lg);
+  padding: var(--pad-y) var(--pad-x) var(--pad-y) var(--pad-x-bar);
 }
 .card.GO { border-left-color: var(--go); }
 .card.MITIGATE { border-left-color: var(--mitigate); }
 .card.NOGO { border-left-color: var(--nogo); }
 .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .card-head h3 { margin: 0; font-size: 1.05rem; }
-.badge { font-weight: 700; padding: 3px 10px; border-radius: 999px; font-size: .8rem; }
+.badge { font-weight: 700; padding: 3px 10px; border-radius: var(--r-pill); font-size: .8rem; }
 .badge.GO { background: rgba(31,138,76,.2); color: var(--go-ink); }
 .badge.MITIGATE { background: rgba(201,138,0,.2); color: var(--mit-ink); }
 .badge.NOGO { background: rgba(192,57,43,.2); color: var(--nogo-ink); }
@@ -186,8 +198,9 @@ select, input[type=text], .route-inputs input {
 /* Why a discovery card is not a plain GO. Sits directly under the card head, so
    the badge and its explanation are read together rather than a screen apart. */
 .why {
-  margin: 8px 0 2px; padding: 8px 10px; border-radius: 8px;
-  background: rgba(255,255,255,.05); border-left: 3px solid var(--line);
+  margin: var(--sp-2) 0 2px; border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--row-pad-x);
+  background: rgba(255,255,255,.05); border-left: var(--state-bar) solid var(--line);
 }
 .why.MITIGATE { border-left-color: var(--mitigate); }
 .why.NOGO { border-left-color: var(--nogo); }
@@ -213,7 +226,7 @@ select, input[type=text], .route-inputs input {
 .cl-group h3 { margin: 0 0 8px; font-size: .95rem; display: flex; align-items: center; gap: 8px; }
 .chk {
   display: grid; grid-template-columns: 20px 1fr auto auto; gap: 10px; align-items: baseline;
-  padding: 5px 8px; border-radius: 6px; font-size: .88rem; border-left: 3px solid transparent;
+  padding: 5px 8px; border-radius: var(--r-sm); font-size: .88rem; border-left: 3px solid transparent;
 }
 .chk:nth-child(even) { background: rgba(255,255,255,.02); }
 .chk .mark { font-weight: 700; text-align: center; }
@@ -231,11 +244,11 @@ select, input[type=text], .route-inputs input {
 .notam-btn { cursor: pointer; color: var(--accent); }
 .notam-list { margin: 8px 0 0; display: grid; gap: 6px; }
 .notam { font-size: .8rem; color: var(--ink); background: rgba(255,255,255,.03);
-  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px; }
 .notam a { color: var(--accent); font-weight: 700; margin-right: 6px; white-space: nowrap; }
 .notam-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
 .notam-text { white-space: pre-wrap; }
-.notam-status { font-size: .68rem; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+.notam-status { font-size: .68rem; font-weight: 700; padding: 1px 7px; border-radius: var(--r-pill);
   text-transform: uppercase; letter-spacing: .03em; }
 .notam-status.active { background: rgba(46,160,67,.18); color: var(--go-ink); border: 1px solid #2ea043; }
 .notam-status.upcoming { background: rgba(201,138,0,.15); color: var(--mit-ink); border: 1px solid #c98a00; }
@@ -243,8 +256,8 @@ select, input[type=text], .route-inputs input {
 .notam-when { font-size: .72rem; color: var(--muted); }
 
 /* source chips */
-.src { font-size: .68rem; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); }
-.blend { font-size: .66rem; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--accent);
+.src { font-size: .68rem; padding: 1px 6px; border-radius: var(--r-pill); border: 1px solid var(--line); }
+.blend { font-size: .66rem; padding: 1px 6px; border-radius: var(--r-pill); border: 1px solid var(--accent);
   color: var(--taf-ink); margin-left: 4px; cursor: help; }
 .src.OBSERVED { color: var(--go-ink); border-color: var(--go); }
 .src.TAF { color: var(--taf-ink); border-color: var(--accent); }
@@ -268,7 +281,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .wx-pop {
   position: absolute; z-index: 2000; max-width: min(520px, calc(100vw - 16px));
   max-height: min(70vh, 560px); overflow-y: auto;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg);
   padding: 10px 12px; box-shadow: 0 12px 32px rgba(0,0,0,.5);
 }
 .wx-pop-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
@@ -286,7 +299,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .wx-hours { display: grid; gap: 2px; font-size: .78rem; }
 .wx-h {
   display: grid; grid-template-columns: 46px 92px 76px 62px 1fr;
-  gap: 6px; padding: 3px 5px; border-radius: 5px; align-items: baseline;
+  gap: 6px; padding: 3px 5px; border-radius: var(--r-sm); align-items: baseline;
   font-variant-numeric: tabular-nums;
 }
 .wx-h-hd { color: var(--muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; }
@@ -301,21 +314,23 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 /* The ETD this card was assessed for, beside the aerodrome it applies to. */
 .planned-etd {
   margin-left: 8px; font-size: .74rem; font-weight: 600; white-space: nowrap;
-  color: var(--taf-ink); border: 1px solid var(--accent); border-radius: 999px;
+  color: var(--taf-ink); border: 1px solid var(--accent); border-radius: var(--r-pill);
   padding: 1px 8px; vertical-align: middle;
 }
 .planned-etd .pe-arrow { opacity: .7; }
 
-/* big route verdict banner */
-.verdict-banner { max-width: 1000px; margin: 14px auto; padding: 14px 18px; border-radius: 12px; font-weight: 700; }
+/* big route verdict banner. No max-width of its own: it only ever renders inside
+   a .tab-pane, which already constrains and gutters it. */
+.verdict-banner { padding: var(--pad-y) var(--pad-x); border-radius: var(--r-lg); font-weight: 700; }
 .verdict-banner.GO { background: rgba(31,138,76,.18); border: 1px solid var(--go); color: var(--go-ink); }
 .verdict-banner.MITIGATE { background: rgba(201,138,0,.18); border: 1px solid var(--mitigate); color: var(--mit-ink); }
 .verdict-banner.NOGO { background: rgba(192,57,43,.18); border: 1px solid var(--nogo); color: var(--nogo-ink); }
 .verdict-banner small { display: block; font-weight: 400; color: var(--muted); margin-top: 4px; }
 
 /* timeline */
-.timeline-wrap { max-width: 1000px; margin: 8px auto 30px; }
-.timeline-wrap h3 { margin: 16px 0 8px; font-size: 1rem; }
+/* Like .verdict-banner: inside a .tab-pane already, so no width of its own. */
+.timeline-wrap { margin: 0; }
+.timeline-wrap h3 { margin: 0 0 var(--sp-2); font-size: 1rem; }
 .tl-day { font-size: .8rem; color: var(--muted); margin: 10px 0 4px; }
 .tl-row { display: flex; flex-wrap: wrap; gap: 3px; }
 .tl-cell {
@@ -337,13 +352,13 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .tl-hour { font-weight: 700; }
 .tl-wx { font-size: .7rem; line-height: 1; margin-top: 1px; }
 .tl-detail {
-  margin-top: 8px; padding: 10px 12px; border-radius: 8px;
+  margin-top: 8px; padding: 10px 12px; border-radius: var(--r-md);
   background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
   font-size: .8rem; line-height: 1.5; white-space: pre-line;
 }
 .window-card {
-  background: rgba(31,138,76,.12); border: 1px solid var(--go); border-radius: 10px;
-  padding: 10px 14px; margin: 6px 0; font-size: .9rem;
+  background: rgba(31,138,76,.12); border: 1px solid var(--go); border-radius: var(--r-lg);
+  padding: var(--sp-2) var(--pad-x); margin: 6px 0; font-size: var(--fs-md);
 }
 /* The ETD nudge - one specific better departure time for this flight. Coloured
    by the verdict it actually reaches, not always green: a nudge that only gets
@@ -375,7 +390,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
    widest sibling happens to be. That is how the day/night toggle grew an empty
    padded region past its second button whenever the caption beside it was long.
    inline-flex does not help; a flex item is stretched regardless. */
-.seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg { display: inline-flex; align-self: flex-start; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
 .seg-btn { background: #0f1419; color: var(--muted); border: none; padding: 7px 14px; cursor: pointer; font-size: .9rem; }
 .seg-btn.active { background: var(--accent); color: #fff; }
 
@@ -386,7 +401,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 
 /* checklist location + source chips */
 .chk .act .loc { color: var(--taf-ink); }
-.chk .act .src-mini { font-size: .68rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 5px; }
+.chk .act .src-mini { font-size: .68rem; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 0 5px; }
 
 /* runway lines + components */
 .rwy-lines { font-size: .86rem; margin: 8px 0; display: grid; gap: 3px; }
@@ -434,9 +449,9 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .wr-legend { fill: var(--muted); font-family: system-ui, sans-serif; }
 @media (max-width: 480px) { .rwy-wrap { flex-direction: column; gap: 6px; } }
 .ppr { font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
-  color: var(--mit-ink); border: 1px solid var(--mitigate); border-radius: 999px; padding: 1px 7px; vertical-align: middle; }
+  color: var(--mit-ink); border: 1px solid var(--mitigate); border-radius: var(--r-pill); padding: 1px 7px; vertical-align: middle; }
 .nearby { margin: 6px 0; font-size: .84rem; color: var(--ink); background: rgba(255,255,255,.03);
-  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px; }
 .nearby .nlabel { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; }
 /* The neighbour's TAF gets the same green highlight as your own field's, which
    would otherwise read as "this counts". It doesn't. */
@@ -444,17 +459,17 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .advisories { font-size: .84rem; }
 .advisories summary { cursor: pointer; font-weight: 600; }
 .adv { margin: 6px 0; padding: 6px 8px; background: rgba(201,138,0,.08); border-left: 3px solid var(--mitigate);
-  border-radius: 6px; font-family: ui-monospace, monospace; font-size: .78rem; word-break: break-word; }
+  border-radius: var(--r-sm); font-family: ui-monospace, monospace; font-size: .78rem; word-break: break-word; }
 .adv-k { font-weight: 700; color: var(--mit-ink); margin-right: 6px; }
 .adv > summary { cursor: pointer; list-style: revert; }
 .adv-text { margin: 6px 0 4px; padding: 8px; white-space: pre-wrap; word-break: break-word;
-  font-family: ui-monospace, monospace; font-size: .76rem; background: rgba(0,0,0,.18); border-radius: 5px; }
+  font-family: ui-monospace, monospace; font-size: .76rem; background: rgba(0,0,0,.18); border-radius: var(--r-sm); }
 .adv-src { font-size: .74rem; color: var(--accent); text-decoration: none; }
 .adv-src:hover { text-decoration: underline; }
 .adv-none { color: var(--muted); font-size: .84rem; }
 /* Altitude band, distance off track and expiry - the three facts that decide
    whether a bulletin is yours, on the collapsed line so you need not open it. */
-.adv-chip { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+.adv-chip { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: var(--r-pill);
   background: rgba(255,255,255,.07); border: 1px solid var(--line); color: var(--muted);
   font-family: system-ui, sans-serif; font-size: .68rem; white-space: nowrap; }
 /* Fetched but set aside. Muted, and never with the amber bar - these are not
@@ -463,7 +478,7 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .adv-aside > summary { cursor: pointer; color: var(--muted); }
 .adv-aside .adv { background: rgba(255,255,255,.03); border-left-color: var(--line); opacity: .85; }
 .adv-aside .adv-k { color: var(--muted); }
-.trends { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: rgba(59,130,246,.08); border-radius: 6px; }
+.trends { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: rgba(59,130,246,.08); border-radius: var(--r-sm); }
 .trends-h { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
 .trend { font-size: .86rem; margin: 2px 0; }
 details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; }
@@ -471,15 +486,16 @@ details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem
 /* Upstream did not answer - distinct from "nothing is trending", which renders
    nothing at all. */
 .trends-na { margin: 8px 0; padding: 6px 10px; font-size: .8rem; color: var(--muted);
-             border-left: 3px solid var(--line); border-radius: 6px; }
+             border-left: 3px solid var(--line); border-radius: var(--r-sm); }
 
 /* An upstream that did not answer at all. Loud on purpose: `.trends-na` is muted
    because a missing trend costs you a nicety, while a missing forecast makes the
    whole page quietly wrong - it renders as clear skies and an empty timeline.
    This sits above the verdict and is meant to stop you before you read it. */
 .fetch-fail {
-  margin: 12px 0; padding: 12px 14px; border-radius: 10px;
-  border: 1px solid var(--nogo); border-left: 6px solid var(--nogo);
+  margin: var(--sp-3) 0; border-radius: var(--r-lg);
+  padding: var(--pad-y) var(--pad-x) var(--pad-y) var(--pad-x-bar);
+  border: 1px solid var(--nogo); border-left: var(--state-bar) solid var(--nogo);
   background: rgba(192, 57, 43, .12);
 }
 .fetch-fail-title { font-weight: 700; color: var(--nogo-ink); margin-bottom: 4px; }
@@ -489,7 +505,7 @@ details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem
 .fetch-detail > summary { cursor: pointer; color: var(--muted); }
 .fetch-fail-detail { color: var(--muted); font-family: ui-monospace, monospace; font-size: .8rem; }
 .fetch-retry {
-  margin-top: 10px; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+  margin-top: 10px; padding: 8px 14px; border-radius: var(--r-md); cursor: pointer;
   border: 1px solid var(--nogo); background: var(--nogo); color: #fff;
   font-size: .88rem; font-weight: 600;
 }
@@ -522,7 +538,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 /* Threat mitigation reference block (shown when verdict = MITIGATE) */
 .mit-block h3 { margin: 0 0 12px; font-size: .95rem; }
 .mit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-.mit-section { background: rgba(201,138,0,.08); border: 1px solid var(--mitigate); border-radius: 8px; padding: 10px 12px; }
+.mit-section { background: rgba(201,138,0,.08); border: 1px solid var(--mitigate); border-radius: var(--r-md); padding: 10px 12px; }
 .mit-label { font-weight: 600; color: var(--mit-ink); font-size: .85rem; margin-bottom: 6px; }
 .mit-list { margin: 0; padding-left: 16px; font-size: .83rem; color: var(--ink); }
 .mit-list li { margin: 3px 0; }
@@ -538,7 +554,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 /* SVG logo */
 .brand { font-size: 0; line-height: 1; }
 /* The logo is a link home (My Minimums), so it looks and focuses like one. */
-.brand-home { display: block; cursor: pointer; border-radius: 6px; text-decoration: none; }
+.brand-home { display: block; cursor: pointer; border-radius: var(--r-sm); text-decoration: none; }
 .brand-home:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 .brand-home:hover .logo-word { fill: #ffffff; }
 .logo { display: block; height: 44px; width: auto; overflow: visible; }
@@ -550,14 +566,14 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 /* Secondary button */
 .secondary {
   background: transparent; color: var(--muted); border: 1px solid var(--line); padding: 10px 18px;
-  border-radius: 8px; cursor: pointer; font-size: .95rem;
+  border-radius: var(--r-md); cursor: pointer; font-size: .95rem;
 }
 .secondary:hover { border-color: var(--ink); color: var(--ink); }
 
 /* Settings panel typography */
 .set-title { margin: 0 0 8px; font-size: 1.05rem; }
 .set-intro { color: var(--muted); font-size: .86rem; margin: 0 0 16px; }
-.set-group { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; }
+.set-group { border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; margin-bottom: 16px; }
 .set-group legend { color: var(--muted); font-size: .84rem; padding: 0 6px; }
 .set-hint { color: var(--muted); font-size: .82rem; margin: 4px 0 10px; }
 .set-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
@@ -590,7 +606,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 
 /* Profile readout */
 .min-banner {
-  font-size: .85rem; color: var(--muted); padding: 8px 10px; border-radius: 6px;
+  font-size: .85rem; color: var(--muted); padding: 8px 10px; border-radius: var(--r-sm);
   background: rgba(255,255,255,.04); border: 1px solid var(--line); margin-bottom: 8px;
 }
 .min-banner.custom { color: var(--mit-ink); background: rgba(201,138,0,.08); border-color: var(--mitigate); }
@@ -602,11 +618,11 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .radar-panel h3 { margin: 0 0 10px; font-size: .95rem; }
 .radar-types { display: flex; gap: 6px; }
 .radar-type { background: var(--bg); color: var(--muted); border: 1px solid var(--line);
-  border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: .82rem; }
+  border-radius: var(--r-md); padding: 6px 12px; cursor: pointer; font-size: .82rem; }
 .radar-type.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 /* position+z-index makes the map its own stacking context so Leaflet's internal
    panes/controls (z-index up to ~1000) stay trapped below the sticky header. */
-.radar-map { height: 380px; width: 100%; border-radius: 8px; border: 1px solid var(--line);
+.radar-map { height: 380px; width: 100%; border-radius: var(--r-md); border: 1px solid var(--line);
   position: relative; z-index: 0; }
 /* Hazard overlay: legend under the map, popups over it. */
 .hz-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: .74rem; color: var(--muted); }
@@ -616,12 +632,12 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .hz-key-dot i { background: var(--muted); border-radius: 50%; }
 .hz-pop pre { margin: 6px 0; padding: 6px; max-height: 180px; overflow: auto;
   white-space: pre-wrap; word-break: break-word; font-size: .72rem;
-  background: rgba(0,0,0,.25); border-radius: 5px; }
+  background: rgba(0,0,0,.25); border-radius: var(--r-sm); }
 /* --fg was never defined anywhere, so the popup text fell back to inheritance. */
 .leaflet-popup-content-wrapper { background: var(--panel); color: var(--ink); }
 .leaflet-popup-tip { background: var(--panel); }
 .radar-controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.radar-play { background: var(--accent); color: #fff; border: none; border-radius: 8px;
+.radar-play { background: var(--accent); color: #fff; border: none; border-radius: var(--r-md);
   width: 38px; height: 32px; cursor: pointer; font-size: .9rem; }
 .radar-controls input[type=range] { flex: 1; }
 .radar-time { min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -635,7 +651,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .gfa-frames { margin: 10px 0; }
 .gfa-tab, .gfa-frame {
   background: var(--bg); color: var(--muted); border: 1px solid var(--line);
-  border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: .82rem;
+  border-radius: var(--r-md); padding: 6px 12px; cursor: pointer; font-size: .82rem;
 }
 .gfa-tab.active, .gfa-frame.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 /* The panel covering your ETD, marked even after you click to another one, so
@@ -644,14 +660,14 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .gfa-frame.etd:not(.active) { border-color: var(--go); color: var(--go-ink); }
 .gfa-img-link { display: block; }
 .gfa-img { display: block; width: 100%; max-width: 760px; height: auto; margin: 10px auto 6px;
-  background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+  background: #fff; border: 1px solid var(--line); border-radius: var(--r-md); }
 .gfa-cap { margin: 4px 0 0; }
 
 /* Conservatism presets - one inline row of chips + a single description line */
 #conservatism { display: flex; flex-direction: column; gap: 8px; }
 .preset-row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; }
 .preset { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 8px 12px;
-  border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-size: .88rem; }
+  border: 1px solid var(--line); border-radius: var(--r-md); cursor: pointer; font-size: .88rem; }
 .preset:has(input:checked) { border-color: var(--accent); background: rgba(59,130,246,.1); }
 .preset input { margin: 0; }
 .preset-desc { margin: 0; }
@@ -660,12 +676,14 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .mm-panel { margin-top: 16px; }
 
 /* checks-grid fieldset children */
-.checks-grid fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.checks-grid fieldset { border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; }
 .checks-grid fieldset legend { color: var(--muted); font-size: .82rem; padding: 0 6px; }
 .checks-grid label { display: flex; align-items: center; gap: 6px; font-size: .87rem; margin: 5px 0; cursor: pointer; }
 
 .hidden { display: none !important; }
-footer { max-width: 1000px; margin: 20px auto; padding: 0 20px 30px; color: var(--muted); font-size: .8rem; }
+/* Outside .tab-pane, so this one keeps its own frame. */
+footer { max-width: var(--page); margin: var(--sp-5) auto; padding: 0 var(--gutter) var(--sp-6);
+  color: var(--muted); font-size: var(--fs-sm); }
 .empty { color: var(--muted); padding: 14px; }
 
 /* ETD picker (route inputs + discovery filters) */
