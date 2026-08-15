@@ -36,6 +36,21 @@ class Settings(BaseSettings):
     # Caching (seconds) - keep us polite to free upstreams
     cfps_cache_ttl: int = 300
     openmeteo_cache_ttl: int = 1800
+    awc_cache_ttl: int = 300
+
+    # Area hazards (SIGMET / AIRMET / PIREP).
+    #
+    # The corridor is how far off track an advisory still counts as "on your
+    # route". The old test used 250 nm, which is most of southern Ontario and
+    # meant nothing; the 5 nm corridor used for precautionary-landing fields is
+    # far too tight for a weather area you would divert around. 25 nm is roughly
+    # a quarter hour at 110 kt - close enough that you would meet it.
+    hazard_corridor_nm: float = 25.0
+    # The route is sampled into legs no longer than this before any geometry is
+    # tested, so a great circle is treated as straight only over short hops.
+    hazard_route_sample_nm: float = 25.0
+    # How long a PIREP describes the air mass it was filed in.
+    pirep_max_age_hr: int = 3
 
     # Route timeline horizon (hours)
     timeline_hours: int = 48

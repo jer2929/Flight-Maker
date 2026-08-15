@@ -42,6 +42,14 @@ async def _fetch(alpha: str, sites: list[str]) -> list[dict]:
         for r in results:
             if isinstance(r, list):
                 data.extend(r)
+        # Fault isolation is for *one* chunk failing. When every chunk failed,
+        # returning [] would tell the caller "nothing was reported" about a query
+        # that never landed - the same lie an empty forecast used to tell. Raise
+        # the first real reason so ``_safe`` can report it.
+        if not any(isinstance(r, list) for r in results):
+            for r in results:
+                if isinstance(r, BaseException):
+                    raise r
         return data
 
     key = f"cfps:{alpha}:{','.join(sorted(sites))}"
@@ -189,42 +197,54 @@ async def notams(sites: list[str]) -> dict[str, list[dict]]:
     return out
 
 
-async def _area_texts(alpha: str, point: tuple[float, float] | None) -> list[str]:
-    settings = get_settings()
-    key = f"cfps:{alpha}:{point}"
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-    params = [("alpha", alpha)]
-    if point:
-        params.append(("point", f"{point[0]},{point[1]}"))
-    async with _limiter:
-        body = await _http.get_json(settings.cfps_base, params)
-    data = body.get("data", []) if isinstance(body, dict) else []
-    texts = [_text(i) for i in data]
-    cache.put(key, texts, settings.cfps_cache_ttl)
-    return texts
+# The seven Canadian FIRs. SIGMETs and AIRMETs are issued *per FIR*, so asking
+# for the FIRs themselves is asking the question the product is answering -
+# where querying only the aerodromes on the route returns whatever CFPS happens
+# to associate with those fields.
+CANADIAN_FIRS = ("CZVR", "CZEG", "CZWG", "CZYZ", "CZUL", "CZQM", "CZQX")
 
 
-async def sigmets(point: tuple[float, float] | None = None) -> list[str]:
-    """Active SIGMET texts (convective, severe icing/turbulence)."""
-    return await _area_texts("sigmet", point)
+async def area(alpha: str, sites: list[str]) -> list[dict]:
+    """Raw CFPS items for an area product (``sigmet`` / ``airmet`` / ``pirep``).
+
+    Goes through the same ``site=``-keyed request the METAR, TAF and NOTAM
+    products use, because that contract is the one demonstrably working against
+    this API. The area products previously used a ``point=lat,lon`` parameter
+    that nothing else here uses and that has never been confirmed to exist -
+    which is the likeliest reason the route page kept reporting the SIGMET fetch
+    as failed, and reported no advisories when it did not.
+
+    The route's aerodromes and the FIR list are two separate requests on purpose:
+    ``_fetch`` chunks in input order, so a single ident CFPS rejects would
+    otherwise take the aerodromes down with it.
+
+    Raises on failure. Reporting the failure belongs to the caller - swallowing
+    it here is what let a dead AIRMET feed render as a clear sky.
+    """
+    aerodromes, firs = await asyncio.gather(
+        _fetch(alpha, sites) if sites else _none(),
+        _fetch(alpha, list(CANADIAN_FIRS)),
+    )
+    return list(aerodromes) + list(firs)
 
 
-async def airmets(point: tuple[float, float] | None = None) -> list[str]:
-    """Active AIRMET texts (icing, turbulence, IFR, mountain obscuration)."""
-    try:
-        return await _area_texts("airmet", point)
-    except Exception:
-        return []
+async def _none() -> list[dict]:
+    return []
 
 
-async def pireps(point: tuple[float, float] | None = None) -> list[str]:
-    """Recent PIREP texts (actual reports of icing/turbulence)."""
-    try:
-        return await _area_texts("pirep", point)
-    except Exception:
-        return []
+async def sigmets(sites: list[str]) -> list[dict]:
+    """Active SIGMETs (convective, severe icing/turbulence, volcanic ash)."""
+    return await area("sigmet", sites)
+
+
+async def airmets(sites: list[str]) -> list[dict]:
+    """Active AIRMETs (icing, turbulence, IFR, mountain obscuration)."""
+    return await area("airmet", sites)
+
+
+async def pireps(sites: list[str]) -> list[dict]:
+    """Recent PIREPs (pilots' own reports of icing, turbulence and cloud)."""
+    return await area("pirep", sites)
 
 
 # GFA chart images are served as opaque IDs the browser loads directly.

@@ -71,6 +71,22 @@ def along_track_nm(lat1: float, lon1: float, lat2: float, lon2: float,
     return math.atan2(math.sin(d13) * math.cos(dt), math.cos(d13)) * EARTH_RADIUS_NM
 
 
+def project_nm(lat: float, lon: float, bearing_true: float, distance_nm: float) -> tuple[float, float]:
+    """The point ``distance_nm`` along ``bearing_true`` from (lat, lon).
+
+    The inverse of :func:`haversine_nm` + :func:`initial_bearing_true`, and the
+    only way to place a PIREP that reports its position as a radial and distance
+    off a station ("/OV YYZ180020" - 20 nm on the 180 radial).
+    """
+    d = distance_nm / EARTH_RADIUS_NM
+    brg = math.radians(bearing_true)
+    p1, l1 = math.radians(lat), math.radians(lon)
+    p2 = math.asin(math.sin(p1) * math.cos(d) + math.cos(p1) * math.sin(d) * math.cos(brg))
+    l2 = l1 + math.atan2(math.sin(brg) * math.sin(d) * math.cos(p1),
+                         math.cos(d) - math.sin(p1) * math.sin(p2))
+    return math.degrees(p2), (math.degrees(l2) + 540.0) % 360.0 - 180.0
+
+
 def flight_time_hr(distance_nm: float, cruise_kt: float, groundspeed_kt: float | None = None) -> float:
     """Hours to fly ``distance_nm``. Uses groundspeed when provided, else cruise TAS."""
     speed = groundspeed_kt if groundspeed_kt and groundspeed_kt > 0 else cruise_kt

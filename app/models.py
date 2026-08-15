@@ -39,6 +39,9 @@ class DataHealth(BaseModel):
 
     ok: bool = True
     failed: list[str] = []
+    # Which individual upstreams were behind a partial failure, for the banner's
+    # detail line. ``failed`` stays the short pilot-facing list.
+    details: list[str] = []
 
 
 class Airport(BaseModel):
@@ -423,10 +426,23 @@ class DaylightMargin(BaseModel):
 class Advisory(BaseModel):
     """An area advisory (SIGMET/AIRMET/PIREP) with its full text and a deep link
     back to the source it was fetched from, so the pilot can read and verify it."""
-    kind: str          # SIGMET / AIRMET / PIREP
+    kind: str          # SIGMET / AIRMET / G-AIRMET / CWA / PIREP
     text: str          # full raw product text
     source: str        # human-readable source name
     source_url: str    # deep link to where the product came from
+    # What the product actually claims, parsed out so the card can show why it
+    # does (or doesn't) apply without the pilot decoding the bulletin first.
+    # All optional: a product we couldn't parse still renders as it always did.
+    hazard: Optional[str] = None          # "icing", "turbulence", "convective", ...
+    severity: Optional[str] = None        # light / moderate / severe
+    band_label: Optional[str] = None      # "SFC-FL100"
+    valid_from: Optional[str] = None      # ISO8601 Z
+    valid_to: Optional[str] = None
+    distance_nm: Optional[float] = None   # 0 = the route goes through it
+    product_id: Optional[str] = None      # "CZYZ SIGMET A1"
+    # Set only on advisories that were fetched but set aside, saying why:
+    # "outside your altitudes", "not on your route", ...
+    drop_label: Optional[str] = None
 
 
 class EnrouteAirport(BaseModel):
@@ -473,6 +489,13 @@ class RouteAssessment(BaseModel):
     sigmets: list[Advisory] = []
     airmets: list[Advisory] = []
     pireps: list[Advisory] = []
+    # Advisories that downloaded fine but do not apply to this flight, with the
+    # reason. Shown, not discarded: "we found fourteen and none reach you" and
+    # "we found none" are different statements, and only one of them is good news.
+    nearby_advisories: list[Advisory] = []
+    hazards_filtered: dict[str, int] = {}     # drop reason -> count
+    # Every advisory fetched, relevant or not, as GeoJSON for the map.
+    hazards_geojson: Optional[dict] = None
     timeline: list[HourCondition] = []
     best_windows: list[BestWindow] = []
     # A better ETD for this flight, when the strip offers one. None means either

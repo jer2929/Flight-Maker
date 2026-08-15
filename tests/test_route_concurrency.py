@@ -68,6 +68,10 @@ def upstreams(monkeypatch):
     monkeypatch.setattr(cfps, "pireps", stub("cfps.pireps", []))
     monkeypatch.setattr(awc, "metar_history", stub("awc.metar_history", {}))
     monkeypatch.setattr(awc, "isigmets", stub("awc.isigmets", []))
+    monkeypatch.setattr(awc, "airsigmets", stub("awc.airsigmets", []))
+    monkeypatch.setattr(awc, "gairmets", stub("awc.gairmets", []))
+    monkeypatch.setattr(awc, "cwas", stub("awc.cwas", []))
+    monkeypatch.setattr(awc, "pireps", stub("awc.pireps", []))
     monkeypatch.setattr(openmeteo, "forecast", stub("openmeteo.forecast", {}))
     # The en-route corridor fetch. Without this stub the route would attempt a
     # live request that _safe swallows - failing slowly and silently.
@@ -98,16 +102,24 @@ def test_route_still_requests_every_upstream(upstreams):
     made = set(upstreams.calls)
     for required in ("cfps.metars", "cfps.tafs", "cfps.notams", "cfps.metar_history",
                      "cfps.sigmets", "cfps.airmets", "cfps.pireps",
-                     "awc.metar_history", "awc.isigmets", "openmeteo.forecast",
-                     "openmeteo.forecast_many"):
+                     "awc.metar_history", "awc.isigmets", "awc.airsigmets",
+                     "awc.gairmets", "awc.cwas", "awc.pireps",
+                     "openmeteo.forecast", "openmeteo.forecast_many"):
         assert required in made, f"{required} was never requested"
 
 
-def test_area_products_query_every_route_point(upstreams):
-    """``_gather_area`` fans out over all three route points, not just one."""
+def test_each_area_product_is_fetched_once(upstreams):
+    """One request per product, not one per route point.
+
+    The area products used to be queried separately at the departure, midpoint
+    and destination, because the server-side ``point=`` filter was the only thing
+    scoping them to the route. The polygons are now tested against the route
+    here, so a single national fetch answers for the whole line - three times the
+    round trips bought nothing.
+    """
     asyncio.run(
         orchestrator.assess_route("CYFD", "CYHM", "day", [], flight_rules="vfr"))
 
-    assert upstreams.calls.count("cfps.sigmets") == 3
-    assert upstreams.calls.count("cfps.airmets") == 3
-    assert upstreams.calls.count("cfps.pireps") == 3
+    for product in ("cfps.sigmets", "cfps.airmets", "cfps.pireps",
+                    "awc.isigmets", "awc.airsigmets", "awc.cwas", "awc.pireps"):
+        assert upstreams.calls.count(product) == 1, f"{product} was fetched more than once"
