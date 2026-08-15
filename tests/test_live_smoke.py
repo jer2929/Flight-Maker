@@ -9,7 +9,7 @@ import asyncio
 import httpx
 import pytest
 
-from app.sources import cfps, openmeteo
+from app.sources import awc, cfps, openmeteo
 
 
 def _reachable(url: str) -> bool:
@@ -29,6 +29,7 @@ def _reachable(url: str) -> bool:
 
 CFPS_UP = _reachable("https://plan.navcanada.ca/")
 OM_UP = _reachable("https://api.open-meteo.com/")
+AWC_UP = _reachable("https://aviationweather.gov/")
 
 
 @pytest.mark.skipif(not CFPS_UP, reason="CFPS unreachable (egress blocked)")
@@ -37,6 +38,54 @@ def test_cfps_metar_live():
     assert isinstance(metars, dict)
     # At least one of the two should report something
     assert any(metars.values())
+
+
+# ---------------------------------------------------------------------------
+# Area advisories.
+#
+# These are the canary. The CFPS ``site=`` contract for sigmet/airmet/pirep is
+# undocumented, so the only thing standing between a change at NAV CANADA and a
+# route page quietly reporting "No active SIGMET/AIRMET/PIREP" forever is a test
+# that actually calls it. An empty list is a pass - most of the time there is no
+# SIGMET out - but an exception is not.
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not CFPS_UP, reason="CFPS unreachable (egress blocked)")
+@pytest.mark.parametrize("product", ["sigmets", "airmets", "pireps"])
+def test_cfps_area_products_live(product):
+    out = asyncio.run(getattr(cfps, product)(["CYYZ"]))
+    assert isinstance(out, list)
+    for item in out:
+        assert isinstance(item, dict), "CFPS returns a list of item dicts"
+
+
+@pytest.mark.skipif(not AWC_UP, reason="aviationweather.gov unreachable (egress blocked)")
+@pytest.mark.parametrize("call", [
+    lambda: awc.isigmets(),
+    lambda: awc.airsigmets(),
+    lambda: awc.cwas(),
+    lambda: awc.gairmets(0),
+    lambda: awc.pireps((41.0, -84.0, 46.0, -75.0), 3),
+])
+def test_awc_area_products_live(call):
+    out = asyncio.run(call())
+    assert isinstance(out, list)
+    for row in out:
+        assert isinstance(row, dict)
+
+
+@pytest.mark.skipif(not AWC_UP, reason="aviationweather.gov unreachable (egress blocked)")
+def test_awc_geojson_features_carry_geometry_live():
+    """The whole reason for asking in GeoJSON: a polygon we can draw and test."""
+    from app.services import area_hazards as ah
+
+    rows = asyncio.run(awc.isigmets()) + asyncio.run(awc.airsigmets())
+    if not rows:
+        pytest.skip("no active SIGMETs right now - nothing to check the shape of")
+    parsed = [ah.from_awc_feature("isigmet", r) for r in rows]
+    parsed = [h for h in parsed if h]
+    assert parsed, "features came back but none carried readable text"
+    assert any(len(h.geometry) >= 3 for h in parsed), \
+        "at least one active SIGMET should have a polygon"
 
 
 @pytest.mark.skipif(not OM_UP, reason="Open-Meteo unreachable (egress blocked)")

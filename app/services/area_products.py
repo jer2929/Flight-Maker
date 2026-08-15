@@ -17,7 +17,10 @@ still belongs to ``services.hazards``.
 from __future__ import annotations
 
 import re
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Optional
+
+from app.services.geo import project_nm
 
 # Severity, most severe first. EXTRM/SEV are the ones that end a discussion.
 SEVERITY_RANK = {"none": 0, "light": 1, "moderate": 2, "severe": 3}
@@ -147,6 +150,170 @@ def find_hazard(text: str, kind: str, low_ft: float, high_ft: float) -> Optional
         if best is None or SEVERITY_RANK[severity] > SEVERITY_RANK[best["severity"]]:
             best = cand
     return best
+
+
+# ---------------------------------------------------------------------------
+# Where and when - the two things the text carries that nothing else does.
+#
+# NAV CANADA hands these products back as text with no geometry attached, so the
+# polygon has to come out of the bulletin itself. It is written there, in the
+# ICAO form every SIGMET uses: a list of latitude/longitude pairs after WI /
+# WTN / a bare dash-separated run.
+# ---------------------------------------------------------------------------
+
+# N4530 W07500 / N45 W075 / 4530N 07500W, with or without the space between.
+_COORD = re.compile(
+    r"\b(?:([NS])\s?(\d{2})(\d{2})?|(\d{2})(\d{2})?([NS]))"
+    r"\s*[/ ]?\s*"
+    r"(?:([EW])\s?(\d{3})(\d{2})?|(\d{3})(\d{2})?([EW]))\b")
+
+
+def _dm(deg: str, minutes: str | None, hemi: str) -> float:
+    val = float(deg) + (float(minutes) / 60.0 if minutes else 0.0)
+    return -val if hemi in ("S", "W") else val
+
+
+def parse_icao_polygon(text: str) -> list[tuple[float, float]]:
+    """The area a bulletin applies to, as ``[(lat, lon), ...]``.
+
+    Returns a closed ring of at least three distinct points, or ``[]`` when the
+    text names no usable coordinates - which is common and is not an error: a
+    SIGMET can describe its area by FIR name alone, and one that does must not
+    be thrown away just because it cannot be drawn.
+    """
+    pts: list[tuple[float, float]] = []
+    for m in _COORD.finditer(text.upper()):
+        lat_h, lat_d, lat_m, lat_d2, lat_m2, lat_h2 = m.group(1, 2, 3, 4, 5, 6)
+        lon_h, lon_d, lon_m, lon_d2, lon_m2, lon_h2 = m.group(7, 8, 9, 10, 11, 12)
+        lat = _dm(lat_d or lat_d2, lat_m or lat_m2, lat_h or lat_h2)
+        lon = _dm(lon_d or lon_d2, lon_m or lon_m2, lon_h or lon_h2)
+        if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+            pts.append((lat, lon))
+    # Consecutive duplicates are just a repeated vertex where the text wrapped.
+    ring: list[tuple[float, float]] = []
+    for p in pts:
+        if not ring or ring[-1] != p:
+            ring.append(p)
+    if len(ring) > 1 and ring[0] == ring[-1]:
+        ring.pop()
+    if len(ring) < 3:
+        return []
+    return ring + [ring[0]]
+
+
+# "/OV YYZ180020" - 20 nm on the 180 radial off Toronto. Also "/OV CYYZ".
+_OV_RADIAL = re.compile(r"/OV\s+([A-Z]{3,4})(\d{3})(\d{3})\b")
+_OV_STATION = re.compile(r"/OV\s+([A-Z]{3,4})\b")
+
+
+def parse_pirep_position(
+    text: str,
+    resolve_station: Optional[Callable[[str], Optional[tuple[float, float]]]] = None,
+) -> Optional[tuple[float, float]]:
+    """Where a PIREP was filed, as ``(lat, lon)``.
+
+    Tries an explicit lat/lon first, then the ``/OV`` field in either of its two
+    forms. ``resolve_station`` maps a 3- or 4-letter station ident to a position;
+    without one, only the explicit lat/lon form resolves.
+    """
+    up = text.upper()
+    ring = parse_icao_polygon(up)
+    if ring:
+        return ring[0]
+    m = _COORD.search(up)
+    if m:
+        lat = _dm(m.group(2) or m.group(4), m.group(3) or m.group(5),
+                  m.group(1) or m.group(6))
+        lon = _dm(m.group(8) or m.group(10), m.group(9) or m.group(11),
+                  m.group(7) or m.group(12))
+        return lat, lon
+    if resolve_station is None:
+        return None
+    m = _OV_RADIAL.search(up)
+    if m:
+        base = _resolve(resolve_station, m.group(1))
+        if base:
+            return project_nm(base[0], base[1], float(m.group(2)), float(m.group(3)))
+    m = _OV_STATION.search(up)
+    if m:
+        return _resolve(resolve_station, m.group(1))
+    return None
+
+
+def _resolve(resolve_station, ident: str) -> Optional[tuple[float, float]]:
+    """Try the ident as written, then with a Canadian ``C`` prefix.
+
+    PIREPs drop the leading letter ("YYZ", not "CYYZ") far more often than not.
+    """
+    for candidate in (ident, f"C{ident}") if len(ident) == 3 else (ident,):
+        pos = resolve_station(candidate)
+        if pos:
+            return pos
+    return None
+
+
+# "/FL050" - the level the aircraft was at. PIREPs report one altitude, not a
+# band, because a pilot is at an altitude rather than forecasting a layer.
+_PIREP_FL = re.compile(r"/FL\s?(\d{3})\b")
+
+# How far either side of the reported level a PIREP is taken to speak for. A
+# report of moderate turbulence at 5,000 ft says something about 4,000 and
+# 7,000; it says nothing about FL350. Three thousand feet is the same window
+# aviationweather.gov's own PIREP level search uses.
+PIREP_LEVEL_SPREAD_FT = 3000.0
+
+
+def parse_pirep_level(text: str) -> Optional[tuple[float, float]]:
+    """The band a PIREP speaks for, from its ``/FL`` field, or ``None``.
+
+    ``None`` means the report named no level, which - like every other unparsed
+    field here - has to read as "unknown", never as "not at your altitude".
+    """
+    m = _PIREP_FL.search(text.upper())
+    if not m:
+        return None
+    level = float(m.group(1)) * 100.0
+    return max(0.0, level - PIREP_LEVEL_SPREAD_FT), level + PIREP_LEVEL_SPREAD_FT
+
+
+# "VALID 141200/141600" - DDHHMM pairs, no month, no year.
+_VALID_PAIR = re.compile(r"\bVALID\s+(\d{6})\s?/\s?(\d{6})\b")
+
+
+def _ddhhmm(stamp: str, now: datetime) -> Optional[datetime]:
+    """A DDHHMM stamp as an absolute UTC time, month rolled against ``now``.
+
+    The day-of-month is all the bulletin gives, so a stamp reading "01" seen on
+    the 31st means next month, not four weeks ago.
+    """
+    dd, hh, mi = int(stamp[0:2]), int(stamp[2:4]), int(stamp[4:6])
+    if not (1 <= dd <= 31 and hh <= 23 and mi <= 59):
+        return None
+    for month_shift in (0, 1, -1):
+        anchor = now.replace(day=1) + timedelta(days=32 * month_shift)
+        try:
+            cand = anchor.replace(day=dd, hour=hh, minute=mi, second=0, microsecond=0)
+        except ValueError:
+            continue
+        if abs((cand - now).total_seconds()) <= 15 * 86400:
+            return cand
+    return None
+
+
+def parse_validity(text: str, now: Optional[datetime] = None
+                   ) -> tuple[Optional[str], Optional[str]]:
+    """``(valid_from, valid_to)`` as ISO8601 Z strings, or ``(None, None)``.
+
+    ``None`` means "the text does not say", and every caller must read it that
+    way - an unparsed validity may never be treated as expired.
+    """
+    now = now or datetime.now(timezone.utc)
+    m = _VALID_PAIR.search(text.upper())
+    if not m:
+        return None, None
+    start, end = _ddhhmm(m.group(1), now), _ddhhmm(m.group(2), now)
+    fmt = lambda d: d.strftime("%Y-%m-%dT%H:%M:00Z") if d else None  # noqa: E731
+    return fmt(start), fmt(end)
 
 
 def band_text(base_ft: float, top_ft: float) -> str:
