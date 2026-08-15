@@ -425,12 +425,24 @@ python scripts/probe_area_products.py  # what the advisory upstreams actually re
 ```
 
 `probe_area_products.py` is the answer to *"is the SIGMET feed working?"*. NAV
-CANADA's API is undocumented, so the script asks it for each area product in every
-plausible request shape side by side and prints which ones answer and what they
-return, then does the same for each aviationweather.gov product in JSON and
-GeoJSON. Run it anywhere the network is open; `--save` writes the payloads into
-`tests/fixtures/area/` so the offline suite parses real responses rather than
-invented ones.
+CANADA's API is undocumented, so the shape it accepts is something this app knows
+only by asking — and the way a change there would show up is an advisory panel
+quietly reporting that there is nothing out there. The script asks for each area
+product in every plausible request shape side by side and prints which ones
+answer and what they return, then does the same for each aviationweather.gov
+product in JSON and GeoJSON. Run it anywhere the network is open; `--save` writes
+the payloads into `tests/fixtures/area/` so the offline suite parses real
+responses rather than invented ones.
+
+The contracts as confirmed against the live APIs:
+
+| Request | Answers |
+|---|---|
+| `plan.navcanada.ca/weather/api/alpha/?alpha=sigmet&site=CZYZ` | `{"meta": {…}, "data": [...]}` |
+| `aviationweather.gov/api/data/pirep?format=geojson&bbox=…&age=3` | a GeoJSON `FeatureCollection` |
+
+`format=json` on `/pirep` does **not** answer usefully — sending it is what made
+the PIREP fetch fail on every single request.
 
 ## Airport data
 

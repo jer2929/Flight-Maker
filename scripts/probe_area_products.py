@@ -2,19 +2,21 @@
 """Ask both upstreams for area advisories, and print exactly what comes back.
 
 Run this wherever the network is open. It answers the one question the offline
-test suite cannot: **what does the request have to look like?**
+test suite cannot: **is the request still the shape these APIs want?**
 
-NAV CANADA's CFPS API is undocumented. Its METAR/TAF/NOTAM products are known to
-work with a repeated ``site=`` parameter; the SIGMET/AIRMET/PIREP products were
-previously requested with a ``point=lat,lon`` parameter that nothing else uses
-and that may never have existed, which is the likeliest reason the route page
-reported the advisory fetch as failed. So this tries every plausible shape side
-by side and prints which ones answer, how many items each returns, and what keys
+NAV CANADA's CFPS API is undocumented, so the shape it accepts is something this
+app knows only by asking. Repeated ``site=`` is confirmed - it answers
+``{"meta": {...}, "data": [...]}`` for ``?alpha=sigmet&site=CZYZ`` and is what
+puts advisories on the route card - but nothing stops that changing without
+notice, and the way it would show up is an advisory panel that quietly says
+there is nothing out there. So this still tries every plausible shape side by
+side and prints which ones answer, how many items each returns, and what keys
 those items have.
 
-aviationweather.gov is documented, but its altitude field names and units differ
-per product, so each one is fetched in both JSON and GeoJSON and a sample row
-printed.
+aviationweather.gov is documented, but the formats are not interchangeable:
+``/pirep`` answers ``format=geojson`` and fails ``format=json``, and altitude
+field names and units differ per product. So each one is fetched both ways and a
+sample row printed.
 
     python scripts/probe_area_products.py                 # summary table
     python scripts/probe_area_products.py --save          # + raw payloads

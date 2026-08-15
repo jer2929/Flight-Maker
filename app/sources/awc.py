@@ -98,11 +98,17 @@ async def pireps(bbox: tuple[float, float, float, float], age_hr: int = 3,
     which no airport dataset can resolve. Without it those reports can be listed
     but never drawn.
 
-    ``bbox`` is the documented spatial filter and is tried first. Some
-    deployments of this endpoint reject it; rather than lose the product, fall
-    back to the station-and-radius form, which is the shape the published
-    examples all use. The route geometry filters the result either way, so a
-    slightly wider answer costs nothing.
+    Asked for as GeoJSON, which is the format that actually answers:
+    ``?format=geojson&age=3&bbox=...`` returns a FeatureCollection, while the
+    ``format=json`` this used to send is what made the PIREP fetch fail on every
+    single request - and, before failures were judged by what they cost, put a
+    banner on the page every time.
+
+    ``bbox`` is the documented spatial filter and is tried first. The
+    station-and-radius fallback is insurance rather than a known need: this feed
+    is the only source of a PIREP's *position*, so it is worth a second shape
+    rather than losing the product to one rejected parameter. The route geometry
+    filters the result either way, so a wider answer costs nothing.
     """
     box = ",".join(f"{v:.3f}" for v in bbox)
     try:

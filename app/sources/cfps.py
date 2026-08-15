@@ -208,11 +208,12 @@ async def area(alpha: str, sites: list[str]) -> list[dict]:
     """Raw CFPS items for an area product (``sigmet`` / ``airmet`` / ``pirep``).
 
     Goes through the same ``site=``-keyed request the METAR, TAF and NOTAM
-    products use, because that contract is the one demonstrably working against
-    this API. The area products previously used a ``point=lat,lon`` parameter
-    that nothing else here uses and that has never been confirmed to exist -
-    which is the likeliest reason the route page kept reporting the SIGMET fetch
-    as failed, and reported no advisories when it did not.
+    products use. That contract is confirmed against the live API - it answers
+    ``{"meta": {...}, "data": [...]}`` for ``?alpha=sigmet&site=CZYZ&site=CZUL``
+    and is what puts PIREPs on the route card. The area products previously used
+    a ``point=lat,lon`` parameter that nothing else here uses, which is why the
+    page kept reporting the SIGMET fetch as failed and showed no advisories when
+    it did not.
 
     The route's aerodromes and the FIR list are two separate requests on purpose:
     ``_fetch`` chunks in input order, so a single ident CFPS rejects would
