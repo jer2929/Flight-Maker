@@ -1,10 +1,41 @@
+/* Breakpoints. Two, plus one exception:
+     780px - layout: multi-column blocks collapse to one column
+     560px - density: multi-column rows collapse (checklist, hourly, TAF)
+     480px - the header only: logo + aircraft picker + clock cannot share a line */
 :root {
   --go: #1f8a4c; --mitigate: #c98a00; --nogo: #c0392b;
-  /* --go is a fill/border colour; against the dark panel it is too dark to read
-     as text, so green *text* uses this lighter tint. */
-  --go-ink: #5fd08a;
+  /* The verdict colours above are fills and borders; against the dark panel they
+     are too dark to read as text, so verdict *text* uses these lighter tints. */
+  --go-ink: #6ee7a0; --mit-ink: #f5c451; --nogo-ink: #ff9b8f;
+  --taf-ink: #8fbcff;
   --bg: #0f1419; --panel: #1a2129; --ink: #e6edf3; --muted: #8b98a5;
   --line: #2a3540; --accent: #3b82f6;
+
+  /* Page frame */
+  --page: 1000px;
+  --gutter: 20px;
+
+  /* Spacing scale */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+
+  /* One text-x for every block. A block with a state bar pays for the bar out of
+     its own padding, so barred and unbarred blocks start their text at the same x. */
+  --pad-x: 16px; --pad-y: 12px;
+  --state-bar: 3px;
+  --pad-x-bar: calc(var(--pad-x) - var(--state-bar));
+  --row-inset: 8px;                          /* rows nested inside a block */
+  --row-pad-x: calc(var(--row-inset) - var(--state-bar));
+
+  --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-pill: 999px;
+
+  --fs-2xs: .7rem; --fs-xs: .78rem; --fs-sm: .84rem;
+  --fs-md: .9rem;  --fs-lg: .95rem; --fs-xl: 1.05rem;
+
+  /* The checklist column template. Declared once here so every .chk resolves the
+     same edges - see the .chk rule for why none of these tracks may be `auto`. */
+  --chk-mark: 1.25rem;
+  --chk-lim: 7.5rem;
+  --chk-cols: var(--chk-mark) minmax(0, 1.2fr) minmax(0, 1fr) var(--chk-lim);
 }
 * { box-sizing: border-box; }
 /* overflow-x: clip (not hidden) stops sideways scroll without creating a scroll
@@ -145,9 +176,9 @@ select, input[type=text], .route-inputs input {
 .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .card-head h3 { margin: 0; font-size: 1.05rem; }
 .badge { font-weight: 700; padding: 3px 10px; border-radius: 999px; font-size: .8rem; }
-.badge.GO { background: rgba(31,138,76,.2); color: #6ee7a0; }
-.badge.MITIGATE { background: rgba(201,138,0,.2); color: #f5c451; }
-.badge.NOGO { background: rgba(192,57,43,.2); color: #ff9b8f; }
+.badge.GO { background: rgba(31,138,76,.2); color: var(--go-ink); }
+.badge.MITIGATE { background: rgba(201,138,0,.2); color: var(--mit-ink); }
+.badge.NOGO { background: rgba(192,57,43,.2); color: var(--nogo-ink); }
 .meta { color: var(--muted); font-size: .85rem; margin: 6px 0; display: flex; gap: 14px; flex-wrap: wrap; }
 .reasons { margin: 4px 0 0; padding-left: 18px; font-size: .86rem; }
 .reasons li { margin: 2px 0; }
@@ -173,8 +204,8 @@ select, input[type=text], .route-inputs input {
 }
 .why-raw-tag { font-family: var(--font, inherit); font-style: italic; margin-right: 6px; }
 .raw { color: var(--muted); font-family: ui-monospace, monospace; font-size: .76rem; margin-top: 8px; word-break: break-word; }
-.ok-line { color: #6ee7a0; font-size: .9rem; margin: 6px 0; }
-.meta .warn { color: #ff9b8f; }
+.ok-line { color: var(--go-ink); font-size: .9rem; margin: 6px 0; }
+.meta .warn { color: var(--nogo-ink); }
 .control.checkbox { flex-direction: row; align-items: center; gap: 6px; }
 
 /* At-a-glance decision checklist */
@@ -189,10 +220,10 @@ select, input[type=text], .route-inputs input {
 .chk .lbl { color: var(--ink); }
 .chk .act { color: var(--muted); text-align: right; }
 .chk .lim { color: var(--muted); font-size: .8rem; min-width: 86px; text-align: right; }
-.chk.pass { border-left-color: var(--go); } .chk.pass .mark { color: #6ee7a0; }
-.chk.fail { border-left-color: var(--nogo); background: rgba(192,57,43,.08); } .chk.fail .mark { color: #ff9b8f; }
+.chk.pass { border-left-color: var(--go); } .chk.pass .mark { color: var(--go-ink); }
+.chk.fail { border-left-color: var(--nogo); background: rgba(192,57,43,.08); } .chk.fail .mark { color: var(--nogo-ink); }
 .chk.fail .lbl { font-weight: 600; }
-.chk.advisory { border-left-color: var(--mitigate); } .chk.advisory .mark { color: #f5c451; }
+.chk.advisory { border-left-color: var(--mitigate); } .chk.advisory .mark { color: var(--mit-ink); }
 .chk.na { opacity: .5; }
 .chk a { color: var(--accent); }
 
@@ -206,18 +237,18 @@ select, input[type=text], .route-inputs input {
 .notam-text { white-space: pre-wrap; }
 .notam-status { font-size: .68rem; font-weight: 700; padding: 1px 7px; border-radius: 999px;
   text-transform: uppercase; letter-spacing: .03em; }
-.notam-status.active { background: rgba(46,160,67,.18); color: #6ee7a0; border: 1px solid #2ea043; }
-.notam-status.upcoming { background: rgba(201,138,0,.15); color: #f5c451; border: 1px solid #c98a00; }
+.notam-status.active { background: rgba(46,160,67,.18); color: var(--go-ink); border: 1px solid #2ea043; }
+.notam-status.upcoming { background: rgba(201,138,0,.15); color: var(--mit-ink); border: 1px solid #c98a00; }
 .notam-status.expired { background: rgba(139,152,165,.12); color: var(--muted); border: 1px solid var(--line); }
 .notam-when { font-size: .72rem; color: var(--muted); }
 
 /* source chips */
 .src { font-size: .68rem; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--line); }
 .blend { font-size: .66rem; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--accent);
-  color: #8fbcff; margin-left: 4px; cursor: help; }
-.src.OBSERVED { color: #6ee7a0; border-color: var(--go); }
-.src.TAF { color: #8fbcff; border-color: var(--accent); }
-.src.HRDPS { color: #f5c451; border-color: var(--mitigate); }
+  color: var(--taf-ink); margin-left: 4px; cursor: help; }
+.src.OBSERVED { color: var(--go-ink); border-color: var(--go); }
+.src.TAF { color: var(--taf-ink); border-color: var(--accent); }
+.src.HRDPS { color: var(--mit-ink); border-color: var(--mitigate); }
 
 /* A chip you can open. Same pill as the plain one - it must still read as a
    provenance label first - with a caret to say there is more behind it. */
@@ -270,16 +301,16 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 /* The ETD this card was assessed for, beside the aerodrome it applies to. */
 .planned-etd {
   margin-left: 8px; font-size: .74rem; font-weight: 600; white-space: nowrap;
-  color: #8fbcff; border: 1px solid var(--accent); border-radius: 999px;
+  color: var(--taf-ink); border: 1px solid var(--accent); border-radius: 999px;
   padding: 1px 8px; vertical-align: middle;
 }
 .planned-etd .pe-arrow { opacity: .7; }
 
 /* big route verdict banner */
 .verdict-banner { max-width: 1000px; margin: 14px auto; padding: 14px 18px; border-radius: 12px; font-weight: 700; }
-.verdict-banner.GO { background: rgba(31,138,76,.18); border: 1px solid var(--go); color: #6ee7a0; }
-.verdict-banner.MITIGATE { background: rgba(201,138,0,.18); border: 1px solid var(--mitigate); color: #f5c451; }
-.verdict-banner.NOGO { background: rgba(192,57,43,.18); border: 1px solid var(--nogo); color: #ff9b8f; }
+.verdict-banner.GO { background: rgba(31,138,76,.18); border: 1px solid var(--go); color: var(--go-ink); }
+.verdict-banner.MITIGATE { background: rgba(201,138,0,.18); border: 1px solid var(--mitigate); color: var(--mit-ink); }
+.verdict-banner.NOGO { background: rgba(192,57,43,.18); border: 1px solid var(--nogo); color: var(--nogo-ink); }
 .verdict-banner small { display: block; font-weight: 400; color: var(--muted); margin-top: 4px; }
 
 /* timeline */
@@ -354,7 +385,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
    thing. Only the active half moves now. */
 
 /* checklist location + source chips */
-.chk .act .loc { color: #8fbcff; }
+.chk .act .loc { color: var(--taf-ink); }
 .chk .act .src-mini { font-size: .68rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 5px; }
 
 /* runway lines + components */
@@ -403,7 +434,7 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .wr-legend { fill: var(--muted); font-family: system-ui, sans-serif; }
 @media (max-width: 480px) { .rwy-wrap { flex-direction: column; gap: 6px; } }
 .ppr { font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
-  color: #f5c451; border: 1px solid var(--mitigate); border-radius: 999px; padding: 1px 7px; vertical-align: middle; }
+  color: var(--mit-ink); border: 1px solid var(--mitigate); border-radius: 999px; padding: 1px 7px; vertical-align: middle; }
 .nearby { margin: 6px 0; font-size: .84rem; color: var(--ink); background: rgba(255,255,255,.03);
   border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 .nearby .nlabel { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; }
@@ -414,7 +445,7 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .advisories summary { cursor: pointer; font-weight: 600; }
 .adv { margin: 6px 0; padding: 6px 8px; background: rgba(201,138,0,.08); border-left: 3px solid var(--mitigate);
   border-radius: 6px; font-family: ui-monospace, monospace; font-size: .78rem; word-break: break-word; }
-.adv-k { font-weight: 700; color: #f5c451; margin-right: 6px; }
+.adv-k { font-weight: 700; color: var(--mit-ink); margin-right: 6px; }
 .adv > summary { cursor: pointer; list-style: revert; }
 .adv-text { margin: 6px 0 4px; padding: 8px; white-space: pre-wrap; word-break: break-word;
   font-family: ui-monospace, monospace; font-size: .76rem; background: rgba(0,0,0,.18); border-radius: 5px; }
@@ -451,7 +482,7 @@ details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem
   border: 1px solid var(--nogo); border-left: 6px solid var(--nogo);
   background: rgba(192, 57, 43, .12);
 }
-.fetch-fail-title { font-weight: 700; color: #ff9b8f; margin-bottom: 4px; }
+.fetch-fail-title { font-weight: 700; color: var(--nogo-ink); margin-bottom: 4px; }
 .fetch-fail p { margin: 0; font-size: .88rem; }
 .fetch-fail .reasons { margin: 6px 0 0; font-size: .86rem; }
 .fetch-detail { margin-top: 6px; font-size: .8rem; }
@@ -465,8 +496,8 @@ details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem
 .fetch-retry:hover { filter: brightness(1.12); }
 /* The in-place version, where a section would otherwise render an empty state
    that reads as a finding ("no favourable window") rather than a missing pull. */
-.empty.fetch-empty { color: #ff9b8f; }
-.age.stale { color: #ff9b8f; font-weight: 600; }
+.empty.fetch-empty { color: var(--nogo-ink); }
+.age.stale { color: var(--nogo-ink); font-weight: 600; }
 .age.fresh { color: #6fcf97; font-weight: 600; }
 details.mhist { margin: 6px 0; font-size: .82rem; }
 details.mhist summary { cursor: pointer; color: var(--accent); }
@@ -492,7 +523,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .mit-block h3 { margin: 0 0 12px; font-size: .95rem; }
 .mit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 .mit-section { background: rgba(201,138,0,.08); border: 1px solid var(--mitigate); border-radius: 8px; padding: 10px 12px; }
-.mit-label { font-weight: 600; color: #f5c451; font-size: .85rem; margin-bottom: 6px; }
+.mit-label { font-weight: 600; color: var(--mit-ink); font-size: .85rem; margin-bottom: 6px; }
 .mit-list { margin: 0; padding-left: 16px; font-size: .83rem; color: var(--ink); }
 .mit-list li { margin: 3px 0; }
 
@@ -530,7 +561,7 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .set-group legend { color: var(--muted); font-size: .84rem; padding: 0 6px; }
 .set-hint { color: var(--muted); font-size: .82rem; margin: 4px 0 10px; }
 .set-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
-.set-status { color: #6ee7a0; font-size: .85rem; }
+.set-status { color: var(--go-ink); font-size: .85rem; }
 
 /* VFR/IFR weather-minimums card - tabs stick out of the top of the bubble */
 .rule-card { margin-bottom: 16px; }
@@ -562,9 +593,9 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
   font-size: .85rem; color: var(--muted); padding: 8px 10px; border-radius: 6px;
   background: rgba(255,255,255,.04); border: 1px solid var(--line); margin-bottom: 8px;
 }
-.min-banner.custom { color: #f5c451; background: rgba(201,138,0,.08); border-color: var(--mitigate); }
+.min-banner.custom { color: var(--mit-ink); background: rgba(201,138,0,.08); border-color: var(--mitigate); }
 .chk.custom { border-left-color: var(--mitigate); background: rgba(201,138,0,.06); }
-.chk.custom .mark { color: #f5c451; }
+.chk.custom .mark { color: var(--mit-ink); }
 
 /* Radar panel (Leaflet + GeoMet WMS) */
 .radar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -586,7 +617,8 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .hz-pop pre { margin: 6px 0; padding: 6px; max-height: 180px; overflow: auto;
   white-space: pre-wrap; word-break: break-word; font-size: .72rem;
   background: rgba(0,0,0,.25); border-radius: 5px; }
-.leaflet-popup-content-wrapper { background: var(--panel); color: var(--fg); }
+/* --fg was never defined anywhere, so the popup text fell back to inheritance. */
+.leaflet-popup-content-wrapper { background: var(--panel); color: var(--ink); }
 .leaflet-popup-tip { background: var(--panel); }
 .radar-controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .radar-play { background: var(--accent); color: #fff; border: none; border-radius: 8px;
@@ -669,7 +701,7 @@ details.taf summary { cursor: pointer; color: var(--accent); }
    but takes an amber edge: it is a possibility to weigh, not a limit that fails
    the card by itself. */
 .taf-p.in.prob { border-left-color: var(--mitigate); }
-.taf-p .taf-k { color: #8fbcff; }        /* matches the .src.TAF chip */
+.taf-p .taf-k { color: var(--taf-ink); }        /* matches the .src.TAF chip */
 .taf-p.overlay .taf-k { font-style: italic; }
 .taf-p .taf-t { color: var(--muted); }
 .taf-p.in .taf-k, .taf-p.in .taf-t, .taf-p.in .taf-x { color: var(--go-ink); }
@@ -695,4 +727,4 @@ details.enroute > summary { cursor: pointer; color: var(--accent); font-size: .9
 .cl-more > summary::-webkit-details-marker { display: none; }
 .cl-more > summary::before { content: "▸ "; }
 .cl-more[open] > summary::before { content: "▾ "; }
-.cl-clean { color: #6ee7a0; font-size: .88rem; padding: 4px 6px; }
+.cl-clean { color: var(--go-ink); font-size: .88rem; padding: 4px 6px; }
