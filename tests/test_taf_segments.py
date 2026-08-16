@@ -10,6 +10,7 @@ from app.services.weather import (
     period_label,
     taf_periods,
     worst_in_window,
+    zulu_range,
 )
 
 NOW = datetime.now(timezone.utc)
@@ -307,6 +308,33 @@ def test_period_label_marks_a_day_rollover():
     # A bare "1800Z-0000Z" reads as running backwards; the +1 says which day.
     main = [s for s in parse_taf_segments(TAF) if s["label"] == "FM"][0]
     assert period_label(main).endswith("+1")
+
+
+def test_zulu_range_leaves_a_same_day_span_alone():
+    day = datetime(2026, 8, 16, tzinfo=timezone.utc)
+    assert zulu_range(day.replace(hour=13, minute=53),
+                      day.replace(hour=14, minute=39)) == "1353Z-1439Z"
+
+
+def test_zulu_range_marks_a_span_that_crosses_midnight():
+    # The reported case: "2000Z-0300Z" reads as running backwards without it.
+    start = datetime(2026, 8, 16, 20, 0, tzinfo=timezone.utc)
+    assert zulu_range(start, start + timedelta(hours=7)) == "2000Z-0300Z+1"
+
+
+def test_zulu_range_counts_dates_not_elapsed_hours():
+    # 30 minutes long, but it lands on the next date - so it is a +1. The suffix
+    # answers "which day does this end on", not "how long is it".
+    start = datetime(2026, 8, 16, 23, 45, tzinfo=timezone.utc)
+    assert zulu_range(start, start + timedelta(minutes=30)) == "2345Z-0015Z+1"
+    # And the converse: 23 hours inside one UTC date carries no suffix.
+    start = datetime(2026, 8, 16, 0, 30, tzinfo=timezone.utc)
+    assert zulu_range(start, start + timedelta(hours=23)) == "0030Z-2330Z"
+
+
+def test_zulu_range_counts_multiple_days():
+    start = datetime(2026, 8, 16, 18, 0, tzinfo=timezone.utc)
+    assert zulu_range(start, start + timedelta(days=2)) == "1800Z-1800Z+2"
 
 
 def test_segments_keep_main_as_their_internal_label():

@@ -389,6 +389,44 @@ const utcDate = (t) => {
   return isNaN(d) ? null : d;
 };
 
+// Whole UTC calendar days from `a` to `b` - "which day does this land on", not
+// "how many hours apart". The day-ahead prefix and the +N rollover marker both
+// ask that one question, so they share one answer.
+const utcDayDiff = (a, b) => Math.round(
+  (Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate())
+    - Date.UTC(a.getUTCFullYear(), a.getUTCMonth(), a.getUTCDate())) / 86400000);
+
+// Days the end of a span runs past its start; 0 when it stays on one UTC date.
+const dayDiff = (fromIso, toIso) => {
+  const a = utcDate(fromIso), b = utcDate(toIso);
+  return a && b ? utcDayDiff(a, b) : 0;
+};
+
+// A Zulu span, mirroring the backend's `weather.zulu_range`: "2000Z-0300Z+1".
+// A span routinely runs past midnight Z, and a bare "2000Z-0300Z" reads as
+// running backwards. Plain text - `supDays` raises the +N once, at render time.
+const zRange = (fromIso, toIso) => {
+  const n = dayDiff(fromIso, toIso);
+  return `${zHM(fromIso)}-${zHM(toIso)}${n > 0 ? `+${n}` : ""}`;
+};
+
+// Raise a rollover marker into a superscript, so "+1" reads as an annotation on
+// the time rather than part of it. Anchored on a four-digit Zulu time, so it
+// cannot touch other "+N" text - etdLabel's "· +21 min" is left alone. Only
+// ever run on already-escaped text, and only ever inserts this one known tag,
+// so it cannot introduce markup the escape just removed.
+const supDays = (s) => s.replace(/(\d{4}Z)\+(\d+)/g, "$1<sup>+$2</sup>");
+// Escaped for HTML with any +N raised: for server text that can carry a span.
+const zText = (s) => supDays(escapeHtml(s));
+
+// The arriving end of a span, marker already raised. The arrow forms
+// ("ETD 2330Z → ETA 0115Z+1") are not "A-B" ranges, but they ask the same
+// question of the same two times. Returns HTML - these sites build their own.
+const zEnd = (fromIso, toIso) => {
+  const n = dayDiff(fromIso, toIso);
+  return supDays(`${zHM(toIso)}${n > 0 ? `+${n}` : ""}`);
+};
+
 // Quarter-hour granularity for the first few hours, because that is the
 // resolution people actually plan a departure at - the old list jumped straight
 // from "Now" to the next whole hour, so at 1424Z a flight leaving in twenty
@@ -401,8 +439,7 @@ const etdValue = (d) => `${d.toISOString().slice(0, 16)}Z`;
 
 // "Today" / "Tomorrow" / "Thu", by UTC date difference.
 function dayPrefix(d, now) {
-  const diff = Math.round((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
-    - Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) / 86400000);
+  const diff = utcDayDiff(now, d);
   if (diff === 0) return "Today";
   if (diff === 1) return "Tomorrow";
   return d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" });
@@ -1259,7 +1296,9 @@ function renderCircuits(r) {
 // highlight answers "what will I fly through", not "what is it doing there at
 // one instant".
 function winLabel(win) {
-  return win ? `your flight (${zHM(win.etd_utc)}-${zHM(win.eta_utc)})` : "";
+  // Plain text: this is handed to `tafBlock`, which escapes it - `zText` there
+  // raises the +N.
+  return win ? `your flight (${zRange(win.etd_utc, win.eta_utc)})` : "";
 }
 
 function clearRoute() {
@@ -1292,7 +1331,7 @@ function renderRoute(r) {
 
   const alt = r.altitude;
   $("#route-summary").innerHTML = `<div class="panel meta">
-      ${win ? `<span title="Conditions are assessed for this window">🕐 ETD ${zHM(win.etd_utc)} → ETA ${zHM(win.eta_utc)}${win.eta_provisional ? " (est.)" : ""}</span>` : ""}
+      ${win ? `<span title="Conditions are assessed for this window">🕐 ETD ${zHM(win.etd_utc)} → ETA ${zEnd(win.etd_utc, win.eta_utc)}${win.eta_provisional ? " (est.)" : ""}</span>` : ""}
       <span>📏 ${r.distance_nm} nm · course ${dirM(r.bearing_mag, r.bearing_true)}</span>
       <span>⏱ ${fmtHrMin(r.flight_time_hr)}</span>
       ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud">⬆ Best alt ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
@@ -1397,7 +1436,7 @@ function rowCheck(c) {
     bits.push(`<span class="loc">@ ${escapeHtml(c.location)}</span>`);
   }
   if (c.source && c.source !== "-") {
-    const detail = c.source_detail ? ` ${escapeHtml(c.source_detail)}` : "";
+    const detail = c.source_detail ? ` ${zText(c.source_detail)}` : "";
     const label = `${escapeHtml(c.source)}${detail}`;
     // "CYCK METAR, 18 nm" names the report a row was decided by; the pilot's
     // next question is what that report actually said. Where we have the text,
@@ -1423,9 +1462,9 @@ function rowCheck(c) {
   const sub = bits.length ? `<span class="sub">${bits.join(" ")}</span>` : "";
   return `<div class="chk ${state}">
     <span class="mark">${mark}</span>
-    <span class="lbl">${escapeHtml(c.label)}</span>
-    <span class="val"><span class="act">${escapeHtml(c.actual_text)}</span>${sub}</span>
-    <span class="lim">${escapeHtml(c.limit_text)}</span></div>`;
+    <span class="lbl">${zText(c.label)}</span>
+    <span class="val"><span class="act">${zText(c.actual_text)}</span>${sub}</span>
+    <span class="lim">${zText(c.limit_text)}</span></div>`;
 }
 function rowThreat(t) {
   // Same four cells as rowCheck, so threat rows share the checklist's columns.
@@ -1628,9 +1667,9 @@ function tafBlock(w, timeLabel) {
   const advisory = ps.some((p) => p.in_window && !p.gates);
   let note;
   if (!covered) {
-    note = `${escapeHtml(label)} is outside this TAF (valid ${zHM(w.taf_valid_from)}-${zHM(w.taf_valid_to)})`;
+    note = `${zText(label)} is outside this TAF (valid ${supDays(zRange(w.taf_valid_from, w.taf_valid_to))})`;
   } else {
-    note = `green = happens during ${escapeHtml(label)}`;
+    note = `green = happens during ${zText(label)}`;
     if (advisory) note += " · amber edge = only a chance, not counted against your limits";
   }
   return `<details class="taf" open><summary>TAF <span class="hint">${note}</span></summary>
@@ -1639,11 +1678,6 @@ function tafBlock(w, timeLabel) {
 }
 
 function tafRow(p) {
-  // A TAF period routinely runs past midnight Z, and a bare "1800Z-1400Z" reads
-  // backwards. Mark the rollover so the range stays unambiguous.
-  const days = Math.round(
-    (Date.parse(p.end.slice(0, 10)) - Date.parse(p.start.slice(0, 10))) / 86400000);
-  const end = `${zHM(p.end)}${days > 0 ? `<sup>+${days}</sup>` : ""}`;
   // A PROB30/40 you fly through is still green - it happens during the flight -
   // but carries an amber edge, because it is a possibility to weigh rather than
   // a limit that fails the card on its own.
@@ -1655,7 +1689,7 @@ function tafRow(p) {
   ].filter(Boolean).join(" ");
   return `<div class="${cls}">
     <span class="taf-k">${escapeHtml(p.label || "")}</span>
-    <span class="taf-t">${zHM(p.start)}-${end}</span>
+    <span class="taf-t">${supDays(zRange(p.start, p.end))}</span>
     <span class="taf-x">${escapeHtml(p.text || "")}</span></div>`;
 }
 
@@ -2099,7 +2133,7 @@ function reasonLine(c) {
 // they are not always the same one, which is the point.
 function whySource(c) {
   if (!c.source || c.source === "-") return "";
-  const detail = c.source_detail ? ` · ${escapeHtml(c.source_detail)}` : "";
+  const detail = c.source_detail ? ` · ${zText(c.source_detail)}` : "";
   return `<div class="why-src">from ${escapeHtml(c.source)}${detail}</div>`;
 }
 
@@ -2118,7 +2152,7 @@ function whyRaw(checks) {
     // TEMPO its bare "27010KT P6SM OVC012" is anonymous - so that one is named.
     const token = (label || "").split(" ")[0].toUpperCase();
     const named = token && text.toUpperCase().startsWith(token);
-    const tag = named || !label ? "" : `<span class="why-raw-tag">${escapeHtml(label)}</span>`;
+    const tag = named || !label ? "" : `<span class="why-raw-tag">${zText(label)}</span>`;
     return `<div class="why-raw">${tag}${escapeHtml(text)}</div>`;
   }).join("");
 }
@@ -2148,7 +2182,7 @@ function whyBlock(a) {
   if (limits.length) {
     parts.push(`<div class="why-group"><span class="why-h">Over your limits</span>
       <ul class="reasons">${limits.map((c) =>
-        `<li>${escapeHtml(reasonLine(c))}${whySource(c)}</li>`).join("")}</ul>
+        `<li>${zText(reasonLine(c))}${whySource(c)}</li>`).join("")}</ul>
       ${whyRaw(limits)}</div>`);
   }
   if (threats.length) {
@@ -2159,7 +2193,7 @@ function whyBlock(a) {
   }
   if (advisories.length) {
     parts.push(`<div class="why-group"><span class="why-h">Advisory - not counted against your limits</span>
-      <ul class="reasons">${advisories.map((c) => `<li>${escapeHtml(c.label)}: ${escapeHtml(c.actual_text)}</li>`).join("")}</ul></div>`);
+      <ul class="reasons">${advisories.map((c) => `<li>${zText(c.label)}: ${zText(c.actual_text)}</li>`).join("")}</ul></div>`);
   }
   if (!parts.length) {
     // Reached only if the engine downgraded a verdict without attaching a row
@@ -2178,7 +2212,7 @@ function whyBlock(a) {
 // up to the dropdown. Omitted on a "Now" scan, where the answer is "now".
 function plannedEtd(a) {
   if (!a.etd_utc || isNowEtd("#d-etd")) return "";
-  const eta = a.eta_utc ? ` <span class="pe-arrow">→</span> ETA ${zHM(a.eta_utc)}` : "";
+  const eta = a.eta_utc ? ` <span class="pe-arrow">→</span> ETA ${zEnd(a.etd_utc, a.eta_utc)}` : "";
   return `<span class="planned-etd" title="Assessed for this window - your ETD, and this aerodrome's own ETA">Planned ETD ${zHM(a.etd_utc)}${eta}</span>`;
 }
 
@@ -2289,7 +2323,7 @@ function tafPopBody(a) {
   const w = a.weather || {};
   return `<div class="wx-pop-head">
       <strong>TAF ${escapeHtml(a.airport.ident)}</strong>
-      <span class="hint">${w.taf_valid_from ? `valid ${zHM(w.taf_valid_from)}-${zHM(w.taf_valid_to)}` : ""}</span>
+      <span class="hint">${w.taf_valid_from ? `valid ${supDays(zRange(w.taf_valid_from, w.taf_valid_to))}` : ""}</span>
       ${wxPopClose()}
     </div>
     ${tafBlock(w, wxPopWindowLabel(a))}`;
@@ -2336,7 +2370,7 @@ function cloudWord(h) {
 // The span the green marks, named the same way the route cards name it.
 function wxPopWindowLabel(a) {
   if (!a.etd_utc) return "your flight";
-  return `your flight (${zHM(a.etd_utc)}-${zHM(a.eta_utc)})`;
+  return `your flight (${zRange(a.etd_utc, a.eta_utc)})`;
 }
 
 // The raw report behind a checklist row's source chip, verbatim. No decoding

@@ -152,3 +152,39 @@ def test_now_path_is_unchanged(upstreams):
     r = _assess(None)
     assert r.window.is_now
     assert r.departure.weather.source.value == "Observed"
+
+
+# --- The +N day-rollover marker on the spans these rows print ---------------
+# Fixed dates, no upstreams: these two helpers are pure, and anchoring them to
+# "now" would only exercise the rollover on the handful of runs that happen to
+# straddle midnight Z.
+
+def test_the_out_of_window_period_marks_a_midnight_rollover():
+    """The reported bug: "thunderstorm at CYXU 2000Z-0300Z" reads backwards.
+
+    Every other TAF span in the app already carried the +1 - this one was built
+    from a bare Zulu formatter instead of the shared range helper.
+    """
+    day = datetime(2026, 8, 16, tzinfo=timezone.utc)
+    storm = {
+        "kind": "overlay", "label": "TEMPO",
+        "start": day.replace(hour=20),
+        "end": day + timedelta(days=1, hours=3),
+        "cond": {"hazards": ["thunderstorm"]},
+    }
+    _, outside, _ = orchestrator._window_hazards(
+        [], [storm],
+        day.replace(hour=13, minute=53), day.replace(hour=14, minute=39),
+        dest_ident="CYXU")
+    assert [o["when"] for o in outside] == ["2000Z-0300Z+1"]
+
+
+def test_the_flight_window_label_marks_its_own_rollover():
+    # The other half of the same sentence: "outside your 2330Z-0115Z+1 window".
+    etd = datetime(2026, 8, 16, 23, 30, tzinfo=timezone.utc)
+    assert orchestrator._window_label(
+        etd, etd + timedelta(hours=1, minutes=45)) == "2330Z-0115Z+1"
+    # A flight that stays on one UTC date is left unmarked.
+    etd = datetime(2026, 8, 16, 13, 53, tzinfo=timezone.utc)
+    assert orchestrator._window_label(
+        etd, etd + timedelta(minutes=46)) == "1353Z-1439Z"
