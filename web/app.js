@@ -84,6 +84,18 @@ const THREAT_MITIGATIONS = {
     label: "Icing risk",
     items: ["Know the freezing level", "Identify warm and cold layers", "Exit immediately - usually descend"],
   },
+  // The two per-flight ticks had no entry here, so a MITIGATE driven by one of
+  // them rendered an empty "Threat mitigation reference" - a heading over nothing.
+  unfamiliar_or_complex_airspace: {
+    label: "Unfamiliar / complex airspace",
+    items: ["Study the VTA and CFS entry before start-up", "Frequencies and transition routes written down",
+            "Call well back - ask for progressive taxi", "Pick a hold-off point to orbit if it gets busy"],
+  },
+  terrain_critical: {
+    label: "Terrain",
+    items: ["Know the highest obstacle within 10 nm of track", "Set a hard minimum en-route altitude",
+            "Plan the escape turn before you need it", "Cross ridges at an angle, never square on"],
+  },
 };
 
 // ---------- Storage ----------

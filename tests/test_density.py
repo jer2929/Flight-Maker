@@ -119,7 +119,7 @@ def test_a_density_altitude_advisory_never_moves_the_verdict():
         source=Source.OBSERVED, temp_c=35, altimeter_inhg=29.92)
     rw = RunwayWind(runway_ident="05", heading_true=50, headwind_kt=4, crosswind_kt=3,
                     tailwind_kt=0)
-    verdict, checks, _threats, _n = decision(weather, rw, "day", False, [])
+    verdict, checks, _threats, _n = decision(weather, rw, "day", [])
     row = density.advisory_row(density.solve(CYFD_ELEV, 29.92, 35))
     assert row is not None
     checks = checks + [row]

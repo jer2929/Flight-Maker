@@ -313,7 +313,6 @@ async def airport_detail(ident: str):
     return {
         "airport": airport.model_dump(),
         "runways": [r.model_dump() for r in ap.get_runways(ident)],
-        "complex_airspace": ap.is_complex_airspace(ident),
     }
 
 

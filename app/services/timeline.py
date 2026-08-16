@@ -331,7 +331,6 @@ def build_timeline(
     runways_dep: list[Runway],
     runways_dest: list[Runway],
     manual_threats: list[str] | None = None,
-    is_complex: bool = False,
     hours: int = 48,
     dep_ident: str = "dep",
     dest_ident: str = "dest",
@@ -391,7 +390,7 @@ def build_timeline(
         )
         mode = "day" if daylight else "night"
         hour_threats = base_threats if daylight else base_threats + ["night_operations"]
-        verdict, reasons, _ = evaluate(ws, rw, mode, is_complex, hour_threats)
+        verdict, reasons, _ = evaluate(ws, rw, mode, hour_threats)
 
         wind_dir_mag = None
         if ws.wind_dir_true is not None and w_lat is not None:

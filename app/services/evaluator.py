@@ -456,7 +456,6 @@ def wind_threat_thresholds() -> tuple[float, float]:
 
 def derive_threats(
     weather: WeatherSummary,
-    is_complex_airspace: bool,
     manual_threats: list[str] | None = None,
     flight_rules: str = "vfr",
 ) -> set[str]:
@@ -497,8 +496,10 @@ def derive_threats(
     # only IFR flights count it, and only when the pilot has opted in.
     if imc and flight_rules == "ifr" and get_limits().get("ifr_minimums", {}).get("imc_as_threat"):
         threats.add("actual_imc")
-    if is_complex_airspace:
-        threats.add("unfamiliar_or_complex_airspace")
+    # Unfamiliar / complex airspace is NOT derived from the aerodrome. It used to be
+    # added here for a hardcoded list of busy fields, which flagged every pilot alike -
+    # including the ones who fly into them weekly, for whom it is the opposite of
+    # unfamiliar. It is pilot-relative, so it arrives only as a manual threat above.
     # Night reaches here as a manual threat, set from the day/night toggle. Pilots
     # differ on whether it belongs in the stack at all, so it is opt-out - and
     # dropping it here covers every path that could have added it. This does not
@@ -556,7 +557,6 @@ def decision(
     weather: WeatherSummary,
     best_runway: RunwayWind | None,
     mode: str,
-    is_complex_airspace: bool,
     manual_threats: list[str] | None = None,
     extra_checks: list[LimitCheck] | None = None,
     ceiling_mode: str = "xc",
@@ -565,7 +565,7 @@ def decision(
     """Structured decision. ``extra_checks`` lets the route add weather-hazard
     rows (icing/turbulence/etc.) computed elsewhere."""
     checks = conditions_checks(weather, best_runway, mode, ceiling_mode=ceiling_mode, flight_rules=flight_rules) + (extra_checks or [])
-    present = derive_threats(weather, is_complex_airspace, manual_threats, flight_rules=flight_rules)
+    present = derive_threats(weather, manual_threats, flight_rules=flight_rules)
     tchecks = threat_check_list(present)
     weighted = threat_weight(present)
 
@@ -578,16 +578,15 @@ def evaluate(
     weather: WeatherSummary,
     best_runway: RunwayWind | None,
     mode: str,
-    is_complex_airspace: bool,
     manual_threats: list[str] | None = None,
     flight_rules: str = "vfr",
 ) -> tuple[Verdict, list[str], int]:
     """Legacy tuple form used by the timeline: (verdict, reasons, count)."""
     verdict, checks, _t, count = decision(
-        weather, best_runway, mode, is_complex_airspace, manual_threats, flight_rules=flight_rules)
+        weather, best_runway, mode, manual_threats, flight_rules=flight_rules)
     reasons = [f"{c.label} {c.actual_text} (limit {c.limit_text})"
                for c in checks if not c.passed and c.applicable]
-    present = derive_threats(weather, is_complex_airspace, manual_threats, flight_rules=flight_rules)
+    present = derive_threats(weather, manual_threats, flight_rules=flight_rules)
     if present:
         reasons.append("Threat stack (%d): %s" % (
             count, ", ".join(THREAT_LABELS.get(t, t) for t in sorted(present))))
