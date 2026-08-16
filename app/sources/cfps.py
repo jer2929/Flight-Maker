@@ -53,18 +53,19 @@ async def _fetch(alpha: str, sites: list[str]) -> list[dict]:
                     raise r
         return data
 
-    key = f"cfps:{alpha}:{','.join(sorted(sites))}"
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-
     settings = get_settings()
-    params = [("alpha", alpha)] + [("site", s) for s in sites]
-    async with _limiter:
-        body = await _http.get_json(settings.cfps_base, params)
-    data = body.get("data", []) if isinstance(body, dict) else []
-    cache.put(key, data, settings.cfps_cache_ttl)
-    return data
+    key = f"cfps:{alpha}:{','.join(sorted(sites))}"
+
+    async def fetch() -> list[dict]:
+        params = [("alpha", alpha)] + [("site", s) for s in sites]
+        async with _limiter:
+            body = await _http.get_json(settings.cfps_base, params)
+        return body.get("data", []) if isinstance(body, dict) else []
+
+    # ``once`` rather than a bare get/put: the route's METAR and its METAR
+    # history are the same query issued from the same gather, so without it the
+    # pair always raced and always cost two round trips.
+    return await cache.once(key, settings.cfps_cache_ttl, fetch)
 
 
 def _text(item: dict) -> str:
@@ -327,30 +328,37 @@ async def gfa(site: str, debug: bool = False) -> dict:
     settings = get_settings()
     site = site.upper()
     key = f"cfps:gfa:{site}"
-    if not debug:
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
-    params = [("site", site), ("image", "GFA/CLDWX"), ("image", "GFA/TURBC")]
-    raw = await _http.get_json(settings.cfps_base, params)
-    data = raw.get("data", []) if isinstance(raw, dict) else []
-    region = None
-    for it in data:
-        if it.get("type") != "image":
-            continue
-        txt = it.get("text")
-        try:
-            obj = txt if isinstance(txt, dict) else json.loads(txt)
-            region = obj.get("geography") or region
-        except Exception:
-            pass
-        if region:
-            break
-    result = {"region": region, "products": _gfa_parse(data)}
-    if not debug:
-        cache.put(key, result, settings.cfps_cache_ttl)
+
+    async def fetch() -> tuple[dict, dict]:
+        """The parsed panel, and the raw payload behind it (for ``debug``)."""
+        params = [("site", site), ("image", "GFA/CLDWX"), ("image", "GFA/TURBC")]
+        raw = await _http.get_json(settings.cfps_base, params)
+        data = raw.get("data", []) if isinstance(raw, dict) else []
+        region = None
+        for it in data:
+            if it.get("type") != "image":
+                continue
+            txt = it.get("text")
+            try:
+                obj = txt if isinstance(txt, dict) else json.loads(txt)
+                region = obj.get("geography") or region
+            except Exception:
+                pass
+            if region:
+                break
+        return {"region": region, "products": _gfa_parse(data)}, raw
+
+    if debug:
+        result, raw = await fetch()
+        return {**result, "raw": raw}
+
+    # Only the parsed panel is cached; the raw payload is a diagnosis aid and a
+    # large one, and there is no reason to hold it for the TTL.
+    async def parsed() -> dict:
+        result, _raw = await fetch()
         return result
-    return {**result, "raw": raw}
+
+    return await cache.once(key, settings.cfps_cache_ttl, parsed)
 
 
 async def upperwind_raw(sites: list[str]) -> dict[str, str]:

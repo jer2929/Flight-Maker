@@ -172,6 +172,15 @@ select, input[type=text], .route-inputs input {
 }
 .primary:disabled { opacity: .5; cursor: not-allowed; }
 
+/* A run button and its elapsed-time readout, kept on one line together. */
+.run-row { display: flex; align-items: center; gap: 10px; }
+/* Tabular numerals because it ticks ten times a second and proportional digits
+   would make it jitter sideways while you watch it. */
+.run-timer {
+  color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* Route inputs + autocomplete */
 .route-inputs { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
 .ac { position: relative; display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 180px; }
@@ -481,6 +490,19 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .chk .sub .loc { color: var(--taf-ink); }
 .chk .sub .src-mini { color: var(--muted); border: 0; padding: 0; font-size: inherit; letter-spacing: .02em; }
 .chk .sub .src-mini[title] { cursor: help; }
+/* A source chip with the report behind it opens a popover, so it is a control
+   and points like one - overriding the [title] "help" cursor above, which this
+   chip still carries as its accessible hint. */
+.chk .sub button.src-mini { cursor: pointer; }
+
+/* The raw METAR/TAF a checklist row was decided by. Monospaced and wrapped
+   rather than scrolled: a TAF is several lines of fixed-width groups, and on a
+   phone a horizontal scrollbar would hide the half that matters. */
+.wx-raw {
+  margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .78rem; line-height: 1.5; color: var(--ink);
+  white-space: pre-wrap; word-break: break-word;
+}
 
 /* runway lines + components */
 .rwy-lines { font-size: .86rem; margin: 8px 0; display: grid; gap: 3px; }

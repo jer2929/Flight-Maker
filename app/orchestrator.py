@@ -203,7 +203,8 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
 
 def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
                           metar: str | None, taf_segs: list[dict],
-                          when: datetime, use_metar: bool) -> None:
+                          when: datetime, use_metar: bool,
+                          raw_taf: str | None = None) -> None:
     """Fold a real report from under the route into a model sample, in place.
 
     **Worst-of, and deliberately asymmetric.** An observed broken or overcast
@@ -221,10 +222,11 @@ def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
     """
     cond: dict | None = None
     kind = ""
+    text: str | None = None
     if use_metar and metar:
-        cond, kind = wx.parse_metar(metar), "METAR"
+        cond, kind, text = wx.parse_metar(metar), "METAR", metar
     elif taf_segs:
-        cond, kind = wx.conditions_at(taf_segs, when), "TAF"
+        cond, kind, text = wx.conditions_at(taf_segs, when), "TAF", raw_taf
     if not cond:
         return
 
@@ -242,6 +244,11 @@ def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
     pt["sampled"] = True
     pt["obs_station"] = station.ident
     pt["obs_kind"] = kind
+    # The report itself, not just its name. The checklist chip says where a
+    # value came from ("CYCK METAR, 18 nm") and the pilot's next question is
+    # always what that report actually said - which used to mean going and
+    # finding it. It rides to the browser as ``LimitCheck.source_text``.
+    pt["obs_text"] = text
 
 
 def _ceiling_dropping(fc: dict, from_dt: datetime | None = None) -> bool:
@@ -1159,11 +1166,18 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     w = L["wind"]
     # Endpoint points (departure + destination) - wind/gust/crosswind are a
     # takeoff/landing concern, so they're evaluated ONLY at the two ends.
+    # Each point carries the report *behind* its provenance where there is one,
+    # so a row naming "CYCK METAR, 18 nm" can also show what CYCK reported. The
+    # ends carry their own METAR for the same reason: the route ceiling row is
+    # the worst value anywhere on the route, and it should read the same way
+    # whichever point turned out to be the worst.
     endpoint_pts = [
         (f"{dep_a.airport.ident} (departure)", dep_a.weather.wind_kt, dep_a.weather.gust_kt,
-         dep_a.weather.ceiling_agl_ft, dep_a.weather.visibility_sm, dep_a.weather.source.value),
+         dep_a.weather.ceiling_agl_ft, dep_a.weather.visibility_sm,
+         dep_a.weather.source.value, dep_a.weather.raw_metar),
         (f"{dest_a.airport.ident} (destination)", dest_a.weather.wind_kt, dest_a.weather.gust_kt,
-         dest_a.weather.ceiling_agl_ft, dest_a.weather.visibility_sm, dest_a.weather.source.value),
+         dest_a.weather.ceiling_agl_ft, dest_a.weather.visibility_sm,
+         dest_a.weather.source.value, dest_a.weather.raw_metar),
     ]
     # All points (ends + enroute samples) - ceiling/vis apply along the route.
     pts = [endpoint_pts[0]]
@@ -1173,13 +1187,14 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
         # tell a real observation from an inference.
         pts.append((e.get("label") or f"enroute {i}", e.get("wind_kt"), e.get("gust_kt"),
                     e.get("ceiling_ft"), e.get("vis_sm"),
-                    e.get("ceiling_source") or Source.MODEL.value))
+                    e.get("ceiling_source") or Source.MODEL.value,
+                    e.get("obs_text")))
     pts.append(endpoint_pts[1])
 
     checks: list[LimitCheck] = []
 
     # Sustained wind - worst (max) at the endpoints only.
-    wind_pts = [(lbl, wk, src) for lbl, wk, _g, _c, _v, src in endpoint_pts if wk is not None]
+    wind_pts = [(lbl, wk, src) for lbl, wk, _g, _c, _v, src, _t in endpoint_pts if wk is not None]
     if wind_pts:
         lbl, val, src = max(wind_pts, key=lambda t: t[1])
         checks.append(LimitCheck(key="wind", label="Sustained wind", limit_text=f"≤ {w['sustained_max_kt']} kt",
@@ -1190,7 +1205,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                                  actual_text="no data", passed=True))
 
     # Gust spread - endpoints only.
-    spreads = [(lbl, gk - wk, src) for lbl, wk, gk, _c, _v, src in endpoint_pts if wk is not None and gk is not None]
+    spreads = [(lbl, gk - wk, src) for lbl, wk, gk, _c, _v, src, _t in endpoint_pts if wk is not None and gk is not None]
     if spreads:
         lbl, val, src = max(spreads, key=lambda t: t[1])
         checks.append(LimitCheck(key="gust_spread", label="Gust spread", limit_text=f"≤ {w['gust_spread_max_kt']} kt",
@@ -1217,13 +1232,15 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     # The XC ceiling minimum applies to the whole route, ends included - a deck
     # below it over the departure field is as much a no-go as one at midpoint,
     # so this row is the worst ceiling anywhere on the route, not just enroute.
-    route_ceils = [(lbl, ce, src) for lbl, _w, _g, ce, _v, src in pts if ce is not None]
+    route_ceils = [(lbl, ce, src, txt)
+                   for lbl, _w, _g, ce, _v, src, txt in pts if ce is not None]
     if route_ceils:
-        lbl, val, src = min(route_ceils, key=lambda t: t[1])
+        lbl, val, src, txt = min(route_ceils, key=lambda t: t[1])
         checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, route)",
                                  limit_text=f"≥ {ceil_limit:,} ft AGL",
                                  actual_text=f"{round(val / 100) * 100:,} ft AGL",
-                                 passed=val >= ceil_limit, location=lbl, source=src))
+                                 passed=val >= ceil_limit, location=lbl, source=src,
+                                 source_text=txt))
     else:
         # No ceiling value anywhere on the route. That single fact has four very
         # different meanings and this row used to print one sentence for all of
@@ -1266,7 +1283,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     # already fails anything below the XC minimum; this row says whether the end in
     # question is even circuit-capable, so "circuits only" reads differently from
     # "below every personal minimum".
-    for lbl, _w, _g, ce, _v, src in (pts[0], pts[-1]):
+    for lbl, _w, _g, ce, _v, src, txt in (pts[0], pts[-1]):
         if ce is None or ce >= ceil_limit:
             continue
         cv = round(ce / 100) * 100
@@ -1275,12 +1292,13 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
             checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
                                      limit_text=f"≥ {circuit_limit:,} ft AGL (circuit)",
                                      actual_text=f"{cv:,} ft AGL - {note}", passed=False,
-                                     location=lbl, source=src))
+                                     location=lbl, source=src, source_text=txt))
         else:
             checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
                                      limit_text=f"≥ {circuit_limit:,} ft AGL (circuit)",
                                      actual_text=f"{cv:,} ft AGL - circuits only",
-                                     passed=True, advisory=True, location=lbl, source=src))
+                                     passed=True, advisory=True, location=lbl, source=src,
+                                     source_text=txt))
 
     # Visibility - IFR uses ifr_minimums section; VFR uses hard_limits.
     if flight_rules == "ifr":
@@ -1289,11 +1307,13 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     else:
         v_block = L["visibility_sm"]
     vis_limit = v_block.get("night_xc", 9) if mode == "night" else v_block.get("day_xc", 9)
-    vis_pts = [(lbl, vi, src) for lbl, _w, _g, _c2, vi, src in pts if vi is not None]
+    vis_pts = [(lbl, vi, src, txt)
+               for lbl, _w, _g, _c2, vi, src, txt in pts if vi is not None]
     if vis_pts:
-        lbl, val, src = min(vis_pts, key=lambda t: t[1])
+        lbl, val, src, txt = min(vis_pts, key=lambda t: t[1])
         checks.append(LimitCheck(key="visibility", label="Visibility (XC)", limit_text=f"≥ {vis_limit} SM",
-                                 actual_text=f"{val:g} SM", passed=val >= vis_limit, location=lbl, source=src))
+                                 actual_text=f"{val:g} SM", passed=val >= vis_limit, location=lbl,
+                                 source=src, source_text=txt))
     else:
         checks.append(LimitCheck(key="visibility", label="Visibility (XC)", limit_text=f"≥ {vis_limit} SM",
                                  actual_text="no data", passed=True))
@@ -1409,9 +1429,24 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # enroute forecasts - which on a cold cache (i.e. every wake from scale-to-zero)
     # cost the better part of a minute before the pilot saw a verdict. Outbound
     # concurrency is bounded inside the CFPS client so this stays a polite client.
+    #
+    # Concurrency was only half of it, though: the requests themselves were the
+    # other half. A cold route is now 19 of them rather than 24 - the five point
+    # forecasts batched into one below, the duplicate METAR query coalesced (see
+    # the note on ``cfps.metar_history``) - and all 19 ride the pooled HTTP/2
+    # connections in ``app.sources._http`` instead of opening a fresh TLS
+    # session apiece.
+    #
+    # Departure, destination and every midpoint want the same full-variable
+    # forecast, so they go out as one batched request instead of five - see
+    # ``openmeteo.forecast_points``, which still caches (and reuses) them
+    # per point and falls back to five requests if the batch can't be trusted.
+    point_fcs_job = _safe(openmeteo.forecast_points(
+        [(dep.lat, dep.lon), (dest.lat, dest.lon)] + list(mids), days),
+        [], fetch_health.HRDPS)
+
     (metars, tafs, awc_hist, cfps_hist, notams, raw_hazards,
-     dep_fc, dest_fc, corridor_fcs,
-     *mid_fcs) = await asyncio.gather(
+     point_fcs, corridor_fcs) = await asyncio.gather(
         _safe(cfps.metars(all_sites), {}, fetch_health.METAR),
         _safe(cfps.tafs(all_sites), {}, fetch_health.TAF),
         # METAR history for trends: aviationweather.gov (multi-hour), CFPS fallback.
@@ -1422,7 +1457,13 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # Neither is labelled here: history has a *fallback*, so only losing both
         # is a failure worth reporting - see `hist_failed` below.
         _safe(awc.metar_history(sites, 6), None) if show_obs else _noop({}),
-        _safe(cfps.metar_history(sites), None) if show_obs else _noop({}),
+        # ``all_sites``, not ``sites``, so this asks CFPS the *identical*
+        # question ``cfps.metars`` above is already asking - same idents, same
+        # chunks, same cache key. The two then coalesce into one round trip
+        # (``cache.once``) instead of racing each other for a payload CFPS
+        # returns in full either way. Only the endpoints are read out of it
+        # below; the extra idents cost nothing to carry.
+        _safe(cfps.metar_history(all_sites), None) if show_obs else _noop({}),
         _safe(cfps.notams(sites), {}, fetch_health.NOTAM),
         # Area advisories: NAV CANADA (aerodromes + all seven Canadian FIRs) and
         # aviationweather.gov (international SIGMET, US SIGMET/AIRMET, G-AIRMET,
@@ -1432,18 +1473,22 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
                         max(settings.hazard_corridor_nm, settings.pirep_corridor_nm),
                         _gairmet_hours(etd_utc, eta_prov, now),
                         settings.pirep_max_age_hr),
-        _safe(openmeteo.forecast(dep.lat, dep.lon, days), {}, fetch_health.HRDPS),
-        _safe(openmeteo.forecast(dest.lat, dest.lon, days), {}, fetch_health.HRDPS),
+        # Departure, destination and the midpoints, in one request (see above).
+        point_fcs_job,
         # Corridor fields: one batched request, wind variables only (the cards
         # show nothing else, and 20 points x the full variable list is a very
         # long URL for data we'd discard).
         _safe(openmeteo.forecast_many([(a.lat, a.lon) for a, _t, _x in corridor],
                                       days, hourly=openmeteo.WIND_ONLY_VARS), [],
               fetch_health.HRDPS),
-        # Enroute sampling points, previously fetched one at a time in a loop.
-        *(_safe(openmeteo.forecast(mlat, mlon, days), {}, fetch_health.HRDPS)
-          for mlat, mlon in mids),
     )
+    # ``forecast_points`` answers one forecast per point, in the order asked:
+    # departure, destination, then each midpoint. An outright failure degrades to
+    # ``[]``, which the padding below turns back into the empty dicts the rest of
+    # this function already knows how to read as "no forecast here".
+    point_fcs = list(point_fcs)
+    point_fcs += [{} for _ in range(2 + len(mids) - len(point_fcs))]
+    dep_fc, dest_fc, mid_fcs = point_fcs[0], point_fcs[1], point_fcs[2:]
     # The two endpoint forecasts are the backbone of every hour on this page: the
     # timeline, the best windows and the enroute picture are all read off them. A
     # 200 with an unusable body raises nothing, so the emptiness is checked
@@ -1541,7 +1586,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
             _merge_enroute_report(
                 pt, a, d, metars.get(a.ident),
                 wx.parse_taf_segments(tafs.get(a.ident) or ""),
-                over_at, use_metar=bool(is_now and show_obs))
+                over_at, use_metar=bool(is_now and show_obs),
+                raw_taf=tafs.get(a.ident))
         enroute.append(pt)
 
     # Gate the (VFR) cruising altitude on the minimum ceiling along the whole

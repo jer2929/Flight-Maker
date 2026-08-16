@@ -8,10 +8,7 @@ from __future__ import annotations
 
 import re
 
-import httpx
-
-from app.config import get_settings
-from app.sources import cache
+from app.sources import _http, cache
 
 GEOMET_WMS = "https://geo.weather.gc.ca/geomet"
 # Radar precipitation-rate composites (1 km): rain and snow.
@@ -53,17 +50,12 @@ async def radar_times(layer: str) -> dict | None:
     if layer not in RADAR_LAYERS:
         layer = RADAR_LAYERS[0]
     key = f"geomet:times:{layer}"
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-    params = {"service": "WMS", "version": "1.3.0",
-              "request": "GetCapabilities", "layer": layer}
-    async with httpx.AsyncClient(timeout=get_settings().request_timeout) as client:
-        resp = await client.get(GEOMET_WMS, params=params)
-        resp.raise_for_status()
-        dim = parse_time_dimension(resp.text)
-    if not dim:
-        return None
-    result = {"layer": layer, **dim}
-    cache.put(key, result, 180)  # radar updates every ~6 min; 3-min cache is plenty
-    return result
+
+    async def fetch() -> dict | None:
+        params = {"service": "WMS", "version": "1.3.0",
+                  "request": "GetCapabilities", "layer": layer}
+        dim = parse_time_dimension(await _http.get_text(GEOMET_WMS, params))
+        return {"layer": layer, **dim} if dim else None
+
+    # radar updates every ~6 min; a 3-min cache is plenty
+    return await cache.once(key, 180, fetch)

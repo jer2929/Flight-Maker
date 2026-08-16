@@ -247,6 +247,18 @@ async function init() {
     setHealth("route-data-health", fetchFailedBanner(String(e), "init"));
     return;
   }
+  // Start warming the backend while the pilot is still typing a destination.
+  //
+  // The machine scales to zero when idle, so the first assessment of the day
+  // wakes it with an empty cache and no open connections to any upstream. The
+  // config fetch above is what wakes it; this puts that head start to use by
+  // pulling the products that don't depend on which route gets picked - the
+  // national advisory feeds and the home base. Deliberately not awaited: it
+  // must never hold up the page, and nothing on the page depends on it. Its
+  // failures are equally deliberately ignored - the assessment will re-fetch
+  // and report honestly, and a warmup has no business raising a banner.
+  fetch("/api/prewarm").catch(() => {});
+
   $("#radius").value = CONFIG.default_radius_nm;
   $("#radius").max = CONFIG.max_radius_nm;
 
@@ -295,6 +307,63 @@ function startClock() {
 function stampDataTime() {
   const el = $("#data-time");
   if (el) el.textContent = fmtZulu(new Date());
+}
+
+// ---------- "Pulling data…" elapsed timer ----------
+// An assessment pulls ~19 products from three upstreams and can take tens of
+// seconds on a cold backend. All the pilot used to see was a disabled button
+// reading "Pulling data…", which is indistinguishable from a frozen app - and
+// the honest answer to "is it stuck?" is a number that keeps moving. When it
+// lands, the elapsed time stays on screen, so the wait is attributable to
+// gathering the data rather than left a mystery.
+//
+// Handles live on the function object (the `flashStatus` idiom) so a re-entrant
+// run - the error banner's retry button calls runRoute() again by name - can
+// never leave an orphaned interval ticking into a stale element.
+const RUN_TIMER_TICK_MS = 100;
+
+function runTimerSecs(id) {
+  const started = (startRunTimer._at || {})[id];
+  return started == null ? 0 : (performance.now() - started) / 1000;
+}
+
+// One decimal is the right resolution for the case this exists for - a cold
+// backend taking ten or twenty seconds. It is the wrong resolution for a fully
+// cached re-run, which finishes in milliseconds and would report "0.0 s", a
+// number that reads as a broken counter rather than as the good news it is.
+const runTimerText = (s) => `${s < 1 ? s.toFixed(2) : s.toFixed(1)} s`;
+
+function startRunTimer(id) {
+  stopRunTimer(id);                       // idempotent across re-entry
+  const el = $("#" + id);
+  if (!el) return;
+  startRunTimer._at = startRunTimer._at || {};
+  startRunTimer._t = startRunTimer._t || {};
+  startRunTimer._at[id] = performance.now();
+  // aria-hidden while it ticks: announcing a counter ten times a second would
+  // bury the result it is counting towards. The final duration below is
+  // announced once, when it means something.
+  el.setAttribute("aria-hidden", "true");
+  const tick = () => (el.textContent = runTimerText(runTimerSecs(id)));
+  tick();
+  startRunTimer._t[id] = setInterval(tick, RUN_TIMER_TICK_MS);
+}
+
+// `ok` false means the run failed: the error banner is the message, and
+// "data fetched in" would be a lie about a fetch that didn't.
+function stopRunTimer(id, ok) {
+  const handles = startRunTimer._t || {};
+  clearInterval(handles[id]);
+  delete handles[id];
+  const el = $("#" + id);
+  if (!el) return;
+  if (ok) {
+    el.textContent = `data fetched in ${runTimerText(runTimerSecs(id))}`;
+    el.removeAttribute("aria-hidden");
+  } else {
+    el.textContent = "";
+  }
+  if (startRunTimer._at) delete startRunTimer._at[id];
 }
 
 const baseIdent = () => PROFILE.base || CONFIG.departure;
@@ -1121,6 +1190,8 @@ async function runRoute() {
   const dep = $("#dep").value.trim().toUpperCase(), dest = $("#dest").value.trim().toUpperCase();
   if (!dest) { $("#route-verdict").innerHTML = `<div class="empty">Enter a destination.</div>`; return; }
   const btn = $("#run-route"); btn.disabled = true; btn.textContent = "Pulling data…";
+  startRunTimer("run-timer");
+  let ok = false;
   clearRoute();
   try {
     const params = new URLSearchParams({ dep, dest, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam(), ...tasParam(), ...etdParam() });
@@ -1134,15 +1205,23 @@ async function runRoute() {
     const data = await res.json();
     renderRoute(data);
     stampDataTime();
+    ok = true;
+    // Deliberately outside the timer: the GFA imagery is not awaited, so the
+    // number means "the assessment is on screen", not "every panel has drawn".
     loadGfa(dep, dest, (data.window || {}).etd_utc);
   } catch (e) {
     setHealth("route-data-health", fetchFailedBanner(String(e), "runRoute"));
-  } finally { btn.disabled = false; btn.textContent = "Assess route"; }
+  } finally {
+    btn.disabled = false; btn.textContent = "Assess route";
+    stopRunTimer("run-timer", ok);
+  }
 }
 
 async function runCircuits() {
   const aerodrome = ($("#circ-aerodrome").value.trim() || baseIdent()).toUpperCase();
   const btn = $("#run-route"); btn.disabled = true; btn.textContent = "Pulling data…";
+  startRunTimer("run-timer");
+  let ok = false;
   clearRoute();
   try {
     const params = new URLSearchParams({ aerodrome, mode: currentMode(), threats: threatsParam(), flight_rules: currentFlightRules(), ...prefsParam(), ...etdParam() });
@@ -1151,9 +1230,13 @@ async function runCircuits() {
     if (!res.ok) { setHealth("route-data-health", fetchFailedBanner(`HTTP ${res.status}`, "runRoute")); return; }
     renderCircuits(await res.json());
     stampDataTime();
+    ok = true;
   } catch (e) {
     setHealth("route-data-health", fetchFailedBanner(String(e), "runRoute"));
-  } finally { btn.disabled = false; btn.textContent = "Assess circuits"; }
+  } finally {
+    btn.disabled = false; btn.textContent = "Assess circuits";
+    stopRunTimer("run-timer", ok);
+  }
 }
 
 function renderCircuits(r) {
@@ -1315,7 +1398,27 @@ function rowCheck(c) {
   }
   if (c.source && c.source !== "-") {
     const detail = c.source_detail ? ` ${escapeHtml(c.source_detail)}` : "";
-    bits.push(`<span class="src-mini"${c.source_text ? ` title="${escapeHtml(c.source_text)}"` : ""}>${escapeHtml(c.source)}${detail}</span>`);
+    const label = `${escapeHtml(c.source)}${detail}`;
+    // "CYCK METAR, 18 nm" names the report a row was decided by; the pilot's
+    // next question is what that report actually said. Where we have the text,
+    // the chip becomes a button opening the same popover the discovery cards
+    // use - hover to preview, tap to pin, Esc to close - instead of a native
+    // tooltip that a phone can never show and that truncates a long TAF.
+    // The popover's own heading names the source *and* where it applies. The
+    // enroute chips already carry the station ("CYCK METAR, 18 nm"), but an
+    // endpoint's reads only "Observed", and a heading that doesn't say whose
+    // report you are looking at is no use on a card showing three of them.
+    // Built from the raw fields, not from `label`/`detail` - those are already
+    // escaped for the chip, and escaping them again for the attribute would put
+    // a literal "&amp;" in the heading.
+    const popLabel = [c.source, c.source_detail].filter(Boolean).join(" ")
+      + (c.location ? ` · ${c.location}` : "");
+    bits.push(c.source_text
+      ? `<button type="button" class="src-mini src-pop" data-pop-kind="REPORT"
+          data-pop-text="${escapeHtml(c.source_text)}" data-pop-label="${escapeHtml(popLabel)}"
+          aria-haspopup="dialog" aria-expanded="false"
+          title="See the full report">${label}<span class="src-pop-caret" aria-hidden="true">▾</span></button>`
+      : `<span class="src-mini">${label}</span>`);
   }
   const sub = bits.length ? `<span class="sub">${bits.join(" ")}</span>` : "";
   return `<div class="chk ${state}">
@@ -1939,6 +2042,8 @@ function renderTimeline(timeline, windows) {
 // ---------- Discovery ----------
 async function runDiscovery() {
   const btn = $("#run-discovery"); btn.disabled = true; btn.textContent = "Checking…";
+  startRunTimer("discovery-timer");
+  let ok = false;
   $("#discovery-results").innerHTML = "";
   setHealth("discovery-data-health", "");
   closeWxPop();
@@ -1972,8 +2077,12 @@ async function runDiscovery() {
       : (payload.data_health && payload.data_health.ok === false
           ? "" : `<p class="empty">No airports match within radius + filters.</p>`);
     stampDataTime();
+    ok = true;
   } catch (e) { setHealth("discovery-data-health", fetchFailedBanner(String(e), "runDiscovery")); }
-  finally { btn.disabled = false; btn.textContent = discoveryBtnLabel(); }
+  finally {
+    btn.disabled = false; btn.textContent = discoveryBtnLabel();
+    stopRunTimer("discovery-timer", ok);
+  }
 }
 
 // One failing row as a sentence - the same string, from the same fields, that
@@ -2138,10 +2247,17 @@ function closeWxPop() {
 }
 
 function openWxPop(anchor) {
-  const a = DISCOVERY_BY_IDENT[anchor.dataset.pop];
-  if (!a) return;
   const el = wxPopEl();
-  el.innerHTML = anchor.dataset.popKind === "TAF" ? tafPopBody(a) : modelPopBody(a);
+  // A checklist row carries its report inline rather than by ident: the row's
+  // source may be a station under the route that has no card of its own, so
+  // there is nothing in DISCOVERY_BY_IDENT to look it up in.
+  if (anchor.dataset.popKind === "REPORT") {
+    el.innerHTML = reportPopBody(anchor.dataset.popLabel, anchor.dataset.popText);
+  } else {
+    const a = DISCOVERY_BY_IDENT[anchor.dataset.pop];
+    if (!a) return;
+    el.innerHTML = anchor.dataset.popKind === "TAF" ? tafPopBody(a) : modelPopBody(a);
+  }
   el.hidden = false;
   if (WX_POP.anchor && WX_POP.anchor !== anchor) WX_POP.anchor.setAttribute("aria-expanded", "false");
   WX_POP.anchor = anchor;
@@ -2223,14 +2339,47 @@ function wxPopWindowLabel(a) {
   return `your flight (${zHM(a.etd_utc)}-${zHM(a.eta_utc)})`;
 }
 
+// The raw report behind a checklist row's source chip, verbatim. No decoding
+// and no verdict: the row above it has already said what the value was and
+// whether it passed, and what this answers is the narrower "says who?". The
+// label is the chip's own text ("CYCK METAR, 18 nm"), so the popover names the
+// same station and distance the row does.
+function reportPopBody(label, text) {
+  // The empty .hint is the spacer that pushes the close button to the right -
+  // .wx-pop-head is a flex row and .hint is its only flexible child.
+  return `<div class="wx-pop-head">
+      <strong>${escapeHtml(label || "Report")}</strong>
+      <span class="hint"></span>
+      ${wxPopClose()}
+    </div>
+    <pre class="wx-raw">${escapeHtml(text || "")}</pre>`;
+}
+
 const wxPopClose = () =>
   `<button type="button" class="wx-pop-x" onclick="closeWxPop()" aria-label="Close">×</button>`;
 
-// Delegated once, on the results container - the cards are re-rendered from
-// scratch on every scan, so per-chip listeners would have to be re-bound each
-// time and would leak the ones belonging to cards that no longer exist.
+// Every container that can hold a source chip. Both are re-rendered wholesale
+// on each run - discovery cards on every scan, the checklist on every
+// assessment - so delegation on the container is what keeps one set of
+// listeners working across renders instead of leaking a set per card.
+const WX_POP_HOSTS = ["#discovery-results", "#route-checklist"];
+
 function wireWxPopovers() {
-  const host = $("#discovery-results");
+  WX_POP_HOSTS.forEach(wireWxPopoverHost);
+  // Document- and window-level listeners are shared by every host, so they are
+  // bound once here rather than once per host.
+  document.addEventListener("click", closeWxPop);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeWxPop(); });
+  // Anchored to a chip that moves with the page - reposition rather than let it
+  // drift away from what it is describing.
+  window.addEventListener("scroll", () => {
+    if (WX_POP.anchor && WX_POP.el && !WX_POP.el.hidden) positionWxPop(WX_POP.anchor, WX_POP.el);
+  }, { passive: true });
+  window.addEventListener("resize", closeWxPop);
+}
+
+function wireWxPopoverHost(selector) {
+  const host = $(selector);
   if (!host) return;
   const chipOf = (e) => e.target.closest && e.target.closest(".src-pop");
   host.addEventListener("click", (e) => {
@@ -2259,14 +2408,6 @@ function wireWxPopovers() {
     closeWxPop();
   });
   host.addEventListener("focusin", (e) => { const c = chipOf(e); if (c) openWxPop(c); });
-  document.addEventListener("click", closeWxPop);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeWxPop(); });
-  // Anchored to a chip that moves with the page - reposition rather than let it
-  // drift away from what it is describing.
-  window.addEventListener("scroll", () => {
-    if (WX_POP.anchor && WX_POP.el && !WX_POP.el.hidden) positionWxPop(WX_POP.anchor, WX_POP.el);
-  }, { passive: true });
-  window.addEventListener("resize", closeWxPop);
 }
 window.closeWxPop = closeWxPop;
 

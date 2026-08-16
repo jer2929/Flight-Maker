@@ -163,16 +163,14 @@ def _flaky_client(fail_first: int, payload):
             return payload
 
     class _Client:
+        # ``_http`` pools one client per event loop and asks whether it is still
+        # usable before handing it out, so a stand-in has to answer that too.
+        is_closed = False
+
         def __init__(self, **kw):
             pass
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return False
-
-        async def get(self, url, params=None):
+        async def get(self, url, params=None, headers=None):
             calls["n"] += 1
             return _Resp()
 
@@ -209,16 +207,12 @@ def test_get_json_retries_once_then_raises(monkeypatch):
             return {}
 
     class _Client:
+        is_closed = False   # see _flaky_client above
+
         def __init__(self, **kw):
             pass
 
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return False
-
-        async def get(self, url, params=None):
+        async def get(self, url, params=None, headers=None):
             attempts["n"] += 1
             return _Resp()
 
