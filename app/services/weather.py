@@ -551,6 +551,28 @@ def _by_field(periods: list[dict], eff: dict) -> dict[str, dict]:
     return out
 
 
+def zulu_range(start: datetime, end: datetime) -> str:
+    """A Zulu time span as the pilot reads it: ``2000Z-0300Z+1``.
+
+    The ``+N`` suffix marks a day rollover. A span routinely runs past midnight
+    Z, and a bare ``1700Z-1700Z`` reads as a zero-length window rather than a
+    whole day - worse, ``2000Z-0300Z`` reads as running backwards. ``N`` counts
+    calendar days between the two *dates*, so it answers "which day does this
+    end on", not "how many hours long is it".
+
+    The one range formatter in the codebase. Every span the app prints - the TAF
+    groups, the flight window, the out-of-window hazard periods - goes through
+    it, so a rollover cannot be marked on one line of a card and missed on the
+    next. Plain text on purpose: these strings reach the browser through fields
+    that are HTML-escaped, and one of them lands in a ``title`` attribute where
+    a tag would print literally. The client raises the ``+N`` at render time.
+    """
+    days = (end.date() - start.date()).days
+    tail = f"+{days}" if days > 0 else ""
+    z = "%H%MZ"
+    return f"{start.strftime(z)}-{end.strftime(z)}{tail}"
+
+
 def period_label(seg: dict) -> str:
     """A TAF group as the pilot reads it: ``TEMPO 1900Z-2100Z``.
 
@@ -559,17 +581,11 @@ def period_label(seg: dict) -> str:
     other label (FM/BECMG/TEMPO/PROB30) is a real word in the raw text and is
     left alone.
 
-    The ``+N`` suffix marks a day rollover: a TAF period routinely runs past
-    midnight Z, and a bare ``1700Z-1700Z`` reads as a zero-length window rather
-    than a whole day.
-
     The one labeller in the codebase - the route card, the discovery cards and
     the hour-by-hour strip all call it, so the same group cannot be described
-    two different ways on one page.
+    two different ways on one page. The times themselves come from
+    :func:`zulu_range`, which every other span in the app shares.
     """
     label = seg.get("label", "")
     name = "initial group" if label == "MAIN" else label
-    days = (seg["end"].date() - seg["start"].date()).days
-    tail = f"+{days}" if days > 0 else ""
-    z = "%H%MZ"
-    return f"{name} {seg['start'].strftime(z)}-{seg['end'].strftime(z)}{tail}".strip()
+    return f"{name} {zulu_range(seg['start'], seg['end'])}".strip()

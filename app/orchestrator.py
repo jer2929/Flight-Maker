@@ -781,7 +781,9 @@ def _zhm(dt: datetime) -> str:
 
 
 def _window_label(etd: datetime, eta: datetime) -> str:
-    return f"{_zhm(etd)}-{_zhm(eta)}"
+    # Via zulu_range, so an evening flight that lands after midnight Z reads
+    # "your 2330Z-0115Z+1 window" rather than a span that runs backwards.
+    return wx.zulu_range(etd, eta)
 
 
 def _daylight_margin(dusk: datetime, eta: datetime, flight_hr: float) -> DaylightMargin:
@@ -832,7 +834,7 @@ def _window_hazards(dep_segs: list[dict], dest_segs: list[dict],
                 "hazards": list(s["cond"].get("hazards") or []),
                 "start": s["start"], "end": s["end"],
                 "label": s.get("label", ""),
-                "when": f"{_zhm(s['start'])}-{_zhm(s['end'])}",
+                "when": wx.zulu_range(s["start"], s["end"]),
             })
     return inside, outside, prob_only - inside
 
