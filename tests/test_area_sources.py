@@ -53,13 +53,44 @@ def test_cfps_area_products_use_repeated_site_never_point(captured):
         assert _values(call, "site"), "area products go out keyed by site"
 
 
-def test_cfps_asks_every_canadian_fir(captured):
-    """SIGMETs and AIRMETs are issued per FIR, so ask the FIRs."""
+def test_cfps_asks_every_canadian_fir_when_it_is_told_nothing(captured):
+    """SIGMETs and AIRMETs are issued per FIR, so ask the FIRs. With no region
+    named the honest question is still all of them."""
     asyncio.run(cfps.airmets(["CYFD"]))
 
     sites = {s for call in captured for s in _values(call, "site")}
     assert set(cfps.CANADIAN_FIRS) <= sites
     assert "CYFD" in sites, "the route's own aerodromes are asked too"
+
+
+def test_cfps_asks_only_the_firs_the_flight_is_in(captured):
+    """Asking about all seven is what put an Edmonton AIRMET in front of a pilot
+    flying circuits in Ontario: a bulletin whose polygon cannot be read fails
+    open, so the only reliable way not to show it is not to fetch it."""
+    asyncio.run(cfps.airmets(["CYFD"], {"CZYZ"}))
+
+    sites = {s for call in captured for s in _values(call, "site")}
+    assert "CZYZ" in sites
+    assert not (sites & {"CZEG", "CZVR", "CZWG", "CZUL", "CZQM", "CZQX"})
+    assert "CYFD" in sites, "the route's own aerodromes are asked regardless"
+
+
+def test_an_empty_fir_set_means_everywhere_never_nowhere(captured):
+    """``firs.firs_for_path`` returns nothing when it cannot place the route, and
+    that has to widen the question rather than silence it."""
+    asyncio.run(cfps.sigmets(["CYFD"], set()))
+
+    sites = {s for call in captured for s in _values(call, "site")}
+    assert set(cfps.CANADIAN_FIRS) <= sites
+
+
+def test_an_unrecognised_fir_does_not_narrow_the_question(captured):
+    """A name that is not one of the seven is not a region we can ask about, so
+    it must not be the reason the other six go unasked."""
+    asyncio.run(cfps.sigmets(["CYFD"], {"BIRD"}))
+
+    sites = {s for call in captured for s in _values(call, "site")}
+    assert set(cfps.CANADIAN_FIRS) <= sites
 
 
 def test_cfps_keeps_aerodromes_and_firs_in_separate_requests(captured):

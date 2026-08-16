@@ -396,6 +396,19 @@ class AirportAssessment(BaseModel):
     # Discovery only: raw model hours either side of the flight, for the HRDPS
     # chip's popover. Empty everywhere else.
     model_hours: list[ForecastHour] = []
+    # Circuits only: the area advisories around this aerodrome, in the same
+    # shapes the route result uses. Empty on a route endpoint card and in
+    # discovery, which carry them at the top level (route) or not at all.
+    #
+    # These exist because the circuits checklist has always printed "TAF +
+    # SIGMET/AIRMET/PIREP + model" over its Weather group while fetching none of
+    # the three - a caption promising coverage the card did not have.
+    sigmets: list[Advisory] = []
+    airmets: list[Advisory] = []
+    pireps: list[Advisory] = []
+    nearby_advisories: list[Advisory] = []
+    hazards_filtered: dict[str, int] = {}     # drop reason -> count
+    hazards_geojson: Optional[dict] = None    # every one fetched, for the map
     # Which upstream products failed while building this card (circuits, which
     # returns a bare AirportAssessment). Route/discovery carry it at the top
     # level instead.

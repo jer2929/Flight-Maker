@@ -88,6 +88,13 @@ When the observation-history service is asked and doesn't answer, the card now
 says so. It used to render exactly the same empty space as "nothing is trending",
 which is why trends could appear on one run of a route and vanish on the next.
 
+**A field that publishes no METAR is never asked for its history, and never told
+that history failed.** The request could only ever come back empty, so blaming
+the download for the absence puts a line in the banner that can never mean
+anything - and a banner that cries wolf is one the pilot learns to click past.
+The ident is no guide here: `CYFD` looks like a reporting station and is not, so
+the test is whether a METAR actually came back.
+
 ### The flight window
 Everything is assessed for the span you are actually airborne - **ETD→ETA, ±30 min**
 for taxi and approach - not for a single instant:
@@ -149,8 +156,15 @@ chart that doesn't describe your flight.
 Two independent, free, no-key feeds, fetched together and merged:
 
 * **NAV CANADA CFPS** — the authoritative Canadian source, queried for the route's
-  aerodromes *and* all seven Canadian FIRs (`CZVR CZEG CZWG CZYZ CZUL CZQM CZQX`),
-  since SIGMETs and AIRMETs are issued per FIR.
+  aerodromes *and* the FIRs it flies through, since SIGMETs and AIRMETs are issued
+  per FIR. Which FIRs those are comes from `services/firs.py`, a coarse box per
+  region (`CZVR CZEG CZWG CZYZ CZUL CZQM CZQX`) drawn generously enough that a
+  flight near a boundary asks about both neighbours; a route the boxes cannot
+  place falls back to all seven. This used to ask about all seven regardless,
+  which is how a pilot flying circuits in Ontario got an Edmonton AIRMET: a
+  bulletin whose area is written in words rather than coordinates has no polygon
+  to test, so it fails open, and the only reliable way not to show it is not to
+  fetch it.
 * **aviationweather.gov (NOAA/AWC)** — international SIGMETs (which cover the
   Canadian FIRs too, so the two feeds cross-check each other), plus the US
   domestic SIGMET/AIRMET, G-AIRMET, CWA and PIREP products a cross-border leg
@@ -169,6 +183,14 @@ flight and admitted one the route never entered. On top of geometry, the altitud
 band must overlap your slab (surface to cruise + 2,000 ft) and the validity window
 must overlap ETD→ETA. Every test **fails open**: an advisory whose position, band
 or validity can't be parsed is kept and shown.
+
+One exception, and it is the only way a bulletin is set aside on something other
+than its own shape: an advisory with **no polygon at all** that names a **FIR the
+flight never enters** is dropped. With no geometry, the region is the only
+evidence of where it is, and without this rule a Reykjavik advisory rides along
+with every flight. The test used to apply to the aviationweather.gov feeds only,
+which left out CFPS — the one feed queried per region, and the one whose
+bulletins most often describe their area in prose.
 
 Only a **SIGMET or CWA that passes all three** moves the verdict, and the reason
 names it (`CZYZ SIGMET A1 SFC-FL180 on your route`). AIRMETs and G-AIRMETs reach
@@ -205,6 +227,18 @@ telling a pilot in southern Ontario that 268 advisories over the prairies don't
 apply is noise, not honesty. Everything kept is also drawn on the route map:
 solid polygons for the ones that apply, dashed and faint for the near misses,
 PIREPs as points, each with its full text on tap.
+
+**Circuits get the same picture, scoped to one point.** The circuits card used to
+print *"Weather (TAF + SIGMET/AIRMET/PIREP + model)"* over a card that fetched
+none of the three, so a SIGMET sitting over the field rendered as the same empty
+space as a clear sky. It now fetches all seven products, tests them against the
+aerodrome instead of a track, and shows them in the same advisories panel and on
+the same radar map - one marker, no course line. The altitude slab is **surface
+to 3,000 ft above the field** rather than the route's cruise + 2,000: a circuit
+sits at 1,000 ft AGL, and a SIGMET at FL240 has nothing to say to a flight that
+never leaves the aerodrome. One Weather row carries the result, and a relevant
+SIGMET or CWA fails it; AIRMETs and PIREPs are reported without gating, the same
+standing they have on the route card.
 
 ### Icing and turbulence
 Nothing can parse a GFA chart, so these two rows used to read *"review the GFA
@@ -551,6 +585,7 @@ app/
   services/          geo, geometry (does the route cross this area?),
                      area_products (reading a bulletin), area_hazards (one shape
                      for every advisory, and which ones reach this flight),
+                     firs (which region a flight is in, coarsely),
                      runway, winds_aloft, weather (+TAF segments),
                      timeline, evaluator, density (density altitude),
                      etd_options (would waiting help?),

@@ -303,6 +303,48 @@ def test_an_unplaceable_awc_record_for_another_region_is_dropped():
     assert not keep and not aside
 
 
+def test_an_unplaceable_cfps_record_for_another_region_is_dropped():
+    """The one that reached a pilot: CFPS is the feed queried *per FIR*, and many
+    of its bulletins describe their area in words no coordinate regex can read.
+    The test used to be AWC-only, so an Edmonton AIRMET with no polygon skipped
+    every location check and landed on an Ontario card marked relevant."""
+    stray = _haz(kind="AIRMET", source=ah.CFPS, fir="CZEG", geometry=[],
+                 text="CZEG AIRMET I1 MOD ICE SFC/FL180")
+    keep, aside = _filter([stray], known_firs={"CZYZ"})
+    assert not keep and not aside
+
+
+def test_an_unplaceable_merged_record_for_another_region_is_dropped():
+    """A bulletin both upstreams carry is merged, and its ``source`` then names
+    neither one - which the old ``source == AWC`` test read as "not AWC, keep"."""
+    both = _haz(source=f"{ah.CFPS} + {ah.AWC}", fir="CZEG", geometry=[])
+    keep, aside = _filter([both], known_firs={"CZYZ"})
+    assert not keep and not aside
+
+
+def test_an_unplaceable_record_in_your_own_region_is_kept():
+    """The rule only ever removes a region this flight never enters."""
+    local = _haz(kind="AIRMET", fir="CZYZ", geometry=[],
+                 text="CZYZ AIRMET I1 MOD ICE SFC/FL180")
+    keep, _ = _filter([local], known_firs={"CZYZ"})
+    assert len(keep) == 1
+
+
+def test_an_unplaceable_record_with_no_fir_is_kept():
+    """Fail open: a bulletin we can place neither by shape nor by name is one we
+    do not know about, and an advisory we do not know about is shown."""
+    keep, _ = _filter([_haz(fir=None, geometry=[])], known_firs={"CZYZ"})
+    assert len(keep) == 1
+
+
+def test_a_placed_record_is_judged_on_its_shape_not_its_region():
+    """A polygon is better evidence than a FIR label, so geometry still wins -
+    including for a bulletin whose header names a region the flight is not in."""
+    keep, _ = _filter([_haz(geometry=ON_ROUTE, fir="CZEG", base_ft=0, top_ft=18000)],
+                      known_firs={"CZYZ"})
+    assert len(keep) == 1
+
+
 def test_a_stale_pirep_is_set_aside():
     old = _haz(kind="PIREP", geometry=[(43.15, -80.14)],
                valid_from="2026-03-14T04:00:00Z")
