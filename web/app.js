@@ -801,7 +801,11 @@ function drawGfa() {
 // ---------- Radar (Environment Canada GeoMet WMS, animated) ----------
 const GEOMET_WMS = "https://geo.weather.gc.ca/geomet";
 const RADAR_LABELS = { RADAR_1KM_RRAI: "Rain", RADAR_1KM_RSNO: "Snow" };
-let RADAR = { map: null, wms: null, frames: [], idx: 0, layer: "RADAR_1KM_RRAI", timer: null };
+// ``routeView`` / ``hazardView`` are the two framings the fit button swaps
+// between: the route as it has always been drawn, and that widened to take in
+// the off-route areas as well.
+let RADAR = { map: null, wms: null, frames: [], idx: 0, layer: "RADAR_1KM_RRAI",
+              timer: null, routeView: null, hazardView: null };
 
 const radarFallback = () => `<div class="panel radar-panel"><h3>Radar</h3>
   <p class="hint">Radar map couldn't load.
@@ -820,14 +824,21 @@ const HAZARD_COLORS = {
 const hazardColor = (p) => HAZARD_COLORS[p.hazard] || HAZARD_COLORS.unknown;
 
 // Relevant areas are drawn solid; the ones that were set aside stay on the map,
-// dashed and faint. Seeing a line of convective SIGMETs sitting just north of
-// track is worth more than being told there is nothing on it.
+// dashed. Seeing a line of convective SIGMETs sitting just north of track is
+// worth more than being told there is nothing on it.
+//
+// The set-aside branch used to be 1 px at 45% over a 6% fill, which is the same
+// mistake `pirepStyle` below already had to undo: these are drawn over OSM tiles
+// *and* a 70%-opacity radar layer, and at those values a convective SIGMET 90 nm
+// off track was on the map but could not be seen. The dash is what carries the
+// distinction - it is what the "not on your route" legend key points at - so the
+// weight and opacity can come up without the two relevances blurring together.
 function hazardStyle(f) {
   const p = f.properties || {};
   const c = hazardColor(p);
   return p.relevant
     ? { color: c, weight: 2, opacity: 0.9, fillColor: c, fillOpacity: 0.18 }
-    : { color: c, weight: 1, opacity: 0.45, fillColor: c, fillOpacity: 0.06, dashArray: "4 4" };
+    : { color: c, weight: 2, opacity: 0.8, fillColor: c, fillOpacity: 0.12, dashArray: "4 4" };
 }
 
 function hazardPopup(p) {
@@ -835,10 +846,8 @@ function hazardPopup(p) {
   if (p.band_label && p.band_label !== "no altitude given") bits.push(p.band_label);
   if (p.distance_nm === 0) bits.push("on your route");
   else if (p.distance_nm > 0) bits.push(`${Math.round(p.distance_nm)} NM off track`);
-  if (p.valid_to) {
-    const t = new Date(p.valid_to);
-    if (!isNaN(t)) bits.push(`until ${String(t.getUTCHours()).padStart(2, "0")}${String(t.getUTCMinutes()).padStart(2, "0")}Z`);
-  }
+  const exp = expiryState(p.valid_from, p.valid_to);
+  if (exp) bits.push(exp.text);
   if (!p.relevant && p.drop_label) bits.push(p.drop_label);
   const head = [p.kind, p.hazard_label, p.severity].filter(Boolean).join(" · ");
   // A PIREP has no validity to run "until", only a moment it was filed, so the
@@ -879,6 +888,33 @@ function hazardLayers(gj) {
     areas: make((f) => f.geometry && f.geometry.type !== "Point", hazardStyle),
     pireps: make((f) => f.geometry && f.geometry.type === "Point", pirepStyle),
   };
+}
+
+// The button that swaps between the two framings. Added after the layers exist
+// rather than written into the panel template, because whether it is worth
+// offering at all is only known once the areas have bounds to compare.
+function addHazardFitControl() {
+  const types = $("#route-radar .radar-types");
+  if (!types || $("#radar-fit")) return;
+  const b = document.createElement("button");
+  b.type = "button";
+  b.id = "radar-fit";
+  b.className = "radar-fit";
+  b.textContent = "Fit hazards";
+  b.title = "Zoom out to the SIGMET / AIRMET areas that were fetched but sit off your route";
+  b.addEventListener("click", () => {
+    if (!RADAR.map) return;
+    const showing = b.dataset.showing === "1";
+    const target = showing ? RADAR.routeView : RADAR.hazardView;
+    if (!target) return;
+    // Only the route framing is capped - the whole point of the other one is to
+    // pull back far enough to see the areas, however far back that is.
+    RADAR.map.fitBounds(target, showing ? { maxZoom: 8 } : undefined);
+    b.dataset.showing = showing ? "" : "1";
+    b.textContent = showing ? "Fit hazards" : "Fit route";
+    b.classList.toggle("active", !showing);
+  });
+  types.appendChild(b);
 }
 
 function hazardLegend(gj) {
@@ -924,7 +960,8 @@ function stopRadar() {
 function destroyRadar() {
   stopRadar();
   if (RADAR.map) { try { RADAR.map.remove(); } catch (_) {} }
-  RADAR = { map: null, wms: null, frames: [], idx: 0, layer: RADAR.layer || "RADAR_1KM_RRAI", timer: null };
+  RADAR = { map: null, wms: null, frames: [], idx: 0, layer: RADAR.layer || "RADAR_1KM_RRAI",
+            timer: null, routeView: null, hazardView: null };
 }
 
 // The map takes a list of aerodromes rather than a route result, because a
@@ -1007,7 +1044,23 @@ async function loadRadar(r, stops) {
         .extend([pts[0].lat - 0.85, pts[0].lon - 1.15]);
     const pireps = layers.pireps.getBounds();
     if (pireps.isValid()) view.extend(pireps);
+    RADAR.routeView = view;
     RADAR.map.fitBounds(view, { maxZoom: 8 });
+
+    // Areas still do not get a vote above, for the reason given there. But an
+    // area drawn off-screen is an area that was not drawn, and that is how a
+    // convective SIGMET 90 nm off track came to be on this map and invisible.
+    // The compromise is a button: the route keeps the framing it had, and the
+    // wider view is one press away when there is actually something out there
+    // to widen for. Everything reaching the map is inside ``NEARBY_NM`` of the
+    // route already, so this cannot open out to the whole continent.
+    const areas = layers.areas.getBounds();
+    if (areas.isValid() && !view.contains(areas)) {
+      // extend() mutates, and `view` is the route framing we must be able to
+      // come back to - so widen a copy.
+      RADAR.hazardView = L.latLngBounds(view.getSouthWest(), view.getNorthEast()).extend(areas);
+      addHazardFitControl();
+    }
   }
   setTimeout(() => RADAR.map && RADAR.map.invalidateSize(), 150);
 
@@ -1626,20 +1679,21 @@ function advisoryItem(a) {
 // The three facts that decide whether a bulletin is yours, shown without making
 // the pilot decode the bulletin: how high, how far off track, and until when.
 function advisoryChips(a) {
-  const chips = [];
-  if (a.band_label && a.band_label !== "no altitude given") chips.push(a.band_label);
-  if (a.distance_nm === 0) chips.push("on route");
-  else if (a.distance_nm > 0) chips.push(`${Math.round(a.distance_nm)} NM off track`);
-  if (a.valid_to) {
-    const t = new Date(a.valid_to);
-    if (!isNaN(t)) chips.push(`until ${String(t.getUTCHours()).padStart(2, "0")}${String(t.getUTCMinutes()).padStart(2, "0")}Z`);
-  }
-  if (a.drop_label) chips.push(a.drop_label);
+  const chip = (c) => `<span class="adv-chip">${escapeHtml(c)}</span>`;
+  const out = [];
+  if (a.band_label && a.band_label !== "no altitude given") out.push(chip(a.band_label));
+  if (a.distance_nm === 0) out.push(chip("on route"));
+  else if (a.distance_nm > 0) out.push(chip(`${Math.round(a.distance_nm)} NM off track`));
+  // Green with the time remaining while it is actually running. Built as HTML
+  // rather than escaped with the rest because it carries its own class, and
+  // empty for a product with no validity - a PIREP, mostly.
+  out.push(expiryChip(a.valid_from, a.valid_to));
+  if (a.drop_label) out.push(chip(a.drop_label));
   // A PIREP has an age rather than a validity, and it is the fact that decides
   // whether the report is still about the air you are about to fly through.
   // Appended as raw HTML because it carries its own green/red class.
   const age = a.kind === "PIREP" ? pirepAgeChip(a.valid_from) : "";
-  return chips.map((c) => `<span class="adv-chip">${escapeHtml(c)}</span>`).join("") + age;
+  return out.join("") + age;
 }
 // "9 outside your altitudes, 3 not on your route" - the line that keeps the
 // empty state honest. Something was found; it just does not reach this flight,
@@ -2634,6 +2688,34 @@ function isoAgeMin(iso) {
 // A PIREP's age. Green under the hour, red over it.
 function pirepAgeChip(validFrom) {
   return ageChipFromMin(isoAgeMin(validFrom), { staleAfter: 60 });
+}
+// Where a bulletin stands against the clock right now: running, lapsed, or not
+// yet in force. The card and the map popup both used to format `valid_to` into a
+// bare "until 0255Z" of their own, which said the same thing about a SIGMET with
+// ninety minutes left and one that expired yesterday. Relevance here is decided
+// against the *flight window* server-side (`_drop_reason`), deliberately - this
+// is the other question, the one a pilot asks while looking at the card.
+//
+// Returns null when there is no readable `valid_to`, which is the honest answer
+// for a product that never carried one rather than a reason to guess.
+function expiryState(validFrom, validTo) {
+  const to = Date.parse(validTo || "");
+  if (isNaN(to)) return null;
+  const z = zHM(validTo);
+  const now = Date.now();
+  if (now >= to) return { state: "expired", text: `expired ${z}` };
+  const from = Date.parse(validFrom || "");
+  // Issued for later. "1 h left" would be a lie about something not yet running.
+  if (!isNaN(from) && from > now) return { state: "pending", text: `until ${z}` };
+  return { state: "live", text: `until ${z} · ${fmtHrMin((to - now) / 3600000)} left` };
+}
+// The same fact as a card chip, carrying its own colour: green while it is
+// running, muted once it has lapsed.
+function expiryChip(validFrom, validTo) {
+  const e = expiryState(validFrom, validTo);
+  if (!e) return "";
+  const cls = e.state === "live" ? " live" : e.state === "expired" ? " expired" : "";
+  return `<span class="adv-chip${cls}">${escapeHtml(e.text)}</span>`;
 }
 function dimsText(c) {
   const l = c.length_ft ? Math.round(c.length_ft).toLocaleString() : "?";
