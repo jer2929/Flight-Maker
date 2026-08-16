@@ -548,6 +548,11 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .adv-chip { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: var(--r-pill);
   background: rgba(255,255,255,.07); border: 1px solid var(--line); color: var(--muted);
   font-family: system-ui, sans-serif; font-size: var(--fs-2xs); white-space: nowrap; }
+/* Expiry, in the one place it matters: green while the bulletin is actually
+   running, faded once it has lapsed. Same green as .age.fresh - a live product
+   and a fresh report are the same reassurance, so they read the same. */
+.adv-chip.live { color: #6fcf97; border-color: rgba(111,207,151,.4); background: rgba(111,207,151,.1); }
+.adv-chip.expired { opacity: .6; }
 /* Fetched but set aside. Muted, and never with the amber bar - these are not
    warnings, they are the proof that something was looked at. */
 .adv-aside { margin-top: 8px; font-size: .8rem; }
@@ -693,9 +698,12 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .radar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .radar-panel h3 { margin: 0 0 10px; font-size: .95rem; }
 .radar-types { display: flex; gap: 6px; }
-.radar-type { background: var(--bg); color: var(--muted); border: 1px solid var(--line);
+/* .radar-fit is the hazard framing toggle. It shares the pill, but keeps its own
+   class: the Rain/Snow handler selects on .radar-type and would otherwise wire a
+   layer switch onto it and strip its active state. */
+.radar-type, .radar-fit { background: var(--bg); color: var(--muted); border: 1px solid var(--line);
   border-radius: var(--r-md); padding: 6px 12px; cursor: pointer; font-size: .82rem; }
-.radar-type.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.radar-type.active, .radar-fit.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 /* position+z-index makes the map its own stacking context so Leaflet's internal
    panes/controls (z-index up to ~1000) stay trapped below the sticky header. */
 .radar-map { height: 380px; width: 100%; border-radius: var(--r-md); border: 1px solid var(--line);
