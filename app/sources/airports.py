@@ -119,12 +119,11 @@ def load_runways() -> dict[str, list[Runway]]:
     return out
 
 
-# Airports with controlled/complex terminal airspace (Class C/D, busy).
-COMPLEX_AIRSPACE: set[str] = {"CYHM", "CYTZ", "CYYZ", "CYKF"}
-
-
-def is_complex_airspace(ident: str) -> bool:
-    return ident.upper() in COMPLEX_AIRSPACE
+# NOTE: there is deliberately no "complex airspace" list here any more. Whether
+# airspace is unfamiliar is a fact about the *pilot*, not the aerodrome - a pilot
+# based at Hamilton is not facing unfamiliar airspace there, and no lookup table
+# can know that. The `unfamiliar_or_complex_airspace` threat is a per-flight
+# toggle (data/limits.yaml) and arrives only from the pilot ticking the box.
 
 
 def access_note(ident: str) -> str | None:

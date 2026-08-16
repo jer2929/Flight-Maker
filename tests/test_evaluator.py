@@ -6,7 +6,7 @@ from app.services.evaluator import check_hard_limits, conditions_checks, decisio
 
 def test_decision_returns_structured_checks():
     wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15, ceiling_agl_ft=8000)
-    verdict, checks, threats, n = decision(wx, None, "day", False)
+    verdict, checks, threats, n = decision(wx, None, "day")
     keys = {c.key for c in checks}
     assert {"wind", "gust_spread", "crosswind", "ceiling", "visibility", "hazards"} <= keys
     # 7 of 9 major threats shown - single-pilot IFR and actual IMC are hidden when
@@ -34,7 +34,7 @@ def calm_vfr():
 
 
 def test_clear_day_is_go():
-    v, reasons, n = evaluate(calm_vfr(), good_runway(), mode="day", is_complex_airspace=False)
+    v, reasons, n = evaluate(calm_vfr(), good_runway(), mode="day")
     assert v == Verdict.GO
 
 
@@ -46,7 +46,7 @@ def test_wind_over_limit_is_nogo():
 
 def test_crosswind_over_limit_is_nogo():
     rw = RunwayWind(runway_ident="14", heading_true=140, headwind_kt=2, crosswind_kt=12)
-    v, reasons, _ = evaluate(calm_vfr(), rw, mode="day", is_complex_airspace=False)
+    v, reasons, _ = evaluate(calm_vfr(), rw, mode="day")
     assert v == Verdict.NOGO
     assert any("Crosswind" in r for r in reasons)
 
@@ -65,7 +65,7 @@ def test_low_vis_xc_is_nogo():
 
 def test_thunderstorm_hazard_is_nogo():
     wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15, ceiling_agl_ft=8000, hazards=["thunderstorm"])
-    v, reasons, _ = evaluate(wx, good_runway(), mode="day", is_complex_airspace=False)
+    v, reasons, _ = evaluate(wx, good_runway(), mode="day")
     assert v == Verdict.NOGO
 
 
@@ -111,7 +111,7 @@ def test_endpoint_below_circuit_minimum_is_nogo():
     wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15,
                         ceiling_agl_ft=1900, source=Source.OBSERVED)
     for mode in ("endpoint", "circuit", "xc"):
-        v, _c, _t, _n = decision(wx, good_runway(), "day", False, ceiling_mode=mode)
+        v, _c, _t, _n = decision(wx, good_runway(), "day", ceiling_mode=mode)
         assert v == Verdict.NOGO, mode
     checks = {c.key: c for c in conditions_checks(wx, good_runway(), "day", ceiling_mode="endpoint")}
     assert checks["ceiling"].passed is False
@@ -136,7 +136,7 @@ def test_single_threat_mitigate():
     # Clear weather but one manual threat (e.g., night ops) -> MITIGATE
     v, reasons, n = evaluate(
         calm_vfr(), good_runway(), mode="day",
-        is_complex_airspace=False, manual_threats=["night_operations"],
+        manual_threats=["night_operations"],
     )
     assert v == Verdict.MITIGATE
     assert n == 1
@@ -144,10 +144,36 @@ def test_single_threat_mitigate():
 
 def test_two_threats_nogo():
     wx = WeatherSummary(wind_dir_true=50, wind_kt=16, visibility_sm=15, ceiling_agl_ft=8000)
-    # strong winds (auto) + complex airspace -> 2 threats -> NO-GO
-    v, reasons, n = evaluate(wx, good_runway(), mode="day", is_complex_airspace=True)
+    # strong winds (auto) + the pilot's own unfamiliar-airspace tick -> 2 threats -> NO-GO
+    v, reasons, n = evaluate(wx, good_runway(), mode="day",
+                             manual_threats=["unfamiliar_or_complex_airspace"])
     assert n >= 2
     assert v == Verdict.NOGO
+
+
+def test_unfamiliar_airspace_is_never_derived_from_the_aerodrome():
+    """Familiarity is a fact about the pilot, not the field.
+
+    Busy aerodromes used to be carried on a hardcoded list and flagged for
+    everyone, so a pilot who flies into Hamilton weekly got an unfamiliar-airspace
+    threat there - and with one automatic weather threat alongside it, an
+    unearned NO-GO. Nothing may raise this threat but the pilot's own tick.
+    """
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=16, visibility_sm=15, ceiling_agl_ft=8000)
+    assert "unfamiliar_or_complex_airspace" not in derive_threats(wx, [])
+    # Same weather, one threat lighter than the ticked case above.
+    _v, _r, n_untouched = evaluate(wx, good_runway(), mode="day")
+    _v2, _r2, n_ticked = evaluate(wx, good_runway(), mode="day",
+                                  manual_threats=["unfamiliar_or_complex_airspace"])
+    assert n_ticked == n_untouched + 1
+
+
+def test_no_aerodrome_lookup_can_reintroduce_the_auto_flag():
+    """The airports source must not regrow a complex-airspace table."""
+    from app.sources import airports
+
+    assert not hasattr(airports, "is_complex_airspace")
+    assert not hasattr(airports, "COMPLEX_AIRSPACE")
 
 
 def test_personal_minimums_override_tightens_visibility():
@@ -166,10 +192,10 @@ def test_personal_minimums_override_tightens_visibility():
 
 def test_personal_minimums_override_flips_verdict():
     wx = WeatherSummary(wind_dir_true=50, wind_kt=10, visibility_sm=10, ceiling_agl_ft=8000)
-    v_default, _, _ = evaluate(wx, good_runway(), mode="day", is_complex_airspace=False)
+    v_default, _, _ = evaluate(wx, good_runway(), mode="day")
     assert v_default == Verdict.GO
     with limits_override({"visibility_sm": {"day_xc": 12}}):
-        v_tight, _, _ = evaluate(wx, good_runway(), mode="day", is_complex_airspace=False)
+        v_tight, _, _ = evaluate(wx, good_runway(), mode="day")
         assert v_tight == Verdict.NOGO
 
 
@@ -177,7 +203,7 @@ def test_personal_minimums_remove_hazard_flag():
     # A pilot who drops 'thunderstorm' from the auto-NO-GO list no longer fails on it.
     wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15,
                         ceiling_agl_ft=8000, hazards=["thunderstorm"])
-    v_default, _, _ = evaluate(wx, good_runway(), mode="day", is_complex_airspace=False)
+    v_default, _, _ = evaluate(wx, good_runway(), mode="day")
     assert v_default == Verdict.NOGO
     with limits_override({"weather_flags": ["freezing_rain"]}):  # TS removed
         checks = {c.key: c for c in conditions_checks(wx, good_runway(), "day")}
@@ -193,10 +219,10 @@ def two_threat_wx():
 
 def test_confident_preset_relaxes_two_threat_nogo():
     wx = two_threat_wx()
-    v_default, _, _ = evaluate(wx, good_runway(), "day", False, manual_threats=["night_operations"])
+    v_default, _, _ = evaluate(wx, good_runway(), "day", manual_threats=["night_operations"])
     assert v_default == Verdict.NOGO                     # standard: 2 → NO-GO
     with limits_override({"conservatism": "confident"}):
-        v, _, _ = evaluate(wx, good_runway(), "day", False, manual_threats=["night_operations"])
+        v, _, _ = evaluate(wx, good_runway(), "day", manual_threats=["night_operations"])
         assert v == Verdict.MITIGATE                     # confident: 2 → MITIGATE
 
 
@@ -204,15 +230,15 @@ def test_cautious_preset_single_serious_threat_is_nogo():
     # Isolate the threat stack from hard limits: calm VFR weather, but a single
     # serious threat (convective_nearby) injected. Under cautious it weighs 2.
     wx = calm_vfr()
-    v_default, _, n = evaluate(wx, good_runway(), "day", False, manual_threats=["convective_nearby"])
+    v_default, _, n = evaluate(wx, good_runway(), "day", manual_threats=["convective_nearby"])
     assert v_default == Verdict.MITIGATE                 # standard: weight 1 → MITIGATE
     with limits_override({"conservatism": "cautious"}):
-        v, _, _ = evaluate(wx, good_runway(), "day", False, manual_threats=["convective_nearby"])
+        v, _, _ = evaluate(wx, good_runway(), "day", manual_threats=["convective_nearby"])
         assert v == Verdict.NOGO                         # cautious: serious weight 2 → NO-GO
 
 
 def test_manual_threats_outside_known_set_ignored():
-    present = derive_threats(calm_vfr(), False, manual_threats=["not_a_threat", "terrain_critical"])
+    present = derive_threats(calm_vfr(), manual_threats=["not_a_threat", "terrain_critical"])
     assert present == {"terrain_critical"}
 
 
@@ -223,30 +249,30 @@ def imc_wx():
 
 def test_imc_not_a_threat_under_vfr():
     # Under VFR, actual IMC is not a stacking threat...
-    assert "actual_imc" not in derive_threats(imc_wx(), False, flight_rules="vfr")
+    assert "actual_imc" not in derive_threats(imc_wx(), flight_rules="vfr")
 
 
 def test_imc_is_hard_nogo_under_vfr():
     # ...it is an automatic NO-GO via the ceiling/visibility hard limits instead.
-    verdict, checks, threats, _n = decision(imc_wx(), None, "day", False, flight_rules="vfr")
+    verdict, checks, threats, _n = decision(imc_wx(), None, "day", flight_rules="vfr")
     assert verdict == Verdict.NOGO
     assert any(c.key == "ceiling" and not c.passed for c in checks)
     assert not any(t.key == "actual_imc" for t in threats)
 
 
 def test_imc_not_a_threat_under_ifr_by_default():
-    assert "actual_imc" not in derive_threats(imc_wx(), False, flight_rules="ifr")
+    assert "actual_imc" not in derive_threats(imc_wx(), flight_rules="ifr")
 
 
 def test_imc_is_threat_under_ifr_when_opted_in():
     with limits_override({"imc_as_threat": True}):
-        assert "actual_imc" in derive_threats(imc_wx(), False, flight_rules="ifr")
+        assert "actual_imc" in derive_threats(imc_wx(), flight_rules="ifr")
 
 
 def test_imc_opt_in_plus_single_pilot_ifr_stacks_to_nogo():
     # The single-engine / no-autopilot scenario: IMC + single-pilot IFR = 2 threats.
     with limits_override({"imc_as_threat": True}):
-        present = derive_threats(imc_wx(), False,
+        present = derive_threats(imc_wx(),
                                  manual_threats=["single_pilot_ifr_no_autopilot"],
                                  flight_rules="ifr")
         assert present == {"actual_imc", "single_pilot_ifr_no_autopilot"}
@@ -256,7 +282,7 @@ def test_imc_opt_in_plus_single_pilot_ifr_stacks_to_nogo():
 def test_single_pilot_ifr_dropped_under_vfr():
     # Selecting the IFR-only threat on a VFR flight must not stack it.
     present = derive_threats(WeatherSummary(wind_dir_true=50, wind_kt=5, visibility_sm=15,
-                                            ceiling_agl_ft=8000), False,
+                                            ceiling_agl_ft=8000),
                              manual_threats=["single_pilot_ifr_no_autopilot"],
                              flight_rules="vfr")
     assert "single_pilot_ifr_no_autopilot" not in present
@@ -353,13 +379,13 @@ def _night_wx():
 
 
 def test_night_counts_as_threat_by_default():
-    present = derive_threats(_night_wx(), False, manual_threats=["night_operations"])
+    present = derive_threats(_night_wx(), manual_threats=["night_operations"])
     assert "night_operations" in present
 
 
 def test_night_dropped_when_opted_out():
     with limits_override({"night_as_threat": False}):
-        present = derive_threats(_night_wx(), False, manual_threats=["night_operations"])
+        present = derive_threats(_night_wx(), manual_threats=["night_operations"])
         assert "night_operations" not in present
 
 
@@ -367,10 +393,10 @@ def test_night_opt_out_lowers_the_stack_not_the_minimums():
     """Opting out removes the threat row, but night still selects the *night*
     ceiling and visibility limits - those are two different things."""
     wx = _night_wx()
-    _v, _c, threats_on, n_on = decision(wx, None, "night", False,
+    _v, _c, threats_on, n_on = decision(wx, None, "night",
                                         manual_threats=["night_operations"])
     with limits_override({"night_as_threat": False}):
-        _v, checks_off, threats_off, n_off = decision(wx, None, "night", False,
+        _v, checks_off, threats_off, n_off = decision(wx, None, "night",
                                                       manual_threats=["night_operations"])
     assert n_on == n_off + 1
     assert any(t.key == "night_operations" and t.present for t in threats_on)
@@ -384,8 +410,10 @@ def test_night_opt_out_lowers_the_stack_not_the_minimums():
 def test_night_opt_out_is_not_bypassable_by_a_forged_query_string():
     # The gate is in derive_threats, so it covers anything that could add the key.
     with limits_override({"night_as_threat": False}):
-        present = derive_threats(_night_wx(), True,
-                                 manual_threats=["night_operations", "terrain_critical"])
+        present = derive_threats(
+            _night_wx(),
+            manual_threats=["night_operations", "terrain_critical",
+                            "unfamiliar_or_complex_airspace"])
         assert present == {"terrain_critical", "unfamiliar_or_complex_airspace"}
 
 
@@ -572,7 +600,7 @@ def test_threat_not_in_major_threats_still_gets_a_row():
     from app.config import _limits_override
     tok = _limits_override.set(limits)
     try:
-        present = derive_threats(wx, False, [])
+        present = derive_threats(wx, [])
         rows = evaluator.threat_check_list(present)
         shown = {r.key for r in rows if r.present}
         assert present, "sanity: the wind should raise a threat"
@@ -585,7 +613,8 @@ def test_every_counted_threat_has_a_row_by_default():
     wx = WeatherSummary(wind_dir_true=310, wind_kt=25, gust_kt=40,
                         visibility_sm=1, ceiling_agl_ft=500,
                         hazards=["thunderstorm", "forecast_icing", "low_level_wind_shear"])
-    present = derive_threats(wx, True, ["terrain_critical"], flight_rules="ifr")
+    present = derive_threats(wx, ["terrain_critical", "unfamiliar_or_complex_airspace"],
+                             flight_rules="ifr")
     shown = {r.key for r in evaluator.threat_check_list(present) if r.present}
     assert present == shown
 

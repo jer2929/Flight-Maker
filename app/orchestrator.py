@@ -696,7 +696,7 @@ def _assess_endpoint(
 
     rw = _rw_with_mag(best_runway(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt), lat, lon)
     verdict, checks, tchecks, n = decision(
-        weather, rw, mode, ap.is_complex_airspace(airport.ident), manual_threats,
+        weather, rw, mode, manual_threats,
         extra_checks=extra_checks, ceiling_mode=ceiling_mode,
         flight_rules=flight_rules)
     # What the TAF says about the rest of the window, as its own rows (and the
@@ -1748,7 +1748,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
                                          ceiling_mode="endpoint", flight_rules=flight_rules)]
 
     all_checks = cond_checks + win_checks + weather_checks
-    present = derive_threats(route_ws, ap.is_complex_airspace(dep.ident) or ap.is_complex_airspace(dest.ident), manual_threats, flight_rules=flight_rules)
+    present = derive_threats(route_ws, manual_threats, flight_rules=flight_rules)
     route_threats = threat_check_list(present)
     threat_count = threat_weight(present)
     # One rule for all of them: a row traceable only to a TEMPO asks for an out
@@ -1792,7 +1792,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         dep_fc, dest_fc, dep_segs, dest_segs,
         fill_headings(ap.get_runways(dep.ident), dep.lat, dep.lon),
         fill_headings(ap.get_runways(dest.ident), dest.lat, dest.lon),
-        manual_threats, ap.is_complex_airspace(dep.ident) or ap.is_complex_airspace(dest.ident),
+        manual_threats,
         settings.timeline_hours,
         dep_ident=dep.ident, dest_ident=dest.ident,
         dep_lat=dep.lat, dep_lon=dep.lon, dest_lat=dest.lat, dest_lon=dest.lon,

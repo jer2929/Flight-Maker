@@ -159,27 +159,27 @@ RESPECTED = {
 def test_relaxing_a_minimum_changes_the_verdict(name):
     prefs, wx, rw, mode, ceiling_mode, rules = RESPECTED[name]
     kw = dict(ceiling_mode=ceiling_mode, flight_rules=rules)
-    strict = decision(wx, rw, mode, False, [], **kw)[0]
+    strict = decision(wx, rw, mode, [], **kw)[0]
     with limits_override(prefs):
-        relaxed = decision(wx, rw, mode, False, [], **kw)[0]
+        relaxed = decision(wx, rw, mode, [], **kw)[0]
     assert relaxed != strict, f"{name}: engine ignored the pilot's own minimum"
 
 
 def test_conservatism_preset_changes_the_verdict():
     wx = _wx(wind_kt=16)  # two stacked threats, no hard-limit bust
-    strict = decision(wx, None, "day", True, [])[0]
+    strict = decision(wx, None, "day", ["unfamiliar_or_complex_airspace"])[0]
     with limits_override({"conservatism": "confident"}):
-        assert decision(wx, None, "day", True, [])[0] != strict
+        assert decision(wx, None, "day", ["unfamiliar_or_complex_airspace"])[0] != strict
 
 
 def test_night_and_imc_threat_toggles_are_respected():
-    assert "night_operations" in derive_threats(_wx(), False, ["night_operations"])
+    assert "night_operations" in derive_threats(_wx(), ["night_operations"])
     with limits_override({"night_as_threat": False}):
-        assert "night_operations" not in derive_threats(_wx(), False, ["night_operations"])
+        assert "night_operations" not in derive_threats(_wx(), ["night_operations"])
     low = _wx(visibility_sm=1)
-    assert "actual_imc" not in derive_threats(low, False, [], flight_rules="ifr")
+    assert "actual_imc" not in derive_threats(low, [], flight_rules="ifr")
     with limits_override({"imc_as_threat": True}):
-        assert "actual_imc" in derive_threats(low, False, [], flight_rules="ifr")
+        assert "actual_imc" in derive_threats(low, [], flight_rules="ifr")
 
 
 # ---- wind threat triggers scale with the pilot's own wind limits ------------
@@ -199,17 +199,17 @@ def test_gust_spread_within_raised_limit_is_not_a_threat():
     # The reported bug: 5G14 is a 9 kt spread. Default (10 kt limit) flags it;
     # a pilot who set 20 kt has said it is unremarkable.
     wx = _wx(wind_kt=5, gust_kt=14)
-    assert "strong_or_gusty_winds" in derive_threats(wx, False, [])
+    assert "strong_or_gusty_winds" in derive_threats(wx, [])
     with limits_override({"wind": {"gust_spread_max_kt": 20}}):
-        assert "strong_or_gusty_winds" not in derive_threats(wx, False, [])
+        assert "strong_or_gusty_winds" not in derive_threats(wx, [])
 
 
 def test_lowering_a_limit_tightens_the_trigger_too():
     # Scaling cuts both ways - a cautious pilot's lower limit trips sooner.
     wx = _wx(wind_kt=5, gust_kt=11)  # 6 kt spread, under the default 8 kt trip
-    assert "strong_or_gusty_winds" not in derive_threats(wx, False, [])
+    assert "strong_or_gusty_winds" not in derive_threats(wx, [])
     with limits_override({"wind": {"gust_spread_max_kt": 5}}):
-        assert "strong_or_gusty_winds" in derive_threats(wx, False, [])
+        assert "strong_or_gusty_winds" in derive_threats(wx, [])
 
 
 # ---- aircraft cruise TAS override -----------------------------------------

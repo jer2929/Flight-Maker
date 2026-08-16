@@ -347,6 +347,16 @@ profile, and **unfamiliar / complex airspace** is a per-flight toggle (it's
 pilot-relative, so it works at any airport). A **conservatism preset** sets how
 readily a stack escalates the verdict:
 
+**No aerodrome raises the airspace threat by itself.** Busy fields used to be
+carried on a built-in list - Hamilton, City Centre, Pearson, Kitchener - and the
+threat was stacked on every flight touching one. But whether airspace is
+unfamiliar is a fact about the *pilot*, not the field: someone who flies into
+Hamilton every other weekend is not the pilot that warning is written for, and
+with one automatic weather threat alongside it (strong winds trips at 15 kt on
+the defaults) that pairing read **NO-GO** on a flight they would happily make.
+The list is gone. The tick under "This flight - extra threats" is the only thing
+that raises it, at any aerodrome, and you are the one who knows.
+
 | Preset | Behaviour |
 |--------|-----------|
 | **Standard** *(default)* | One threat → mitigate, two → no-go (the original card). |
