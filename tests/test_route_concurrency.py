@@ -28,6 +28,9 @@ class _Tracker:
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        # First positional argument per call, so a test can check *what* was
+        # asked for and not merely that something was.
+        self.sites: dict[str, object] = {}
         self.inflight = 0
         self.peak = 0
 
@@ -46,10 +49,14 @@ class _Tracker:
 
 @pytest.fixture
 def upstreams(monkeypatch):
+    # (The TTL cache is reset around every test by tests/conftest.py - these
+    # tests count round trips and would otherwise measure a warm run.)
     t = _Tracker()
 
     def stub(name, result):
         async def inner(*args, **kwargs):
+            if args:
+                t.sites[name] = args[0]
             await t.enter(name)
             try:
                 return result(*args) if callable(result) else result
@@ -58,6 +65,11 @@ def upstreams(monkeypatch):
         return inner
 
     by_site = lambda sites, *a: {s: METARS[s] for s in sites if s in METARS}  # noqa: E731
+    # One forecast per point asked for. Returning a bare ``[]`` here would make
+    # every batched request look like a short answer, so ``forecast_points``
+    # would fall back to one-request-per-point and the batching these tests are
+    # meant to pin would go untested while they carried on passing.
+    per_point = lambda points, *a, **k: [{} for _ in points]  # noqa: E731
 
     monkeypatch.setattr(cfps, "metars", stub("cfps.metars", by_site))
     monkeypatch.setattr(cfps, "tafs", stub("cfps.tafs", {}))
@@ -72,10 +84,14 @@ def upstreams(monkeypatch):
     monkeypatch.setattr(awc, "gairmets", stub("awc.gairmets", []))
     monkeypatch.setattr(awc, "cwas", stub("awc.cwas", []))
     monkeypatch.setattr(awc, "pireps", stub("awc.pireps", []))
+    # The per-point fallback ``forecast_points`` drops to when a batch fails.
+    # A healthy route should not reach it - see the batching test below.
     monkeypatch.setattr(openmeteo, "forecast", stub("openmeteo.forecast", {}))
-    # The en-route corridor fetch. Without this stub the route would attempt a
-    # live request that _safe swallows - failing slowly and silently.
-    monkeypatch.setattr(openmeteo, "forecast_many", stub("openmeteo.forecast_many", []))
+    # Two callers now: the en-route corridor, and the batched endpoint +
+    # midpoint forecasts. Without this stub the route would attempt a live
+    # request that _safe swallows - failing slowly and silently.
+    monkeypatch.setattr(openmeteo, "forecast_many",
+                        stub("openmeteo.forecast_many", per_point))
     monkeypatch.setattr(openmeteo, "ensemble_wind_now",
                         stub("openmeteo.ensemble_wind_now", None))
     return t
@@ -104,8 +120,47 @@ def test_route_still_requests_every_upstream(upstreams):
                      "cfps.sigmets", "cfps.airmets", "cfps.pireps",
                      "awc.metar_history", "awc.isigmets", "awc.airsigmets",
                      "awc.gairmets", "awc.cwas", "awc.pireps",
-                     "openmeteo.forecast", "openmeteo.forecast_many"):
+                     # The endpoint and midpoint forecasts arrive through
+                     # ``forecast_points``, which batches them into this call.
+                     "openmeteo.forecast_many"):
         assert required in made, f"{required} was never requested"
+
+
+def test_the_point_forecasts_go_out_as_one_request(upstreams):
+    """Departure + destination + three midpoints: one request, not five.
+
+    They are the same ~70-variable hourly forecast at five coordinates, and
+    Open-Meteo takes all five in one call. The fallback to one-per-point is
+    still there for a batch that cannot be trusted, so this also pins that a
+    healthy route never reaches it.
+    """
+    asyncio.run(
+        orchestrator.assess_route("CYFD", "CYHM", "day", [], flight_rules="vfr"))
+
+    assert "openmeteo.forecast" not in upstreams.calls, (
+        "the route fell back to fetching each point separately")
+    # One for the batched points, one for the en-route corridor.
+    assert upstreams.calls.count("openmeteo.forecast_many") == 2
+
+
+def test_the_metar_is_fetched_once_not_twice(upstreams):
+    """``cfps.metars`` and ``cfps.metar_history`` are the same CFPS query.
+
+    They ask the same endpoint for the same product, and CFPS returns every
+    observation it holds either way - one keeps the newest, the other keeps them
+    all. Asking for a narrower site list made them different cache keys, so both
+    missed and both went to the network. They now ask the identical question and
+    ``cache.once`` collapses them into one round trip.
+    """
+    asyncio.run(
+        orchestrator.assess_route("CYFD", "CYHM", "day", [], flight_rules="vfr"))
+
+    # Both call sites still run - losing the history would cost the trend rows.
+    assert "cfps.metars" in upstreams.calls
+    assert "cfps.metar_history" in upstreams.calls
+    assert upstreams.sites["cfps.metars"] == upstreams.sites["cfps.metar_history"], (
+        "the two METAR calls ask different site lists again, so they will chunk "
+        "to different cache keys and cost two round trips instead of one")
 
 
 def test_each_area_product_is_fetched_once(upstreams):

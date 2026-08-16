@@ -6,9 +6,11 @@ gated by the pilot's own personal minimums. Serves a small single-page UI from
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Query
@@ -28,9 +30,38 @@ from app.config import (
 from app.services import fetch_health, solar
 from app.services.geo import flight_time_hr, haversine_nm
 from app.services.evaluator import THREAT_LABELS
-from app.sources import airports as ap
+from app.sources import _http, airports as ap
 
-app = FastAPI(title="Minima", version="0.2.0")
+
+def _load_datasets() -> None:
+    """Parse the airport/runway/station tables into memory.
+
+    All three are ``lru_cache``d and parse multi-thousand-row CSVs into pydantic
+    models on first touch, so whoever touches them first pays for all of it.
+    Left to itself that is the pilot, mid-assessment. Doing it at startup moves
+    the cost into the window where the machine is booting anyway.
+    """
+    ap.load_airports()
+    ap.load_runways()
+    ap.load_stations()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # In a thread: this is CPU-bound parsing, and ``_pick`` can additionally go
+    # to the network if the baked dataset is missing (see
+    # ``scripts.refresh_airport_data``). Neither belongs on the event loop while
+    # the platform's health check is waiting for an answer. Fire-and-forget -
+    # if it fails, the first request pays for the load exactly as it does today.
+    warm = asyncio.create_task(asyncio.to_thread(_load_datasets))
+    try:
+        yield
+    finally:
+        warm.cancel()
+        await _http.aclose()
+
+
+app = FastAPI(title="Minima", version="0.2.0", lifespan=lifespan)
 
 
 def _parse_prefs(prefs: str | None) -> dict | None:
@@ -81,6 +112,78 @@ async def config():
         "default_night_as_threat": defaults.get("threat_stacking", {}).get("night_as_threat", True),
         "weather_flag_options": defaults["hard_limits"]["weather_flags"],
     }
+
+
+@app.get("/api/prewarm")
+async def prewarm():
+    """Pull the products that don't depend on which route the pilot picks.
+
+    The first assessment of the day is the slow one, and most of why is that
+    nothing is warm: the machine scales to zero when idle, so it wakes with an
+    empty cache, no open connections to any upstream, and ~19 real fetches to
+    make before it can answer.
+
+    The page already calls ``/api/config`` on load, which is what wakes the
+    machine. This rides that moment, fetching only what is knowable before the
+    pilot has named a destination, so it is waiting when they finally click
+    Assess tens of seconds later.
+
+    What it actually buys, measured on CYFD->CYQG:
+
+    * **The four national advisory feeds** - these are cached by product alone,
+      so they serve any route. A cold route assessment makes 19 upstream
+      requests; after a prewarm it makes 15.
+    * **The home base's METAR, TAF, NOTAM and forecast** - the same site list
+      and the same ``days`` that ``assess_circuits`` asks for, so circuits at
+      the home aerodrome start almost entirely warm. A *route* out of the home
+      base still batches its departure in with the destination and midpoints, so
+      this shrinks that one request rather than removing it.
+    * **Open, TLS-negotiated connections to all three upstreams**, which every
+      later fetch reuses. On a cold process this is worth as much as the cached
+      data and it is the part that helps regardless of where the pilot flies.
+
+    Two things this deliberately does **not** do:
+
+    * **Change what the pilot is shown.** Every fetch writes the same value
+      under the same key with the same TTL the real request would have written,
+      so the worst case is an assessment reading data a few seconds into its
+      normal cache window - which is exactly what a second assessment already
+      does. Nothing is held longer, and nothing is served that a live request
+      would not have served.
+    * **Report failures.** There is no ``fetch_health.collect()`` here, so
+      ``record()`` is a no-op and a failed prewarm is silent. The pilot's own
+      request will re-fetch and raise the banner honestly if the upstream is
+      still down. A warmup must never be able to put a warning on the page.
+
+    ``awc.pireps`` is left out: its cache key is built from the route's bounding
+    box, so prewarming it could only ever add an entry nobody reads.
+    """
+    from app.sources import awc, cfps, openmeteo
+
+    s = get_settings()
+    origin = ap.get_airport(s.origin)
+    sites = [origin.ident] if origin else []
+
+    jobs = {
+        "isigmet": awc.isigmets(),
+        "airsigmet": awc.airsigmets(),
+        "cwa": awc.cwas(),
+        "gairmet": awc.gairmets(0),
+    }
+    if origin:
+        jobs["metar"] = cfps.metars(sites)
+        jobs["taf"] = cfps.tafs(sites)
+        jobs["notam"] = cfps.notams(sites)
+        jobs["hrdps"] = openmeteo.forecast(
+            origin.lat, origin.lon, orchestrator.days_for(s.timeline_hours))
+
+    results = await asyncio.gather(*jobs.values(), return_exceptions=True)
+    warmed = [name for name, r in zip(jobs, results)
+              if not isinstance(r, BaseException)]
+    # Awaited rather than backgrounded on purpose: a fire-and-forget task can be
+    # killed mid-flight when the platform stops an idle machine, and holding the
+    # request open is what tells it the machine is not idle.
+    return {"warmed": warmed, "count": len(warmed), "of": len(jobs)}
 
 
 @app.get("/api/airports/search")

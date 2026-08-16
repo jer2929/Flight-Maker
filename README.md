@@ -581,6 +581,31 @@ never `/api/*`, so weather data always stays live. It's hosted on **Fly.io** at
 `Dockerfile`, and a GitHub Action (`.github/workflows/fly-deploy.yml`) that
 auto-deploys on every push to `main`.
 
+### Why the first assessment of the day is the slow one
+
+`fly.toml` scales to zero when idle, which is what keeps it at a couple of
+dollars a month — and it means the first request of the day wakes a stopped
+machine with an empty cache and no open connection to any upstream.
+
+Three things narrow that gap without paying for an always-on machine. The page
+calls `/api/config` on load, which wakes the machine before the pilot has typed
+anything, and then `/api/prewarm`, which pulls the products that don't depend on
+the route (the national SIGMET/AIRMET/CWA/G-AIRMET feeds and the home base) and
+opens the upstream connections while they are still choosing a destination.
+Startup parses the airport dataset in a thread rather than leaving it to the
+first request. And the fetching itself is cheaper: a cold route is 19 upstream
+requests rather than 24, all of them sharing pooled HTTP/2 connections to the
+three hosts instead of opening a TLS session each.
+
+None of it changes what the pilot is shown. The prewarm writes the same values
+under the same cache keys with the same TTLs a live request would, and it is
+deliberately outside `fetch_health.collect()` — a warmup can never put a banner
+on the page, and a real request will re-fetch and report an outage honestly.
+
+While an assessment runs, the elapsed time ticks next to the button and stays
+there when it lands ("data fetched in 11.8 s"), so a long pull reads as work
+rather than as a frozen app.
+
 ## Project layout
 
 ```
@@ -590,8 +615,10 @@ app/
   models.py          pydantic models
   orchestrator.py    assembles live data into route assessment / discovery
   sources/           cfps, awc (aviationweather.gov), openmeteo (HRDPS),
-                     geomet (radar), airports, cache,
-                     _http (one GET, retried once)
+                     geomet (radar), airports,
+                     cache (TTL + single-flight coalescing),
+                     _http (one GET, retried once, over a pooled HTTP/2
+                     connection shared by every upstream)
   services/          geo, geometry (does the route cross this area?),
                      area_products (reading a bulletin), area_hazards (one shape
                      for every advisory, and which ones reach this flight),

@@ -177,3 +177,91 @@ def test_corridor_uses_one_batched_forecast_request(dataset, monkeypatch):
     assert calls[0][0] == len(corridor)
     # Wind variables only - the cards show nothing else.
     assert calls[0][1] == tuple(openmeteo.WIND_ONLY_VARS)
+
+
+# ---------------------------------------------------------------------------
+# The report behind a checklist row's source chip.
+# ---------------------------------------------------------------------------
+CYCK_METAR = "CYCK 161700Z 24008KT 6SM BR OVC010 14/12 A2988 RMK SC8 SLP118"
+
+
+def test_a_station_under_the_route_carries_its_report_text():
+    """A row that says "CYCK METAR, 18 nm" should be able to show that METAR.
+
+    ``_merge_enroute_report`` already recorded which station and which product
+    decided the value; the text itself was thrown away, so the pilot could see
+    that a station 18 nm off track had lowered their route ceiling but not what
+    it had actually observed.
+    """
+    pt = {"ceiling_ft": 4000, "vis_sm": 9}
+    station = _field("CYCK", 42.3, -82.1)
+    orchestrator._merge_enroute_report(
+        pt, station, 18.0, CYCK_METAR, [], datetime.now(timezone.utc),
+        use_metar=True)
+
+    assert pt["obs_kind"] == "METAR"
+    assert pt["obs_station"] == "CYCK"
+    assert pt["obs_text"] == CYCK_METAR
+    assert pt["ceiling_source"] == "CYCK METAR, 18 nm"
+    assert pt["ceiling_ft"] == 1000, "the observed deck should have won"
+
+
+def test_a_taf_backed_sample_carries_the_taf_it_was_read_from():
+    """Past the observation horizon the station's TAF stands in for its METAR,
+    and the chip says so - so the popover has to show a TAF, not nothing."""
+    from app.services import weather as wx
+
+    raw = ("CYCK 161540Z 1616/1712 24010KT 6SM BR OVC012 "
+           "TEMPO 1616/1620 2SM -RA BKN006")
+    segs = wx.parse_taf_segments(raw)
+    pt = {"ceiling_ft": 8000, "vis_sm": 9}
+    when = min(s["start"] for s in segs) + timedelta(minutes=30)
+
+    orchestrator._merge_enroute_report(
+        pt, _field("CYCK", 42.3, -82.1), 18.0, CYCK_METAR, segs, when,
+        use_metar=False, raw_taf=raw)
+
+    assert pt["obs_kind"] == "TAF"
+    assert pt["obs_text"] == raw, "the TAF case must not carry the METAR"
+
+
+def test_a_sample_with_no_report_carries_no_text():
+    """A model-only midpoint has nothing to show, and the chip must stay a
+    plain label rather than a button that opens an empty box."""
+    pt = {"ceiling_ft": 4000, "vis_sm": 9}
+    orchestrator._merge_enroute_report(
+        pt, _field("CYCK", 42.3, -82.1), 18.0, None, [],
+        datetime.now(timezone.utc), use_metar=True)
+    assert "obs_text" not in pt
+
+
+def test_the_endpoint_rows_carry_their_own_metar(dataset, monkeypatch):
+    """The route ceiling row is the worst value *anywhere* on the route, so it
+    has to read the same way whichever point turned out to be the worst."""
+    from app.sources import _http, cache
+
+    metar = lambda s: f"{s} 161700Z 24008KT 6SM BR OVC010 14/12 A2988"  # noqa: E731
+
+    async def fake(url, params, *, headers=None, attempts=2):
+        p = dict(params) if isinstance(params, dict) else None
+        if "navcanada" in url:
+            alpha = [v for k, v in params if k == "alpha"][0]
+            sites = [v for k, v in params if k == "site"]
+            if alpha == "metar":
+                return {"data": [{"location": s, "text": metar(s)} for s in sites]}
+            return {"data": []}
+        if "open-meteo" in url:
+            n = len(str(p["latitude"]).split(","))
+            one = {"hourly": {"time": []}}
+            return [one] * n if n > 1 else one
+        return []
+
+    monkeypatch.setattr(_http, "get_json", fake)
+    cache.clear()
+    r = asyncio.run(orchestrator.assess_route("AAAA", "ZZZZ", "day", []))
+
+    rows = {c.key: c for c in r.limit_checks if c.source_text}
+    assert "ceiling" in rows, "the route ceiling row lost its report"
+    assert rows["ceiling"].source_text.startswith("AAAA ")
+    assert rows["ceiling"].location == "AAAA (departure)"
+    assert "visibility" in rows and rows["visibility"].source_text

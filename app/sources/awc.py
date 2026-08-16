@@ -50,17 +50,19 @@ async def _area(product: str, params: dict) -> list[dict]:
     wrongly.
     """
     key = f"awc:{product}:{sorted(params.items())}"
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-    body = await _get_json(f"{_BASE}/{product}", params)
-    if isinstance(body, dict):
-        rows = body.get("features") or body.get("data") or []
-    else:
-        rows = body if isinstance(body, list) else []
-    rows = [r for r in rows if isinstance(r, dict)]
-    cache.put(key, rows, get_settings().awc_cache_ttl)
-    return rows
+
+    async def fetch() -> list[dict]:
+        body = await _get_json(f"{_BASE}/{product}", params)
+        if isinstance(body, dict):
+            rows = body.get("features") or body.get("data") or []
+        else:
+            rows = body if isinstance(body, list) else []
+        return [r for r in rows if isinstance(r, dict)]
+
+    # ``once``, so the ``/api/prewarm`` warmup and a route assessment that lands
+    # while it is still in flight share the one request rather than both making
+    # it.
+    return await cache.once(key, get_settings().awc_cache_ttl, fetch)
 
 
 async def isigmets() -> list[dict]:
@@ -128,27 +130,27 @@ async def metar_history(idents: list[str], hours: int = 6) -> dict[str, list[str
     if not idents:
         return {}
     key = f"awc:{','.join(sorted(idents))}:{hours}"
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
 
-    data = await _get_json(_METAR_URL,
-                           {"ids": ",".join(idents), "format": "json", "hours": hours})
+    async def fetch() -> dict[str, list[str]]:
+        data = await _get_json(
+            _METAR_URL,
+            {"ids": ",".join(idents), "format": "json", "hours": hours})
 
-    rows: dict[str, list[tuple[int, str]]] = {}
-    for item in data if isinstance(data, list) else []:
-        ident = (item.get("icaoId") or item.get("id") or "").upper()
-        raw = item.get("rawOb") or item.get("raw_text")
-        if ident and raw:
-            rows.setdefault(ident, []).append((item.get("obsTime") or 0, raw))
-    out: dict[str, list[str]] = {}
-    for ident, lst in rows.items():
-        lst.sort(key=lambda t: t[0], reverse=True)  # newest first
-        seen, uniq = set(), []
-        for _, raw in lst:
-            if raw not in seen:
-                seen.add(raw)
-                uniq.append(raw)
-        out[ident] = uniq
-    cache.put(key, out, 300)
-    return out
+        rows: dict[str, list[tuple[int, str]]] = {}
+        for item in data if isinstance(data, list) else []:
+            ident = (item.get("icaoId") or item.get("id") or "").upper()
+            raw = item.get("rawOb") or item.get("raw_text")
+            if ident and raw:
+                rows.setdefault(ident, []).append((item.get("obsTime") or 0, raw))
+        out: dict[str, list[str]] = {}
+        for ident, lst in rows.items():
+            lst.sort(key=lambda t: t[0], reverse=True)  # newest first
+            seen, uniq = set(), []
+            for _, raw in lst:
+                if raw not in seen:
+                    seen.add(raw)
+                    uniq.append(raw)
+            out[ident] = uniq
+        return out
+
+    return await cache.once(key, 300, fetch)

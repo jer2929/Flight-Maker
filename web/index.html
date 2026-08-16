@@ -157,7 +157,16 @@
         <label for="etd">ETD (Zulu)</label>
         <select id="etd" class="etd-sel"></select>
       </div>
-      <button id="run-route" class="primary">Assess route</button>
+      <!-- Button and timer share one flex item so they wrap together: the
+           readout grows from "1.5 s" to "data fetched in 11.8 s" as it lands,
+           and on its own it would jump to the next line just as it filled in. -->
+      <div class="run-row">
+        <button id="run-route" class="primary">Assess route</button>
+        <!-- Ticks while the assessment is pulling its ~19 upstream products,
+             then holds the elapsed time, so a long wait reads as work rather
+             than as a frozen app. Filled by startRunTimer/stopRunTimer. -->
+        <span id="run-timer" class="run-timer" aria-hidden="true"></span>
+      </div>
     </div>
 
     <!-- "Some of this didn't download" - sits above the verdict, because a card
@@ -252,7 +261,10 @@
           <input type="checkbox" id="f-go" /> GO only
         </label>
       </div>
-      <button id="run-discovery" class="primary">Find flights now</button>
+      <div class="run-row">
+        <button id="run-discovery" class="primary">Find flights now</button>
+        <span id="discovery-timer" class="run-timer" aria-hidden="true"></span>
+      </div>
     </div>
     <div id="discovery-data-health"></div>
     <div id="discovery-results" class="results"></div>

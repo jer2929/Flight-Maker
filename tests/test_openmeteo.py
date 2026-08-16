@@ -1,5 +1,7 @@
+import asyncio
 import math
 
+from app.sources import cache, openmeteo
 from app.sources.openmeteo import (derive_ceiling_ft, ensemble_at_index,
                                    ensemble_point_now, index_for_time,
                                    lowest_layer, scalar_mean, vector_mean_wind)
@@ -204,13 +206,11 @@ def test_forecast_many_variable_subset_has_its_own_cache_key():
             return self._payload
 
     class _Client:
-        async def __aenter__(self):
-            return self
+        # See the note in tests/test_fetch_health.py: ``_http`` reuses one
+        # pooled client per event loop and checks it is still open first.
+        is_closed = False
 
-        async def __aexit__(self, *a):
-            return False
-
-        async def get(self, url, params=None):
+        async def get(self, url, params=None, headers=None):
             captured.append(params["hourly"])
             return _Resp([{"hourly": {"time": []}}])
 
@@ -290,3 +290,149 @@ def test_index_for_time_matches_the_hour():
     assert index_for_time(hourly, "2026-08-15T13:00:00Z") == 1
     assert index_for_time(hourly, "2026-08-20T13:00Z") is None
     assert index_for_time({}, "2026-08-15T13:00Z") is None
+
+
+# ---------------------------------------------------------------------------
+# forecast_points: five point forecasts in one request, without changing the
+# caching or the fault isolation that five separate requests gave.
+# ---------------------------------------------------------------------------
+def _pt_fc(tag):
+    return {"tag": tag, "hourly": {"time": ["2026-08-15T12:00"]}}
+
+
+def test_forecast_points_batches_the_misses_into_one_request(monkeypatch):
+    """Departure, destination and three midpoints used to be five requests."""
+    cache.clear()
+    seen = {"many": 0, "one": 0}
+
+    async def _many(points, days=2, hourly=None):
+        seen["many"] += 1
+        seen["n"] = len(points)
+        return [_pt_fc(i) for i in range(len(points))]
+
+    async def _one(lat, lon, days=2):
+        seen["one"] += 1
+        return _pt_fc("single")
+
+    monkeypatch.setattr(openmeteo, "forecast_many", _many)
+    monkeypatch.setattr(openmeteo, "forecast", _one)
+
+    pts = [(43.0, -80.0), (42.2, -83.0), (42.9, -80.9), (42.7, -81.6), (42.4, -82.3)]
+    got = asyncio.run(openmeteo.forecast_points(pts, 3))
+
+    assert seen == {"many": 1, "one": 0, "n": 5}, "the five points did not batch"
+    assert [g["tag"] for g in got] == [0, 1, 2, 3, 4], "results came back out of order"
+
+
+def test_forecast_points_fills_the_per_point_cache_forecast_reads(monkeypatch):
+    """Batching must not cost the per-point reuse a single-point fetch had.
+
+    Tomorrow's route out of the same field has to be able to find today's
+    departure forecast, and it looks for it under the single-point key.
+    """
+    cache.clear()
+
+    async def _many(points, days=2, hourly=None):
+        return [_pt_fc(i) for i in range(len(points))]
+
+    async def _boom(*a, **k):
+        raise AssertionError("forecast() should have been served from cache")
+
+    monkeypatch.setattr(openmeteo, "forecast_many", _many)
+    asyncio.run(openmeteo.forecast_points([(43.0, -80.0), (42.2, -83.0)], 3))
+
+    monkeypatch.setattr(openmeteo, "_http", _Unusable())
+    assert asyncio.run(openmeteo.forecast(43.0, -80.0, 3))["tag"] == 0
+    assert asyncio.run(openmeteo.forecast(42.2, -83.0, 3))["tag"] == 1
+
+
+class _Unusable:
+    """Any network call through this is a test failure."""
+
+    async def get_json(self, *a, **k):
+        raise AssertionError("went to the network for a cached point")
+
+
+def test_forecast_points_skips_points_it_already_has(monkeypatch):
+    cache.clear()
+    cache.put(openmeteo._point_key(43.0, -80.0, 3), _pt_fc("cached"), 300)
+    asked = {}
+
+    async def _many(points, days=2, hourly=None):
+        asked["points"] = list(points)
+        return [_pt_fc(i) for i in range(len(points))]
+
+    monkeypatch.setattr(openmeteo, "forecast_many", _many)
+    got = asyncio.run(openmeteo.forecast_points(
+        [(43.0, -80.0), (42.2, -83.0), (42.9, -80.9)], 3))
+
+    assert asked["points"] == [(42.2, -83.0), (42.9, -80.9)]
+    assert got[0]["tag"] == "cached"
+
+
+def test_a_failed_batch_falls_back_to_one_request_per_point(monkeypatch):
+    """Five separate requests isolated a failure to the point that caused it.
+
+    Batching must not turn one bad point into five missing forecasts, so a
+    batch that raises retries the old way rather than degrading the lot.
+    """
+    cache.clear()
+    seen = {"one": 0}
+
+    async def _many(points, days=2, hourly=None):
+        raise RuntimeError("open-meteo said no")
+
+    async def _one(lat, lon, days=2):
+        seen["one"] += 1
+        if lat == 42.2:
+            raise RuntimeError("just this point")
+        return _pt_fc(lat)
+
+    monkeypatch.setattr(openmeteo, "forecast_many", _many)
+    monkeypatch.setattr(openmeteo, "forecast", _one)
+
+    got = asyncio.run(openmeteo.forecast_points(
+        [(43.0, -80.0), (42.2, -83.0), (42.9, -80.9)], 3))
+
+    assert seen["one"] == 3
+    assert got[0]["tag"] == 43.0
+    assert got[1] == {}, "the one bad point should be the only one lost"
+    assert got[2]["tag"] == 42.9
+
+
+def test_a_short_batch_is_refused_rather_than_mispaired(monkeypatch):
+    """Order is the *only* thing tying a forecast to the point that asked.
+
+    The response's own lat/lon are snapped grid-cell centres, so two nearby
+    midpoints can share them and they cannot re-pair the list. If the count
+    disagrees, that ordering assumption has already broken - and caching
+    Windsor's weather under Kitchener's key is far worse than four extra
+    requests.
+    """
+    cache.clear()
+    seen = {"one": 0}
+
+    async def _short(points, days=2, hourly=None):
+        return [_pt_fc("wrong")]                   # 1 back for 3 asked
+
+    async def _one(lat, lon, days=2):
+        seen["one"] += 1
+        return _pt_fc(lat)
+
+    monkeypatch.setattr(openmeteo, "forecast_many", _short)
+    monkeypatch.setattr(openmeteo, "forecast", _one)
+
+    pts = [(43.0, -80.0), (42.2, -83.0), (42.9, -80.9)]
+    got = asyncio.run(openmeteo.forecast_points(pts, 3))
+
+    assert seen["one"] == 3, "a mismatched batch was trusted"
+    assert [g["tag"] for g in got] == [43.0, 42.2, 42.9]
+    # Nothing from the short batch was filed against a point that never asked
+    # for it - the failure mode this guard exists to prevent.
+    for lat, lon in pts:
+        assert cache.get(openmeteo._point_key(lat, lon, 3)) != _pt_fc("wrong")
+
+
+def test_forecast_points_handles_the_trivial_cases():
+    cache.clear()
+    assert asyncio.run(openmeteo.forecast_points([], 3)) == []

@@ -7,6 +7,7 @@ for pressure-level winds. Free, no API key.
 """
 from __future__ import annotations
 
+import asyncio
 import math
 from datetime import datetime
 
@@ -92,6 +93,17 @@ def _hourly_vars() -> list[str]:
     return vars_
 
 
+def _point_key(lat: float, lon: float, days: int) -> str:
+    """The cache key for one point's full-variable forecast.
+
+    Shared by ``forecast`` and ``forecast_points`` on purpose: the batched
+    request writes its results back under exactly the keys a single-point
+    lookup reads, so batching changes how the data is *fetched* and nothing
+    about how it is cached or reused.
+    """
+    return f"hrdps:{lat:.3f},{lon:.3f}:{days}"
+
+
 async def forecast(lat: float, lon: float, days: int = 2) -> dict:
     """HRDPS hourly forecast for a point (winds in knots, hours in UTC).
 
@@ -101,23 +113,21 @@ async def forecast(lat: float, lon: float, days: int = 2) -> dict:
     two hourly arrays that disagree about what index ``i`` means.
     """
     settings = get_settings()
-    key = f"hrdps:{lat:.3f},{lon:.3f}:{days}"
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
 
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "forecast_days": days,
-        "models": settings.openmeteo_model,
-        "hourly": ",".join(_hourly_vars()),
-        "windspeed_unit": "kn",
-        "timezone": "UTC",
-    }
-    data = await _http.get_json(settings.openmeteo_base, params)
-    cache.put(key, data, settings.openmeteo_cache_ttl)
-    return data
+    async def fetch() -> dict:
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "forecast_days": days,
+            "models": settings.openmeteo_model,
+            "hourly": ",".join(_hourly_vars()),
+            "windspeed_unit": "kn",
+            "timezone": "UTC",
+        }
+        return await _http.get_json(settings.openmeteo_base, params)
+
+    return await cache.once(_point_key(lat, lon, days),
+                            settings.openmeteo_cache_ttl, fetch)
 
 
 async def forecast_many(points: list[tuple[float, float]], days: int = 2,
@@ -139,17 +149,100 @@ async def forecast_many(points: list[tuple[float, float]], days: int = 2,
     lats = ",".join(f"{p[0]:.4f}" for p in points)
     lons = ",".join(f"{p[1]:.4f}" for p in points)
     key = f"hrdps_many:{hash((lats, lons, days, tuple(vars_)))}"
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-    params = {
-        "latitude": lats, "longitude": lons, "forecast_days": days,
-        "models": settings.openmeteo_model, "hourly": ",".join(vars_),
-        "windspeed_unit": "kn", "timezone": "UTC",
-    }
-    data = await _http.get_json(settings.openmeteo_base, params)
-    out = data if isinstance(data, list) else [data]
-    cache.put(key, out, settings.openmeteo_cache_ttl)
+
+    async def fetch() -> list[dict]:
+        params = {
+            "latitude": lats, "longitude": lons, "forecast_days": days,
+            "models": settings.openmeteo_model, "hourly": ",".join(vars_),
+            "windspeed_unit": "kn", "timezone": "UTC",
+        }
+        data = await _http.get_json(settings.openmeteo_base, params)
+        return data if isinstance(data, list) else [data]
+
+    return await cache.once(key, settings.openmeteo_cache_ttl, fetch)
+
+
+async def forecast_points(points: list[tuple[float, float]],
+                          days: int = 2) -> list[dict]:
+    """Full-variable forecasts for several points, in as few requests as possible.
+
+    A route assessment wants the same ~70-variable hourly forecast at its
+    departure, its destination and each sampled midpoint - five points, which
+    used to be five separate requests. Open-Meteo takes them all in one call
+    (the enroute corridor has always used that form), and the variable list is
+    sent once instead of five times, so the batched URL is *shorter* than the
+    five it replaces.
+
+    What makes this safe to batch is that nothing about the caching changes.
+    Points already cached are not re-requested; only the misses go in the batch;
+    and each element of the response is written back under the same per-point
+    key ``forecast()`` reads, so today's departure forecast still serves the next
+    route out of the same field.
+
+    Fault isolation is preserved by falling back to per-point concurrent fetches
+    - the previous behaviour exactly - whenever the batch cannot be trusted:
+
+    * the request failed, or
+    * it came back with a different number of forecasts than points asked for.
+
+    That second guard matters. Open-Meteo returns multi-point results in request
+    order, which is the only thing tying a forecast to the point that asked for
+    it; the ``latitude``/``longitude`` in the response are snapped grid-cell
+    centres and two nearby midpoints can share one, so they cannot be used to
+    re-pair them. A length mismatch means the ordering assumption has broken,
+    and caching a forecast against the wrong coordinates is precisely the kind
+    of quiet wrongness this app refuses elsewhere. Better to spend five requests
+    than to put Windsor's weather on Kitchener's card.
+
+    Returns one forecast per input point, in order; ``{}`` for any that failed.
+    """
+    if not points:
+        return []
+    ttl = get_settings().openmeteo_cache_ttl
+
+    # A comprehension, not ``[{}] * n``: that shares one dict across every
+    # slot, and a caller that mutated a forecast would silently edit all of them.
+    out: list[dict] = [{} for _ in points]
+    missing: list[int] = []
+    for i, (lat, lon) in enumerate(points):
+        hit = cache.get(_point_key(lat, lon, days))
+        if hit is not None:
+            out[i] = hit
+        else:
+            missing.append(i)
+    if not missing:
+        return out
+
+    async def per_point() -> list[dict]:
+        """The previous behaviour: one request per point, concurrently."""
+        got = await asyncio.gather(*(forecast(*points[i], days) for i in missing),
+                                   return_exceptions=True)
+        for i, res in zip(missing, got):
+            out[i] = res if isinstance(res, dict) else {}
+        return out
+
+    if len(missing) == 1:
+        return await per_point()   # nothing to batch
+
+    pts = [points[i] for i in missing]
+    try:
+        # ``forecast_many`` is the multi-point request, already written and
+        # already used by the corridor. It keeps its own combined cache entry,
+        # which nothing reads back here - the per-point entries written below
+        # are what serve every later lookup - but reusing it beats a second copy
+        # of the same request-building code, and it means every test that stubs
+        # the corridor fetch covers this path too.
+        batch = await forecast_many(pts, days)
+    except Exception:
+        return await per_point()
+
+    if len(batch) != len(pts):
+        return await per_point()
+
+    for i, fc in zip(missing, batch):
+        if isinstance(fc, dict):
+            out[i] = fc
+            cache.put(_point_key(*points[i], days), fc, ttl)
     return out
 
 
