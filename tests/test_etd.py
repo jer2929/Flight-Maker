@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app import orchestrator
-from app.models import Source
+from app.models import Airport, Source
 from app.services import evaluator
 from app.services import weather as wx
 
@@ -396,12 +396,26 @@ def test_a_departure_tempo_ending_at_the_etd_does_not_gate():
 # so a suite that never gave a *candidate* a report sailed past it. CYFD has no
 # METAR and its neighbours have both.
 
-_NEAR_IDENTS = ["CYKF", "CYHM", "CYYZ", "CYSN", "CYBN", "CYPQ", "CYTZ", "CYOO"]
+# The stand-in stations are *fabricated*, and deliberately not aerodromes the
+# dataset contains. The first version of this fixture handed METARs to a list of
+# real neighbours and let ``_reporting_candidates`` do real geography, which made
+# the test a question about the airport table rather than about windows - and the
+# table is not the same everywhere. ``airports._pick`` rebuilds it from the
+# network on every load, so CI resolves thousands of aerodromes while a sandbox
+# with no egress falls back to the 28-airport seed. Different neighbours,
+# different answer: both tests passed locally and failed in CI, and the deploy
+# they were gating never shipped. Pin the candidate and the question stays the
+# one being asked.
+_DEP_STATION = Airport(ident="CZZA", name="Departure Stand-in",
+                       lat=43.13, lon=-80.34, elevation_ft=815.0)
+_DEST_STATION = Airport(ident="CZZB", name="Destination Stand-in",
+                        lat=44.97, lon=-79.30, elevation_ft=925.0)
+_STAND_INS = {"CYFD": _DEP_STATION, "CYQA": _DEST_STATION}
 
 
 @pytest.fixture
 def reporting_neighbours(monkeypatch):
-    """Every field near the route reports - except the endpoints themselves."""
+    """Each endpoint has a nearby station that reports; the endpoints do not."""
     from app.sources import awc, cfps, openmeteo
 
     etd = BASE + timedelta(hours=4)
@@ -412,9 +426,10 @@ def reporting_neighbours(monkeypatch):
     taf = (f"{{s}} {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
            f"27008KT P6SM SCT040 "
            f"FM{_dh(fm_at)}00 27010KT 4SM BR OVC012")
+    idents = [a.ident for a in _STAND_INS.values()]
     metars = {s: f"{s} {_dh(BASE)}00Z 27008KT 15SM FEW040 22/12 A3005"
-              for s in _NEAR_IDENTS}
-    tafs = {s: taf.format(s=s) for s in _NEAR_IDENTS}
+              for s in idents}
+    tafs = {s: taf.format(s=s) for s in idents}
 
     async def _metars(sites):
         return {s: metars[s] for s in sites if s in metars}
@@ -445,6 +460,12 @@ def reporting_neighbours(monkeypatch):
     monkeypatch.setattr(openmeteo, "forecast", _one)
     monkeypatch.setattr(openmeteo, "forecast_many", _many)
     monkeypatch.setattr(openmeteo, "ensemble_wind_many", _ens_many)
+
+    # The two lookups that would otherwise ask the real airport table.
+    monkeypatch.setattr(orchestrator, "_reporting_candidates",
+                        lambda airport, *a, **k: [_STAND_INS[airport.ident]])
+    monkeypatch.setattr(orchestrator, "_enroute_candidates",
+                        lambda *a, **k: [])
     return etd
 
 
@@ -456,8 +477,9 @@ def _route(etd):
 def test_an_endpoint_without_a_metar_still_assesses(reporting_neighbours):
     # The regression itself: this raised NameError for every route.
     r = _route(reporting_neighbours)
-    for a in (r.departure, r.destination):
+    for a, expected in ((r.departure, _DEP_STATION), (r.destination, _DEST_STATION)):
         assert a.nearby_station is not None, "no station stood in for the endpoint"
+        assert a.nearby_station.ident == expected.ident
         assert a.nearby_station.taf_periods, "the station's TAF was never split"
 
 
