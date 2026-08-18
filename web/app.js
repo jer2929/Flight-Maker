@@ -13,9 +13,13 @@ let PROFILE = { base: null, minimums: null, conservatism: null };
 
 // Editable numeric leaves: {group, key, id, label, unit, grp(container), min, max, step}.
 // group+key must match data/limits.yaml exactly so the backend merge accepts them.
+// Optional `hint` becomes the row's tooltip - for the few numbers whose label
+// cannot carry their own meaning.
 const MIN_FIELDS = [
   { group: "wind", key: "sustained_max_kt",    id: "set-wind-sustained",    label: "Sustained wind",     unit: "kt", grp: "grp-wind",        min: 1,   max: 60,    step: 1   },
   { group: "wind", key: "gust_spread_max_kt",  id: "set-wind-gust",         label: "Gust spread",        unit: "kt", grp: "grp-wind",        min: 1,   max: 40,    step: 1   },
+  { group: "wind", key: "gust_spread_floor_kt",id: "set-wind-gust-floor",   label: "Gust spread floor",  unit: "kt", grp: "grp-wind",        min: 0,   max: 40,    step: 1,
+    hint: "Peak gust below which the gust-spread limit is reported but does not fail the flight. A forecast wind and a forecast gust are different statistics, so their difference runs larger than a METAR's G - and 10 kt of spread under a 13 kt peak is not the weather the spread limit is written for. 0 = gate on the spread alone." },
   { group: "wind", key: "crosswind_max_kt",    id: "set-wind-xwind",        label: "Crosswind",          unit: "kt", grp: "grp-wind",        min: 1,   max: 40,    step: 1   },
   { group: "ceiling_agl_ft", key: "day_circuit",          id: "set-ceil-day-circuit",  label: "Day circuit",        unit: "ft", grp: "grp-ceiling",     min: 100, max: 15000, step: 100 },
   { group: "ceiling_agl_ft", key: "day_xc",               id: "set-ceil-day-xc",       label: "Day cross-country",  unit: "ft", grp: "grp-ceiling",     min: 100, max: 15000, step: 100 },
@@ -2568,7 +2572,7 @@ function renderMinSliders() {
     const el = $("#" + grp);
     if (!el) continue;
     el.innerHTML = fields.map((f) => `
-      <div class="sld">
+      <div class="sld"${f.hint ? ` title="${escapeHtml(f.hint)}"` : ""}>
         <span class="sld-label">${f.label}</span>
         <output class="sld-val" id="${f.id}-out"></output>
         <input type="range" id="${f.id}" min="${f.min}" max="${f.max}" step="${f.step}" />

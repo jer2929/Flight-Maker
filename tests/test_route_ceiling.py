@@ -204,7 +204,7 @@ def test_ceiling_dropping_works_without_a_cloud_base_series():
             "cloud_cover_850hPa": [90, 90, 95, 95, 95, 95],
         },
     }
-    assert orchestrator._ceiling_dropping(fc, now) is True
+    assert orchestrator._ceiling_dropping(fc, now) is not None
 
 
 def test_ceiling_dropping_stays_false_on_a_steady_deck():
@@ -212,4 +212,23 @@ def test_ceiling_dropping_stays_false_on_a_steady_deck():
     times = [(now + timedelta(hours=h)).strftime("%Y-%m-%dT%H:00") for h in range(6)]
     fc = {"elevation": 0.0,
           "hourly": {"time": times, "cloud_cover_850hPa": [90] * 6}}
-    assert orchestrator._ceiling_dropping(fc, now) is False
+    assert orchestrator._ceiling_dropping(fc, now) is None
+
+
+def test_ceiling_dropping_reports_the_fall_it_found():
+    # The row has to name numbers, not just say "dropping along route", so the
+    # detail the check is built on has to survive the check.
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    times = [(now + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M") for i in range(8)]
+    fc = {"utc_offset_seconds": 0, "elevation": 250, "hourly": {
+        "time": times,
+        "cloud_base": [1200.0, 900.0, 600.0, 300.0, 100.0, 100.0, 100.0, 100.0]}}
+    d = orchestrator._ceiling_dropping(fc, now)
+    assert d is not None
+    assert d["from_ft"] > d["to_ft"]
+    assert d["to_ft"] < 5000
+    assert d["hours"] >= 1
+    # The series is what the popover prints, one entry per hour looked at.
+    assert len(d["series"]) >= 2
+    assert d["series"][0] == d["from_ft"] and min(d["series"]) == d["to_ft"]

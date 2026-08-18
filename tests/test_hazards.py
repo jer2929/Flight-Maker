@@ -171,3 +171,73 @@ def test_vis_below_personal_limit_flags():
 
 def test_lowering_ceiling_flag():
     assert not _run(lowering_ceiling=True)["lowering_ceiling"].passed
+
+
+# --- saying *where*, not just *whether* ------------------------------------
+
+
+LABELS = ["CYFD (departure)", "~60 nm from CYFD near CYXX", "CYQA (destination)"]
+
+
+def test_widespread_ifr_names_the_worst_point_and_lists_the_rest():
+    # The row used to read "2 IMC point(s) on route" and stop there.
+    c = _run(ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2],
+             point_labels=LABELS)["widespread_ifr"]
+    assert not c.passed
+    # The worst point leads the row and is where the row points.
+    assert c.location == "CYFD (departure)"
+    assert "500 ft" in c.actual_text and "2 SM" in c.actual_text
+    assert "2 IMC points" in c.actual_text
+    # …and every offending point is in the popover, the clear midpoint is not.
+    assert "CYFD (departure)" in c.source_text
+    assert "CYQA (destination)" in c.source_text
+    assert "near CYXX" not in c.source_text
+    # Without a source the front end never builds the chip that carries it.
+    assert c.source
+
+
+def test_widespread_ifr_names_a_single_point_without_a_more_tail():
+    c = _run(ceiling_points=[8000, 8000, 600], vis_points=[15, 15, 2],
+             point_labels=LABELS)["widespread_ifr"]
+    assert c.location == "CYQA (destination)"
+    assert "more point" not in c.actual_text
+
+
+def test_widespread_ifr_falls_back_to_counting_without_labels():
+    c = _run(ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2])["widespread_ifr"]
+    assert not c.passed
+    assert c.location == "point 1"
+
+
+def test_widespread_ifr_says_which_test_tripped_in_the_popover():
+    c = _run(vis_points=[15, 7, 15], personal_vis_sm=9,
+             point_labels=LABELS)["widespread_ifr"]
+    assert "below your 9 SM limit" in c.source_text
+    assert "vis below personal limit" in c.actual_text
+
+
+def test_lowering_ceiling_carries_the_numbers_and_the_field():
+    c = _run(lowering_ceiling={
+        "location": "CYQA", "source": "HRDPS",
+        "text": "3,500 ft → 900 ft over 3 h from 1505Z",
+        "detail": "ceiling from 1505Z",
+        "full": "HRDPS ceiling at CYQA\n1505Z  3,500 ft\n1605Z  900 ft",
+    })["lowering_ceiling"]
+    assert not c.passed
+    assert c.location == "CYQA"
+    assert "3,500 ft" in c.actual_text and "900 ft" in c.actual_text
+    assert c.source == "HRDPS"
+    # The hours behind the claim, so it can be read rather than trusted.
+    assert "1605Z" in c.source_text
+
+
+def test_lowering_ceiling_accepts_a_bare_flag_from_an_older_caller():
+    c = _run(lowering_ceiling=True)["lowering_ceiling"]
+    assert not c.passed
+    assert c.actual_text == "ceilings dropping along route"
+    assert c.source is None and c.source_text is None
+
+
+def test_lowering_ceiling_steady_says_nothing_extra():
+    c = _run(lowering_ceiling=None)["lowering_ceiling"]
+    assert c.passed and c.location is None and c.source is None

@@ -6,6 +6,17 @@ hard_limits:
   wind:
     sustained_max_kt: 20
     gust_spread_max_kt: 10      # gust minus steady
+    # Below this peak gust the spread is reported but does not gate.
+    #
+    # The spread limit is written for a METAR's G: a peak within the last ten
+    # minutes against a two-minute mean. A model has no such pairing - Open-Meteo
+    # gives an instantaneous hourly wind and a gust that is the maximum over the
+    # preceding hour - so subtracting them yields a systematically larger number
+    # than the one this limit was set against. And the two ends of the scale are
+    # not the same flight: a 10 kt spread on a 2 kt wind is a 12 kt peak, which
+    # is nothing; the same spread on an 18 kt wind is a 28 kt peak, which is the
+    # day the limit exists for. Set to 0 to gate on spread alone.
+    gust_spread_floor_kt: 15    # peak gust below which spread is advisory only
     crosswind_max_kt: 9
   ceiling_agl_ft:               # VFR personal minimums
     day_circuit: 2000

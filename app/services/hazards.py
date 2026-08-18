@@ -85,7 +85,14 @@ def weather_checks(
     llj_kt: Optional[float],       # max ~2000 ft (925 hPa) wind along route
     ceiling_points: list[Optional[float]],
     vis_points: list[Optional[float]],
-    lowering_ceiling: bool,
+    # Where each of the points above is, index-parallel with them. Optional so
+    # the smaller callers and the tests can pass bare numbers; without it the
+    # widespread-IMC row falls back to counting, which is what it used to do.
+    point_labels: list[str] = (),
+    # ``{location, source, text, detail}`` for a ceiling that is falling, or
+    # None. A bare bool used to come in here and the row could only say
+    # "ceilings dropping along route".
+    lowering_ceiling: Optional[dict] = None,
     freezing_level_ft: Optional[float],
     personal_vis_sm: float,
     gfa_region: str,
@@ -122,11 +129,14 @@ def weather_checks(
     checks: list[LimitCheck] = []
 
     def add(key, label, failed, actual, *, advisory=False, applicable=True,
-            limit="none on route"):
+            limit="none on route", location=None, source=None,
+            source_detail=None, source_text=None):
         checks.append(LimitCheck(
             key=key, label=label, limit_text=limit,
             actual_text=actual, passed=not failed, group="weather",
             advisory=advisory, applicable=applicable,
+            location=location, source=source,
+            source_detail=source_detail, source_text=source_text,
         ))
 
     # Two forms: "... TS in your 1200-1400Z window" vs "... outside your window".
@@ -298,23 +308,75 @@ def weather_checks(
         add("low_level_jet", "Low-level jet (night)", False, "day flight - n/a",
             applicable=False)
 
-    # 8. Rapidly lowering ceilings along route
-    add("lowering_ceiling", "Rapidly lowering ceilings", lowering_ceiling,
-        "ceilings dropping along route" if lowering_ceiling else "ceilings steady")
+    # 8. Rapidly lowering ceilings along route.
+    #
+    # Note ``source``: the front end only builds the provenance chip when it is
+    # set, and the chip is what carries the popover - so a row with a
+    # ``source_text`` and no ``source`` renders as bare text with the detail
+    # unreachable. See ``rowCheck`` in ``web/app.js``.
+    #
+    # A bare ``True`` still works and still says the little it ever could;
+    # callers that have the numbers pass the dict and get a row worth reading.
+    low = lowering_ceiling or None
+    if low is not None and not isinstance(low, dict):
+        low = {}
+    add("lowering_ceiling", "Rapidly lowering ceilings", low is not None,
+        low.get("text", "ceilings dropping along route") if low is not None
+        else "ceilings steady",
+        location=(low or {}).get("location"),
+        source=(low or {}).get("source"),
+        source_detail=(low or {}).get("detail"),
+        source_text=(low or {}).get("full"))
 
-    # 9. Widespread IMC / visibility below personal limit
-    imc_pts = sum(
-        1 for ce, vi in zip(ceiling_points, vis_points)
-        if (ce is not None and ce < 1000) or (vi is not None and vi < 3)
-    )
-    below_personal = any(v is not None and v < personal_vis_sm for v in vis_points)
+    # 9. Widespread IMC / visibility below personal limit.
+    #
+    # The points are counted *and* kept, so the row can say where they are. It
+    # used to report "1 IMC point(s) on route" and nothing else, which told a
+    # pilot a NO-GO existed somewhere along a 120 nm route and left them to
+    # guess whether it was over the departure, the destination, or open country
+    # in between.
+    labels = list(point_labels)
+    offenders: list[dict] = []
+    for i, (ce, vi) in enumerate(zip(ceiling_points, vis_points)):
+        imc = (ce is not None and ce < 1000) or (vi is not None and vi < 3)
+        personal = vi is not None and vi < personal_vis_sm
+        if not (imc or personal):
+            continue
+        offenders.append({
+            "label": labels[i] if i < len(labels) else f"point {i + 1}",
+            "ceiling_ft": ce, "vis_sm": vi, "imc": imc, "personal": personal,
+        })
+    imc_pts = sum(1 for o in offenders if o["imc"])
+    below_personal = any(o["personal"] for o in offenders)
     widespread = imc_pts >= 2 or below_personal
-    detail = []
-    if imc_pts:
-        detail.append(f"{imc_pts} IMC point(s) on route")
-    if below_personal:
-        detail.append("vis below personal limit")
-    add("widespread_ifr", "Widespread IMC", widespread,
-        ", ".join(detail) if detail else "VMC along route")
+
+    if not offenders:
+        add("widespread_ifr", "Widespread IMC", False, "VMC along route")
+    else:
+        def _values(o: dict) -> str:
+            bits = []
+            if o["ceiling_ft"] is not None:
+                bits.append(f"{o['ceiling_ft']:,.0f} ft")
+            if o["vis_sm"] is not None:
+                bits.append(f"{o['vis_sm']:g} SM")
+            return " / ".join(bits) or "no data"
+
+        # The worst point leads the row: lowest ceiling first, then lowest
+        # visibility, so the number in the row is the one that drove the verdict.
+        worst = min(offenders, key=lambda o: (o["ceiling_ft"] if o["ceiling_ft"] is not None else 1e9,
+                                              o["vis_sm"] if o["vis_sm"] is not None else 1e9))
+        tail = (f" (+{len(offenders) - 1} more point"
+                f"{'s' if len(offenders) > 2 else ''})" if len(offenders) > 1 else "")
+        why = " · ".join(
+            ([f"{imc_pts} IMC point{'s' if imc_pts != 1 else ''}"] if imc_pts else [])
+            + (["vis below personal limit"] if below_personal else []))
+        add("widespread_ifr", "Widespread IMC", widespread,
+            f"{_values(worst)}{tail} - {why}",
+            location=worst["label"], source="route sample",
+            source_text="\n".join(
+                f"{o['label']}: {_values(o)}"
+                + ("  IMC" if o["imc"] else "")
+                + (f"  below your {personal_vis_sm:g} SM limit" if o["personal"] else "")
+                for o in offenders))
 
     return checks

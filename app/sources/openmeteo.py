@@ -467,7 +467,7 @@ def ensemble_at_index(resp: dict, models: list[str], i: int) -> dict | None:
         return _at(hourly, f"{name}_{model}", i)
 
     samples: list[tuple[float | None, float | None]] = []
-    gusts: list[float] = []
+    spreads: list[float] = []
     used: list[str] = []
     temps: list[float | None] = []
     pressures: list[float | None] = []
@@ -479,7 +479,9 @@ def ensemble_at_index(resp: dict, models: list[str], i: int) -> dict | None:
             used.append(m.replace("_seamless", "").replace("gfs_hrrr", "hrrr"))
             g = at("windgusts_10m", m)
             if g is not None:
-                gusts.append(g)
+                # Each model's gustiness measured against *its own* wind. What
+                # goes into the blend is the spread, not the gust: see below.
+                spreads.append(max(0.0, g - spd))
         # Temperature and pressure are collected independently of the wind: a
         # model can serve one and not the other, and dropping a usable
         # temperature because the wind was null would only shrink the blend.
@@ -490,10 +492,30 @@ def ensemble_at_index(resp: dict, models: list[str], i: int) -> dict | None:
     if mean is None:
         return None
     speed, direction = mean
+    # The gust is rebuilt from the blended wind plus the models' mean gustiness,
+    # rather than taken as the highest gust any single model forecast.
+    #
+    # The two numbers have to be produced the same way or their difference is an
+    # artifact, and the gust spread is exactly that difference - a hard limit on
+    # every card. The wind is a *vector* mean, so models disagreeing about
+    # direction partially cancel and the blended speed can sit below every
+    # model's own speed; a plain ``max()`` over the gusts has no such
+    # cancellation. On a light-wind day, which is precisely when models disagree
+    # most about direction, that pairing manufactured readings like 2G12 - a
+    # spread no model forecast, failing a 10 kt limit, on a day nobody would
+    # have cancelled.
+    #
+    # Taking the mean spread rather than the worst model's is a deliberate step
+    # back from the old conservatism: the gustiest model's gustiness no longer
+    # stands alone against a cancelled mean. Floored at zero per model above and
+    # at the blended wind here, because a gust below the wind is not a reading.
+    gust = None
+    if spreads:
+        gust = max(speed, speed + sum(spreads) / len(spreads))
     out = {
         "wind_kt": round(speed, 1),
         "wind_dir_true": round(direction, 1),
-        "gust_kt": round(max(gusts), 1) if gusts else None,
+        "gust_kt": round(gust, 1) if gust is not None else None,
         "wind_ensemble_n": len(samples),
         "wind_models": used,
     }

@@ -46,6 +46,7 @@ from app.services import timeline as tl
 from app.services import weather as wx
 from app.models import RunwayComponent
 from app.services.evaluator import (
+    apply_gust_spread_floor,
     checks_verdict,
     conditions_checks,
     window_checks,
@@ -113,8 +114,49 @@ def flight_span(etd: datetime, eta: datetime | None = None) -> tuple[datetime, d
     card reported the low layer that ran until 1400Z. You do not fly before you
     depart. The pad stays on the arrival end, where holding and a diversion are
     real time spent in the weather.
+
+    This is the span for things that are true of the *whole route* - area
+    products, the model context hours, the hour-by-hour strip. An individual
+    aerodrome is scoped more tightly, by :func:`departure_span` /
+    :func:`arrival_span`; see those for why.
     """
     return etd, (eta or etd) + timedelta(minutes=WINDOW_PAD_MIN)
+
+
+def departure_span(etd: datetime) -> tuple[datetime, datetime]:
+    """The window the *departure aerodrome* is read over: taxi and climb-out.
+
+    Half of splitting :func:`flight_span` in two. Both endpoints used to be
+    gated over the whole ETD->ETA window, which is right for a hazard you fly
+    through and wrong for the field itself: the departure's ceiling, visibility
+    and wind decide whether you can take off, and that is decided at the ETD.
+    """
+    return etd, etd + timedelta(minutes=WINDOW_PAD_MIN)
+
+
+def arrival_span(etd: datetime, eta: datetime) -> tuple[datetime, datetime]:
+    """The window the *destination aerodrome* is read over: approach and hold.
+
+    The other half. Gating the destination on the whole flight is what made a
+    CYFD->CYQA leg a NO-GO on a ``TEMPO 1200Z/1400Z`` of fog at the destination
+    with an ETD of 1400Z: the group was over an hour before the 1505Z arrival,
+    but it sat inside the shared window and failed the ceiling and visibility
+    rows. What you are actually asking of the destination is "what will it be
+    like when I get there", so the window is centred on the ETA - back far
+    enough to cover the descent and approach, forward far enough for a hold and
+    a diversion.
+
+    Clamped at the ETD, because on a leg shorter than the pad the window must
+    not open before the aeroplane does - the same rule :func:`flight_span`
+    states.
+
+    A group outside this window is not thrown away: ``_window_hazards`` collects
+    it into the out-of-window list the card already reports as an advisory, so a
+    fog TEMPO that clears before you arrive is still visible, described as what
+    it is.
+    """
+    return (max(etd, eta - timedelta(minutes=WINDOW_PAD_MIN)),
+            eta + timedelta(minutes=WINDOW_PAD_MIN))
 
 
 def _worse_verdict(a: Verdict, b: Verdict) -> Verdict:
@@ -251,11 +293,19 @@ def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
     pt["obs_text"] = text
 
 
-def _ceiling_dropping(fc: dict, from_dt: datetime | None = None) -> bool:
-    """True if the model ceiling falls > 1500 ft (and below 5000) over the
-    ~4 hours following ``from_dt`` (default now) - 'rapidly lowering ceilings'."""
+def _ceiling_dropping(fc: dict, from_dt: datetime | None = None) -> dict | None:
+    """The model ceiling falling > 1500 ft (and below 5000) over the ~4 hours
+    following ``from_dt`` (default now) - 'rapidly lowering ceilings'.
+
+    Returns ``{from_ft, to_ft, hours, series}`` describing the fall, or ``None``
+    when there isn't one - ``series`` being the hours themselves, which the row's
+    popover prints so the claim can be checked rather than trusted. It used to return a bare ``True``, which the row then had
+    to report as "ceilings dropping along route" - a sentence that names no
+    number, no place and no time, and leaves a pilot looking at a NO-GO with
+    nothing to check it against.
+    """
     if not fc:
-        return False
+        return None
     hourly = fc.get("hourly", {})
     i = _current_index(fc) if from_dt is None else _index_for_utc(fc, from_dt)[0]
     base = hourly.get("cloud_base") or []
@@ -272,8 +322,12 @@ def _ceiling_dropping(fc: dict, from_dt: datetime | None = None) -> bool:
                   for j in range(i, min(i + 5, n))]
     window = [c for c in window if c is not None]
     if len(window) < 2:
-        return False
-    return (window[0] - min(window)) > 1500 and min(window) < 5000
+        return None
+    low = min(window)
+    if not ((window[0] - low) > 1500 and low < 5000):
+        return None
+    return {"from_ft": window[0], "to_ft": low,
+            "hours": max(1, window.index(low)), "series": window}
 
 
 # ---------------------------------------------------------------------------
@@ -639,12 +693,11 @@ def _covers_instant(segs: list[dict], when: datetime) -> bool:
 def _taf_periods(segs: list[dict], span: tuple[datetime, datetime] | None) -> list[TafPeriod]:
     """TAF groups as display periods, flagged against the flight ``span``.
 
-    ``in_window`` is "you fly through this", scoped to the whole padded ETD->ETA
-    window rather than a single instant, and to the *same* window at both
-    endpoints: a TEMPO an hour into the leg is something you meet whether it
-    sits over the departure or the destination, so marking it only on the card
-    whose one relevant time it happened to cover hid it from the pilot while
-    still gating the verdict.
+    ``in_window`` is "you meet this", scoped to an interval rather than a single
+    instant, and to *this card's own* ``span`` - the departure window on the
+    departure card, the arrival window on the destination's. What matters is
+    that it is the same span the card is gated on, so a group can never fail a
+    row without being marked, or be marked without being able to fail one.
 
     Computed here rather than in the browser so the client never has to reason
     about TAF validity arithmetic.
@@ -677,8 +730,12 @@ def _assess_endpoint(
     lat, lon = airport.lat, airport.lon
     runways = fill_headings(ap.get_runways(airport.ident), lat, lon)
     taf_segs = taf_segments if taf_segments is not None else wx.parse_taf_segments(taf or "")
-    # ``when`` anchors the displayed values (ETD here, ETA there); ``span`` is the
-    # whole flight, and is what the TAF is highlighted and gated against.
+    # ``when`` anchors the displayed values (ETD here, ETA there); ``span`` is
+    # the window this field is read over - ``departure_span`` for a departure,
+    # ``arrival_span`` for a destination - and is what the TAF is both
+    # highlighted and gated against. Callers that give a ``when`` and no
+    # ``span`` are describing a flight that never leaves the field (circuits, a
+    # single-aerodrome look), where the two collapse to the same thing.
     if span is None and when is not None:
         span = flight_span(when)
     weather = _endpoint_weather_at(metar, taf, taf_segs, fc, ensemble,
@@ -807,22 +864,27 @@ def _window_hazards(dep_segs: list[dict], dest_segs: list[dict],
                     etd: datetime, eta: datetime,
                     dep_ident: str = "", dest_ident: str = "",
                     ) -> tuple[set[str], list[dict], set[str]]:
-    """TAF hazards during the flight, those outside it, and the PROB-only ones.
+    """TAF hazards at each end when you are there, those outside it, and the
+    PROB-only ones.
 
-    Both endpoints are scoped to the *whole* ETD->ETA window rather than
-    departure-at-ETD / destination-at-ETA: a thunderstorm over the departure
-    field at your ETA still matters, because that's your return field and your
-    most likely alternate. Padded by WINDOW_PAD_MIN for taxi, hold and approach.
+    Each aerodrome is scoped to its own window - the departure to
+    :func:`departure_span`, the destination to :func:`arrival_span` - rather
+    than both to the whole flight. Both used to share the ETD->ETA span, on the
+    reasoning that a thunderstorm over the departure field at your ETA still
+    matters because that is your return field. It does matter, but not as a
+    gate on taking off: what it is, is something to know about, which is
+    exactly what the out-of-window list is for. Scoping each end to the time you
+    are actually at it puts it there instead.
 
     The third element is the hazards that appear *only* under a PROB30/PROB40.
     They are kept apart so the caller can apply the pilot's own weather flags to
     them rather than treating a 30% chance as a forecast.
     """
-    lo, hi = flight_span(etd, eta)
     inside: set[str] = set()
     prob_only: set[str] = set()
     outside: list[dict] = []
-    for segs, ident in ((dep_segs, dep_ident), (dest_segs, dest_ident)):
+    for segs, ident, (lo, hi) in ((dep_segs, dep_ident, departure_span(etd)),
+                                  (dest_segs, dest_ident, arrival_span(etd, eta))):
         if not segs:
             continue
         ins, outs, probs = wx.hazards_in_window(segs, lo, hi)
@@ -1206,13 +1268,16 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
         checks.append(LimitCheck(key="wind", label="Sustained wind", limit_text=f"≤ {w['sustained_max_kt']} kt",
                                  actual_text="no data", passed=True))
 
-    # Gust spread - endpoints only.
-    spreads = [(lbl, gk - wk, src) for lbl, wk, gk, _c, _v, src, _t in endpoint_pts if wk is not None and gk is not None]
+    # Gust spread - endpoints only. The peak gust rides along because the row
+    # only gates above a floor (``evaluator.gust_spread_gates``); the endpoint
+    # cards apply the same floor, and the two must not disagree.
+    spreads = [(lbl, gk - wk, src, gk) for lbl, wk, gk, _c, _v, src, _t in endpoint_pts if wk is not None and gk is not None]
     if spreads:
-        lbl, val, src = max(spreads, key=lambda t: t[1])
-        checks.append(LimitCheck(key="gust_spread", label="Gust spread", limit_text=f"≤ {w['gust_spread_max_kt']} kt",
-                                 actual_text=f"{val:.0f} kt", passed=val <= w["gust_spread_max_kt"],
-                                 location=lbl, source=src))
+        lbl, val, src, peak = max(spreads, key=lambda t: t[1])
+        row = LimitCheck(key="gust_spread", label="Gust spread", limit_text=f"≤ {w['gust_spread_max_kt']} kt",
+                         actual_text=f"{val:.0f} kt", passed=val <= w["gust_spread_max_kt"],
+                         location=lbl, source=src)
+        checks.append(apply_gust_spread_floor(row, peak))
 
     # Crosswind - worst endpoint best-runway (enroute has no runway).
     xw = _worst_crosswind(dep_a, dest_a)
@@ -1530,7 +1595,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         dep_ens, dest_ens = await asyncio.gather(
             _ens_at(dep, days, etd_utc), _ens_at(dest, days, eta_prov),
         )
-    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens, flight_rules=flight_rules, when=etd_utc, is_now=is_now, taf_segments=dep_segs, span=flight_span(etd_utc, eta_prov), show_obs=show_obs, history_unavailable=hist_failed and bool(metars.get(dep.ident)))
+    dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens, flight_rules=flight_rules, when=etd_utc, is_now=is_now, taf_segments=dep_segs, span=departure_span(etd_utc), show_obs=show_obs, history_unavailable=hist_failed and bool(metars.get(dep.ident)))
 
     # Nearest reporting station for an endpoint that has no METAR of its own.
     async def _attach_nearby(assessment, airport, cands):
@@ -1603,7 +1668,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     dest_ws_prov = _endpoint_weather_at(metars.get(dest.ident), tafs.get(dest.ident),
                                         dest_segs, dest_fc, dest_ens,
                                         when=eta_prov, is_now=is_now,
-                                        span=flight_span(etd_utc, eta_prov),
+                                        span=arrival_span(etd_utc, eta_prov),
                                         field_elev_ft=dest.elevation_ft)
     gate_ceiling = lowest_ceiling(_card_ceilings(dep_a.weather)
                                   + _card_ceilings(dest_ws_prov)
@@ -1632,16 +1697,14 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     flight_hr = flight_time_hr(distance, get_cruise_kt(),
                                alt.groundspeed_kt if alt else None)
     eta_utc = etd_utc + timedelta(hours=flight_hr)
-    span = flight_span(etd_utc, eta_utc)
 
-    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens, flight_rules=flight_rules, when=eta_utc, is_now=is_now, taf_segments=dest_segs, span=span, show_obs=show_obs, history_unavailable=hist_failed and bool(metars.get(dest.ident)))
+    dest_a = _assess_endpoint(dest, metars.get(dest.ident), tafs.get(dest.ident), dest_fc, notams, mode, manual_threats, distance, bearing, alt, history=metar_hist.get(dest.ident, []), ensemble=dest_ens, flight_rules=flight_rules, when=eta_utc, is_now=is_now, taf_segments=dest_segs, span=arrival_span(etd_utc, eta_utc), show_obs=show_obs, history_unavailable=hist_failed and bool(metars.get(dest.ident)))
 
-    # The departure was assessed before the winds-aloft pass refined the ETA, so
-    # its TAF was flagged against the provisional window. Re-flag it against the
-    # real one: both cards must mark the same span, or "happens during your
-    # flight" means two different things depending on which card you read.
-    if dep_segs:
-        dep_a.weather.taf_periods = _taf_periods(dep_segs, span)
+    # No re-flagging pass here any more. It existed because the departure was
+    # assessed against the *provisional* ETA (the winds-aloft pass had not run
+    # yet), so its TAF highlight had to be redrawn once the real ETA was known -
+    # while its limit rows, quietly, never were. The departure window no longer
+    # depends on the ETA at all, so the card is right the first time.
 
     await asyncio.gather(
         _attach_nearby(dep_a, dep, dep_cands),
@@ -1650,6 +1713,14 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
 
     ceiling_points = [dep_a.weather.ceiling_agl_ft] + [e.get("ceiling_ft") for e in enroute] + [dest_a.weather.ceiling_agl_ft]
     vis_points = [dep_a.weather.visibility_sm] + [e.get("vis_sm") for e in enroute] + [dest_a.weather.visibility_sm]
+    # Where each of those points is. The midpoints already carry a written
+    # position ("~45 nm from CYFD near CYQA", built with the sample itself); the
+    # ends use the same "CYQA (destination)" form every other row does. Kept
+    # index-parallel to the two lists above so the widespread-IMC row can name
+    # the points it counted instead of reporting a bare tally.
+    point_labels = ([f"{dep.ident} (departure)"]
+                    + [e.get("label") or f"enroute {i}" for i, e in enumerate(enroute, 1)]
+                    + [f"{dest.ident} (destination)"])
     lljs = [e.get("llj_kt") for e in enroute if e.get("llj_kt") is not None]
     llj_kt = max(lljs) if lljs else None
     frz = [e.get("freezing_ft") for e in enroute if e.get("freezing_ft") is not None]
@@ -1660,14 +1731,48 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     route_turb = airmass.worst_turbulence([e.get("turbulence") for e in enroute])
     enroute_ceiling = min([c for c in ceiling_points if c is not None], default=None)
     enroute_vis = min([v for v in vis_points if v is not None], default=None)
-    # Lowering ceilings: from the model trend OR observed in recent METAR history.
+    # Lowering ceilings: from the model trend OR observed in recent METAR
+    # history. Each source keeps hold of *which* field it saw it at and what the
+    # numbers were, so the row can be checked rather than just believed. The
+    # model is read from the hour you are at that field - the ETD at the
+    # departure, the ETA at the destination - not from now: a card for a
+    # departure four hours out used to report a fall happening while the pilot
+    # was still reading the page.
+    def _model_lowering(fc, ident, when):
+        d = _ceiling_dropping(fc, when)
+        if not d:
+            return None
+        # The hours themselves behind the chip, so the fall can be read rather
+        # than taken on trust - the same "here is the report" the ceiling and
+        # visibility rows already offer.
+        hours = "\n".join(
+            f"{_zhm(when + timedelta(hours=k))}  {c:,.0f} ft"
+            for k, c in enumerate(d["series"]))
+        return {"location": ident, "source": Source.MODEL.value,
+                "text": (f"{d['from_ft']:,.0f} ft → {d['to_ft']:,.0f} ft "
+                         f"over {d['hours']} h from {_zhm(when)}"),
+                "detail": f"ceiling from {_zhm(when)}",
+                "full": f"HRDPS ceiling at {ident}\n{hours}"}
+
     def _hist_lowering(ident):
         h = metar_hist.get(ident, [])
         if not h:
-            return False
-        return trends.analyze([wx.parse_metar(r) for r in reversed(h)])[1]
-    lowering = (_ceiling_dropping(dep_fc) or _ceiling_dropping(dest_fc)
-                or _hist_lowering(dep.ident) or _hist_lowering(dest.ident))
+            return None
+        notes, low = trends.analyze([wx.parse_metar(r) for r in reversed(h)])
+        if not low:
+            return None
+        note = next((n for n in notes if "eiling" in n), "ceiling lowering")
+        return {"location": ident, "source": "METAR trend",
+                "text": note.lstrip("📉📈🌤🌥 ").strip(),
+                "detail": "recent observations",
+                # The observations the trend was read from, newest last.
+                "full": f"{ident} recent METARs\n" + "\n".join(reversed(h))}
+
+    lowering_detail = next(
+        (d for d in (_model_lowering(dep_fc, dep.ident, etd_utc),
+                     _model_lowering(dest_fc, dest.ident, eta_utc),
+                     _hist_lowering(dep.ident), _hist_lowering(dest.ident))
+         if d is not None), None)
 
     # Re-gate against the ceilings the finished cards actually print. The pick
     # above was made against the *provisional* destination, assessed at the
@@ -1774,7 +1879,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         llj_kt=llj_kt,
         ceiling_points=ceiling_points,
         vis_points=vis_points,
-        lowering_ceiling=lowering,
+        point_labels=point_labels,
+        lowering_ceiling=lowering_detail,
         freezing_level_ft=freezing_ft,
         personal_vis_sm=vis_limit,
         gfa_region=hz.gfa_region(dep.lat, dep.lon),
@@ -1912,10 +2018,9 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         notes.append(
             f"ETA {_zhm(eta_utc)} is after evening civil twilight at {dest.ident}"
             f"{when} - the arrival is a night landing")
-    # Both cards are now flagged against the same ETD->ETA span, so "any period
-    # in window" no longer distinguishes the two ends. These notes are about
-    # *validity* - whether the TAF reaches your departure / arrival instant at
-    # all - so they test the instants themselves.
+    # These notes are about *validity* - whether the TAF reaches your departure
+    # / arrival instant at all, which is a different question from whether any
+    # group happens to gate - so they test the instants themselves.
     dep_covers = _covers_instant(dep_segs, etd_utc)
     dest_covers = _covers_instant(dest_segs, eta_utc)
     if dep_segs and not dep_covers:
@@ -2068,7 +2173,8 @@ async def suggest(
     origin_ws = _endpoint_weather_at(
         metars.get(origin_ident), tafs.get(origin_ident),
         wx.parse_taf_segments(tafs.get(origin_ident) or ""), origin_fc, None,
-        when=etd_utc, is_now=is_now, field_elev_ft=origin.elevation_ft)
+        when=etd_utc, is_now=is_now, span=departure_span(etd_utc),
+        field_elev_ft=origin.elevation_ft)
     origin_ceiling = lowest_ceiling(
         [_point_at(origin_fc, None if is_now else etd_utc).get("ceiling_ft") if origin_fc else None,
          *_card_ceilings(origin_ws)])
@@ -2098,11 +2204,15 @@ async def suggest(
             ensemble=ens_by_ident.get(airport.ident), flight_rules=flight_rules,
             ceiling_mode="xc",
             when=eta,
-            # Discovery used to pass no span at all, so it fell back to
-            # ETA +/- 30 min and never looked at the leg: a TEMPO over the first
-            # half of a 90-minute flight gated the route card for this airport
-            # and was invisible on its discovery card. Scope both to the flight.
-            span=flight_span(etd_utc, eta),
+            # The candidate is read over the window it is *arrived into*. This
+            # has been wrong in both directions: originally no span at all, then
+            # the whole ETD->ETA leg, on the reasoning that a TEMPO in the first
+            # half of a 90-minute flight should not be invisible. It should not
+            # be - but at the destination it is not weather you fly through, and
+            # gating on it is what failed a flight that lands after the fog has
+            # lifted. Weather you actually meet enroute is the route card's
+            # midpoint samples, each read at its own overfly hour.
+            span=arrival_span(etd_utc, eta),
             is_now=is_now, show_obs=show_obs,
         )
         # The ceilings this card reports - the candidate's METAR now, or its TAF

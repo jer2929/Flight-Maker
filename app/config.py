@@ -144,6 +144,8 @@ _NUMERIC_LIMITS: dict[str, dict[str, tuple[float, float]]] = {
     "wind": {
         "sustained_max_kt": (1, 60),
         "gust_spread_max_kt": (1, 40),
+        # 0 is a legal setting and means "gate on the spread alone".
+        "gust_spread_floor_kt": (0, 40),
         "crosswind_max_kt": (1, 40),
     },
     "ceiling_agl_ft": {

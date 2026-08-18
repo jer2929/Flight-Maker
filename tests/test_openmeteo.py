@@ -1,6 +1,8 @@
 import asyncio
 import math
 
+import pytest
+
 from app.sources import cache, openmeteo
 from app.sources.openmeteo import (derive_ceiling_ft, ensemble_at_index,
                                    ensemble_point_now, index_for_time,
@@ -172,8 +174,53 @@ def test_ensemble_point_now_blends_models():
     assert out["wind_ensemble_n"] == 2
     assert 270 <= out["wind_dir_true"] <= 280
     assert 10 <= out["wind_kt"] <= 12
-    assert out["gust_kt"] == 20  # max of contributing gusts
+    # The gust is the blended wind plus the models' mean gustiness, not the
+    # highest gust any one of them forecast. Both models are 8 kt gusty here, so
+    # whatever the blend makes of the wind, the gust sits 8 kt above it.
+    assert out["gust_kt"] == pytest.approx(out["wind_kt"] + 8, abs=0.1)
     assert out["wind_models"] == ["gem", "gfs"]
+
+
+def test_ensemble_gust_does_not_inflate_when_models_disagree_on_direction():
+    """The reported symptom: readings like 2G12 on days nobody would cancel.
+
+    The wind is a *vector* mean, so models pointing opposite ways cancel and the
+    blended speed collapses; the gust used to be a plain ``max()`` across the
+    same models, with no such cancellation. Pairing the two produced a spread no
+    model forecast - and a 10 kt gust-spread limit is a hard NO-GO.
+    """
+    resp = {
+        "utc_offset_seconds": 0,
+        "hourly": {
+            "time": ["2026-06-19T00:00"],
+            "windspeed_10m_gem_seamless": [8],
+            "winddirection_10m_gem_seamless": [350],
+            "windgusts_10m_gem_seamless": [12],
+            "windspeed_10m_gfs_seamless": [8],
+            "winddirection_10m_gfs_seamless": [170],
+            "windgusts_10m_gfs_seamless": [13],
+        },
+    }
+    out = ensemble_point_now(resp, ["gem_seamless", "gfs_seamless"])
+    # Near-opposite directions: the blended wind is almost nothing.
+    assert out["wind_kt"] < 1
+    # Neither model is more than 5 kt gusty, so the blend must not be either.
+    assert out["gust_kt"] - out["wind_kt"] <= 5
+    assert out["gust_kt"] >= out["wind_kt"], "a gust below the wind is not a reading"
+
+
+def test_ensemble_gust_is_none_when_no_model_offers_one():
+    resp = {
+        "utc_offset_seconds": 0,
+        "hourly": {
+            "time": ["2026-06-19T00:00"],
+            "windspeed_10m_gem_seamless": [10],
+            "winddirection_10m_gem_seamless": [270],
+        },
+    }
+    out = ensemble_point_now(resp, ["gem_seamless"])
+    assert out["wind_kt"] == 10
+    assert out["gust_kt"] is None
 
 
 def test_ensemble_point_now_none_when_no_data():

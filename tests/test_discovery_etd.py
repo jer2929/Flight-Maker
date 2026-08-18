@@ -106,39 +106,94 @@ def test_ensemble_wind_is_skipped_for_a_future_etd(upstreams):
     assert upstreams.get("ensemble_called") is True
 
 
-def test_a_tempo_over_the_first_half_of_the_leg_reaches_the_card(monkeypatch, upstreams):
-    """Discovery passed no flight span, so ``_assess_endpoint`` fell back to
-    ETA +/- 30 min and never looked at the leg. A TEMPO over the first half of a
-    long flight moved the *route* card for the same airport and was invisible on
-    its discovery card - two readings of one TAF, disagreeing.
-
-    What this pins is that the TEMPO is *seen*: it fails a row, and the row names
-    the group and quotes the line. How far it moves the verdict is
-    ``evaluator.checks_verdict``'s business - MITIGATE here, because the
-    sustained forecast (P6SM SCT040) clears the minimums on its own and only the
-    TEMPO dips under them. A card that read GO would mean the leg was never
-    looked at, which is the regression this test exists for.
-    """
-    from app.models import Verdict
-
-    etd = BASE + timedelta(hours=6)
-    dd = lambda dt: dt.strftime("%d%H")            # noqa: E731 - the TAF's own form
-    # CYAM is ~2.4 h out, so this TEMPO closes an hour before the old ETA window
-    # even opened.
-    taf = (f"CYAM {dd(etd)}00Z {dd(etd)}/{dd(etd + timedelta(hours=12))} "
-           f"27008KT P6SM SCT040 "
-           f"TEMPO {dd(etd)}/{dd(etd + timedelta(hours=1))} 27008KT 1SM BR OVC004")
-
+def _card_with_taf(monkeypatch, etd, taf):
     async def _tafs(sites):
         return {"CYAM": taf}
 
     monkeypatch.setattr(cfps, "tafs", _tafs)
     results = asyncio.run(orchestrator.suggest(300.0, "day", [], etd=etd))
-    card = next(r for r in results if r.airport.ident == "CYAM")
+    return next(r for r in results if r.airport.ident == "CYAM")
+
+
+def _dd(dt):
+    return dt.strftime("%d%H")            # the TAF's own day-hour form
+
+
+def test_a_tempo_over_the_first_half_of_the_leg_does_not_gate_the_destination(
+        monkeypatch, upstreams):
+    """CYAM is ~2.4 h out, so a TEMPO covering the first hour of the leg is over
+    long before you get there.
+
+    This test used to assert the opposite. Discovery originally passed no span
+    at all and read the destination at ETA +/- 30 min, which disagreed with the
+    route card for the same airport; the fix at the time was to widen both to
+    the whole ETD->ETA leg, and this test pinned that. Widening was the wrong
+    half of the answer: a TEMPO over the *destination* during the first hour of
+    the flight is not weather you fly through, and gating on it is what failed a
+    CYFD->CYQA leg that lands after the fog has lifted. Weather you actually
+    meet enroute belongs to the route card's midpoint samples, each read at its
+    own overfly hour.
+
+    What survives from the original bug is the invariant underneath it, pinned
+    by the sibling test below: the two cards must not disagree about one TAF.
+    """
+    from app.models import Verdict
+
+    etd = BASE + timedelta(hours=6)
+    taf = (f"CYAM {_dd(etd)}00Z {_dd(etd)}/{_dd(etd + timedelta(hours=12))} "
+           f"27008KT P6SM SCT040 "
+           f"TEMPO {_dd(etd)}/{_dd(etd + timedelta(hours=1))} 27008KT 1SM BR OVC004")
+    card = _card_with_taf(monkeypatch, etd, taf)
     assert card.flight_time_hr > 1.5, "need a leg long enough to have a first half"
+    assert card.verdict == Verdict.GO
+    assert not [c for c in card.limit_checks if not c.passed and c.applicable]
+
+
+def test_a_tempo_over_the_arrival_still_reaches_the_card(monkeypatch, upstreams):
+    """The mirror, so the fix above cannot be "stop reading the destination TAF".
+
+    The verdict is MITIGATE rather than NO-GO because the sustained forecast
+    (P6SM SCT040) clears the minimums on its own and only the TEMPO dips under
+    them - ``evaluator.checks_verdict``'s business, not this test's. What is
+    pinned here is that the group is *seen*: it fails a row, and the row names
+    the group and quotes the line.
+    """
+    from app.models import Verdict
+
+    etd = BASE + timedelta(hours=6)
+    # CYAM is ~2.4 h out; put the TEMPO across hours 2-4 so it straddles the ETA.
+    taf = (f"CYAM {_dd(etd)}00Z {_dd(etd)}/{_dd(etd + timedelta(hours=12))} "
+           f"27008KT P6SM SCT040 "
+           f"TEMPO {_dd(etd + timedelta(hours=2))}/{_dd(etd + timedelta(hours=4))} "
+           f"27008KT 1SM BR OVC004")
+    card = _card_with_taf(monkeypatch, etd, taf)
     assert card.verdict == Verdict.MITIGATE
     # ...and the card says which group did it, not just that something did.
     busts = [c for c in card.limit_checks if not c.passed and c.applicable]
     assert any(c.source == "TAF" and c.source_detail and c.source_detail.startswith("TEMPO")
                for c in busts)
     assert any("OVC004" in (c.source_text or "") for c in busts)
+
+
+def test_the_route_card_and_the_discovery_card_read_one_taf_the_same_way(
+        monkeypatch, upstreams):
+    """The invariant the original bug was really about.
+
+    Two views of the same aerodrome at the same ETD must not disagree about the
+    same TAF - a pilot who checks "where can I go" and then plans the leg has to
+    see one answer, not two. It held when both read the whole ETD->ETA span and
+    it holds now that both read the arrival window; what it forbids is the two
+    drifting apart again, whichever scope is right.
+    """
+    etd = BASE + timedelta(hours=6)
+    taf = (f"CYAM {_dd(etd)}00Z {_dd(etd)}/{_dd(etd + timedelta(hours=12))} "
+           f"27008KT P6SM SCT040 "
+           f"TEMPO {_dd(etd + timedelta(hours=2))}/{_dd(etd + timedelta(hours=4))} "
+           f"27008KT 1SM BR OVC004")
+    card = _card_with_taf(monkeypatch, etd, taf)
+    route = asyncio.run(orchestrator.assess_route("CYFD", "CYAM", "day", [], etd=etd))
+
+    assert route.destination.verdict == card.verdict
+    def _busts(a):
+        return {c.key for c in a.limit_checks if not c.passed and c.applicable}
+    assert _busts(route.destination) == _busts(card)

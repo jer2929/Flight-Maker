@@ -301,28 +301,40 @@ def taf_periods(segments: list[dict]) -> list[dict]:
 
 
 def _overlaps(seg: dict, start: datetime, end: datetime) -> bool:
+    """Closed on both ends. For *instant* queries only - see :func:`covers`."""
     return seg["start"] <= end and seg["end"] >= start
 
 
-overlaps = _overlaps   # public alias: the orchestrator scopes highlighting with it
+def covers(seg: dict, start: datetime, end: datetime) -> bool:
+    """Does ``seg`` apply during the interval ``[start, end)``?
 
+    The one interval test in this module: the gate, the hazard scan and the
+    green TAF highlight all come through here, so a group can never gate a
+    flight it is not also marked for.
 
-def _base_overlaps(seg: dict, start: datetime, end: datetime) -> bool:
-    """``_overlaps`` for a *base* group, which governs ``[start, end)``.
+    **Closed at the far end, half-open at the near end.** A group that ends at
+    the very instant your window opens has handed over, and is not weather you
+    fly through; one that starts at the instant your window closes is weather
+    you may still meet on the approach, and dropping it would be the wrong way
+    to be wrong.
 
-    A base's end has been clipped to the next base's start, so the two share an
-    instant. Testing it closed on both ends makes both groups govern the moment
-    the FM takes over - so an ETD of exactly 1400Z, with an FM at 1400Z clearing
-    the sky, still met the low layer that ended at 1400Z. A group that has handed
-    over is not weather you fly through.
+    Both halves of that rule are load-bearing, and each fixes a real bust:
 
-    Overlays keep the closed test: a TEMPO starting exactly when you land is
-    still a TEMPO you may meet, and dropping a hazard on a technicality is the
-    wrong way to be wrong.
+    * Bases have their end clipped to the next base's start
+      (:func:`base_intervals`), so consecutive groups share an instant. Closed
+      at the near end, an ETD of exactly 1400Z with an FM at 1400Z clearing the
+      sky still met the low layer that ran until 1400Z.
+    * Overlays used to keep the closed test on both ends, which read the same
+      way from the other direction: a destination ``TEMPO 1200Z/1400Z`` of fog
+      gated a flight whose window opened at 1400Z - a group that was over
+      before the wheels came up.
     """
     if start == end:            # point query - there is no half-open reading
         return _overlaps(seg, start, end)
     return seg["start"] <= end and seg["end"] > start
+
+
+overlaps = covers   # public alias: the orchestrator scopes highlighting with it
 
 
 def _precip_rank(c: dict) -> tuple:
@@ -365,7 +377,7 @@ def is_prob(seg: dict) -> bool:
 
 def hazards_in_window(segments: list[dict], start: datetime,
                       end: datetime) -> tuple[set[str], list[dict], set[str]]:
-    """Hazards forecast during ``[start, end]``, split by how firm they are.
+    """Hazards forecast during ``[start, end)``, split by how firm they are.
 
     Returns ``(firm_flags, out_of_window_periods, prob_flags)``:
 
@@ -384,7 +396,7 @@ def hazards_in_window(segments: list[dict], start: datetime,
         haz = seg["cond"].get("hazards") or []
         if not haz:
             continue
-        if not _overlaps(seg, start, end):
+        if not covers(seg, start, end):
             outside.append(seg)
         elif is_prob(seg):
             prob |= set(haz)
@@ -438,11 +450,13 @@ def conditions_at(segments: list[dict], dt: datetime) -> Optional[dict]:
 
 def worst_in_window(segments: list[dict], start: datetime,
                     end: datetime) -> Optional[dict]:
-    """Worst TAF conditions anywhere in ``[start, end]``.
+    """Worst TAF conditions anywhere in ``[start, end)`` (see :func:`covers`).
 
     The interval counterpart of :func:`conditions_at`. A flight is not an
     instant, so gating on a point silently ignores a group that sits in the
-    middle of it - the TEMPO you would actually fly through.
+    middle of it - the TEMPO you would actually fly through. Equally, a group
+    that ended before the window opened is not one you fly through either, which
+    is why membership is :func:`covers` and not a plain overlap.
 
     Each change group is grouped by what it actually means:
 
@@ -450,8 +464,8 @@ def worst_in_window(segments: list[dict], start: datetime,
       (clipped) interval touches the window contributes to the gate. BECMG is
       already stored as a step change at the start of its transition window, so
       taking its conditions from that point on is the conservative reading.
-    * ``TEMPO`` is a temporary worsening you would fly through, so an
-      overlapping one merges in worst-of and gates.
+    * ``TEMPO`` is a temporary worsening you would fly through, so one that
+      covers any of the window merges in worst-of and gates.
     * ``PROB30``/``PROB40`` are kept *separate*, under ``prob``. A 30-40%
       chance is a planning input rather than a limit, so it never silently
       fails a check; callers surface it as an advisory.
@@ -466,7 +480,7 @@ def worst_in_window(segments: list[dict], start: datetime,
         start, end = end, start
     periods = taf_periods(segments)
     bases = sorted((s for s in periods
-                    if s["kind"] == "base" and _base_overlaps(s, start, end)),
+                    if s["kind"] == "base" and covers(s, start, end)),
                    key=lambda s: s["start"])
     if not bases:
         return None
@@ -486,7 +500,7 @@ def worst_in_window(segments: list[dict], start: datetime,
     eff["prob_overlay"] = False
 
     for ov in periods:
-        if ov["kind"] != "overlay" or not _overlaps(ov, start, end):
+        if ov["kind"] != "overlay" or not covers(ov, start, end):
             continue
         if is_prob(ov):
             prob = dict(ov["cond"]) if prob is None else worse(prob, ov["cond"])
