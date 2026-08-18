@@ -25,6 +25,29 @@ jobs:
     concurrency: deploy-group   # never run two deploys at once
     steps:
       - uses: actions/checkout@v4
+
+      # Nothing used to stand between a push to main and production. A single
+      # undefined name - a local deleted while a closure still read it - shipped
+      # a 500 on every route assessment, and the first thing that noticed was a
+      # pilot looking at the app. These two steps run before anything touches
+      # Fly, so a red main fails the job instead of deploying.
+      #
+      # Scoped to app/ because that is what the container runs; scripts/ holds
+      # one-off probes that are never imported at runtime.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"      # matches the Dockerfile's base image
+          cache: pip
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (undefined names, dead imports)
+        run: python -m pyflakes app/
+
+      - name: Tests
+        run: python -m pytest tests/ -q
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Create the Fly app if it doesn't exist yet

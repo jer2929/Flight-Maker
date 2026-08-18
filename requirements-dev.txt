@@ -1,2 +1,7 @@
 -r requirements.txt
 pytest>=8.0
+# Catches names read but never assigned - the failure the test suite structurally
+# cannot see, because an undefined name only raises on the branch that reads it.
+# A deleted local still referenced by a closure shipped a 500 to production this
+# way; pyflakes finds it in about two seconds. Run in CI before every deploy.
+pyflakes>=3.2

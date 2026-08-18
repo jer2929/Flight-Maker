@@ -382,3 +382,99 @@ def test_a_departure_tempo_ending_at_the_etd_does_not_gate():
         None, TAF_FOG_BEFORE_ETD, segs, _fc(), _ETD,
         orchestrator.departure_span(_ETD))
     assert ws.visibility_sm and ws.visibility_sm > 3
+
+
+# ---------------------------------------------------------------------------
+# The nearest reporting station stands in for an endpoint that has no METAR.
+# ---------------------------------------------------------------------------
+#
+# This path had no test at all, which is how a NameError in it reached
+# production: ``_attach_nearby`` closed over a whole-flight ``span`` local, the
+# per-endpoint window change removed that local, and every route assessment
+# raised. It only runs when three things line up - the endpoint has no METAR of
+# its own, a nearby aerodrome does, and that aerodrome also publishes a TAF -
+# so a suite that never gave a *candidate* a report sailed past it. CYFD has no
+# METAR and its neighbours have both.
+
+_NEAR_IDENTS = ["CYKF", "CYHM", "CYYZ", "CYSN", "CYBN", "CYPQ", "CYTZ", "CYOO"]
+
+
+@pytest.fixture
+def reporting_neighbours(monkeypatch):
+    """Every field near the route reports - except the endpoints themselves."""
+    from app.sources import awc, cfps, openmeteo
+
+    etd = BASE + timedelta(hours=4)
+    # A base group taking over at ETD+1 h. With a ~1 h leg that lands *after*
+    # the departure window closes and *inside* the arrival window, which is what
+    # makes the two cards distinguishable below.
+    fm_at = etd + timedelta(hours=1)
+    taf = (f"{{s}} {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
+           f"27008KT P6SM SCT040 "
+           f"FM{_dh(fm_at)}00 27010KT 4SM BR OVC012")
+    metars = {s: f"{s} {_dh(BASE)}00Z 27008KT 15SM FEW040 22/12 A3005"
+              for s in _NEAR_IDENTS}
+    tafs = {s: taf.format(s=s) for s in _NEAR_IDENTS}
+
+    async def _metars(sites):
+        return {s: metars[s] for s in sites if s in metars}
+
+    async def _tafs(sites):
+        return {s: tafs[s] for s in sites if s in tafs}
+
+    async def _empty(*a, **k):
+        return {}
+
+    async def _hist(sites, *a, **k):
+        return {s: [metars[s]] for s in sites if s in metars}
+
+    async def _one(lat, lon, days=2):
+        return _fc()
+
+    async def _many(points, *a, **k):
+        return [_fc() for _ in points]
+
+    async def _ens_many(points, *a, **k):
+        return [None] * len(points)
+
+    monkeypatch.setattr(cfps, "metars", _metars)
+    monkeypatch.setattr(cfps, "tafs", _tafs)
+    monkeypatch.setattr(cfps, "notams", _empty)
+    monkeypatch.setattr(cfps, "metar_history", _hist)
+    monkeypatch.setattr(awc, "metar_history", _hist)
+    monkeypatch.setattr(openmeteo, "forecast", _one)
+    monkeypatch.setattr(openmeteo, "forecast_many", _many)
+    monkeypatch.setattr(openmeteo, "ensemble_wind_many", _ens_many)
+    return etd
+
+
+def _route(etd):
+    import asyncio
+    return asyncio.run(orchestrator.assess_route("CYFD", "CYQA", "day", [], etd=etd))
+
+
+def test_an_endpoint_without_a_metar_still_assesses(reporting_neighbours):
+    # The regression itself: this raised NameError for every route.
+    r = _route(reporting_neighbours)
+    for a in (r.departure, r.destination):
+        assert a.nearby_station is not None, "no station stood in for the endpoint"
+        assert a.nearby_station.taf_periods, "the station's TAF was never split"
+
+
+def test_each_nearby_station_is_flagged_against_its_own_endpoints_window(
+        reporting_neighbours):
+    """A station standing in for the destination marks what it forecasts for the
+    *arrival*, not for the departure - the per-endpoint rule reaching the last
+    place that still read one shared flight-wide span."""
+    r = _route(reporting_neighbours)
+    assert 0.5 < r.flight_time_hr < 1.5, \
+        "the two windows only separate on a leg of about this length"
+
+    def _fm(assessment):
+        return next(p for p in assessment.nearby_station.taf_periods
+                    if p.label == "FM")
+
+    # The FM takes over an hour after the ETD: past the departure window, and
+    # inside the arrival window.
+    assert _fm(r.departure).in_window is False
+    assert _fm(r.destination).in_window is True

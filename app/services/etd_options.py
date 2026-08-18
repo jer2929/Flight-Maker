@@ -26,7 +26,7 @@ import math
 from datetime import datetime, timezone
 
 from app.config import get_limits
-from app.models import EtdOption, HourCondition, Improvement, Verdict
+from app.models import EtdOption, HourCondition, Improvement
 from app.services.evaluator import SEVERITY, gating_hazards
 from app.services.timeline import _run_from, hour_dt
 
