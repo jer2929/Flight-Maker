@@ -48,7 +48,6 @@ from app.models import RunwayComponent
 from app.services.evaluator import (
     apply_gust_spread_floor,
     checks_verdict,
-    conditions_checks,
     window_checks,
     decision,
     derive_threats,
@@ -1598,7 +1597,16 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     dep_a = _assess_endpoint(dep, metars.get(dep.ident), tafs.get(dep.ident), dep_fc, notams, mode, manual_threats, 0.0, bearing, None, history=metar_hist.get(dep.ident, []), ensemble=dep_ens, flight_rules=flight_rules, when=etd_utc, is_now=is_now, taf_segments=dep_segs, span=departure_span(etd_utc), show_obs=show_obs, history_unavailable=hist_failed and bool(metars.get(dep.ident)))
 
     # Nearest reporting station for an endpoint that has no METAR of its own.
-    async def _attach_nearby(assessment, airport, cands):
+    #
+    # ``span`` is the window the endpoint this station stands in for is read
+    # over, and the caller passes it rather than this closure reaching out for
+    # one. It used to close over a single whole-flight ``span`` local, which is
+    # both the wrong window - a station standing in for the destination should
+    # mark what it forecasts for the *arrival* - and a live grenade: when
+    # per-endpoint windows removed that local, this line still referenced it and
+    # every route assessment raised NameError.
+    async def _attach_nearby(assessment, airport, cands,
+                             span: tuple[datetime, datetime]):
         if metars.get(airport.ident):
             return
         for c in cands:
@@ -1707,8 +1715,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # depends on the ETA at all, so the card is right the first time.
 
     await asyncio.gather(
-        _attach_nearby(dep_a, dep, dep_cands),
-        _attach_nearby(dest_a, dest, dest_cands),
+        _attach_nearby(dep_a, dep, dep_cands, departure_span(etd_utc)),
+        _attach_nearby(dest_a, dest, dest_cands, arrival_span(etd_utc, eta_utc)),
     )
 
     ceiling_points = [dep_a.weather.ceiling_agl_ft] + [e.get("ceiling_ft") for e in enroute] + [dest_a.weather.ceiling_agl_ft]

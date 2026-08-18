@@ -23,7 +23,6 @@ from app.config import (
     cruise_override,
     get_cruise_kt,
     get_default_limits,
-    get_limits,
     get_settings,
     limits_override,
 )

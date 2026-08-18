@@ -17,7 +17,7 @@ what it is instead of as a height change that never happened.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 
 def _ft(v) -> str:
@@ -272,7 +272,6 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
     obs = [h for h in history if h]
     if len(obs) < 2:
         return notes, ceiling_lowering
-    first, last = obs[0], obs[-1]
     span_h = max(1, len(obs) - 1)
     ref = datetime.now(timezone.utc)
     times = [_obs_dt(h.get("time_z"), ref) for h in obs]
