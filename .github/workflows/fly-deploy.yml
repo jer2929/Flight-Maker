@@ -45,8 +45,14 @@ jobs:
       - name: Lint (undefined names, dead imports)
         run: python -m pyflakes app/
 
+      # test_live_smoke.py auto-skips when the network is unavailable, so it
+      # runs here and nowhere else - pointing eleven tests at the real NAV
+      # CANADA and Open-Meteo endpoints. That is a useful thing to run; it is
+      # the wrong thing to gate a deploy on, because it makes shipping a fix
+      # depend on a weather service being up. Run it deliberately instead:
+      # `python -m pytest tests/test_live_smoke.py` where the network is open.
       - name: Tests
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q --ignore=tests/test_live_smoke.py
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 

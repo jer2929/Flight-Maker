@@ -948,8 +948,19 @@ def _build_enroute(corridor: list[tuple[Airport, float, float]],
 
     Each field's wind is read at the hour you'd actually be over it, found by
     interpolating ETD->ETA by along-track fraction.
+
+    ``fcs`` is one forecast per corridor field, and anything else means the
+    upstream gave us nothing usable - so it is normalised to "no forecasts"
+    rather than trusted to be indexable. ``i < len(fcs)`` looks like it does
+    that job and does not: a 200 with an empty body arrives here as the dict
+    ``{"hourly": {}}``, whose length is 1, so the guard passes and ``fcs[0]``
+    raises KeyError. With no try/except on ``/api/route`` that is a 500 - a
+    degraded upstream taking the page down instead of degrading the card, which
+    is the opposite of what the health banner exists to do.
     """
     out: list[EnrouteAirport] = []
+    if not isinstance(fcs, list):
+        fcs = []
     span = (eta - etd).total_seconds()
     for i, (a, atd, xtd) in enumerate(corridor):
         fc = fcs[i] if i < len(fcs) else {}

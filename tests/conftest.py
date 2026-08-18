@@ -35,3 +35,30 @@ def _isolate_cache():
     cache.clear()
     yield
     cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _pin_the_airport_dataset(monkeypatch):
+    """Run the suite against the committed seed, never a downloaded dataset.
+
+    ``airports._pick`` calls ``ensure_airport_data()`` on every load, which
+    rebuilds ``data/airports_ca.csv`` from the network. That is right in
+    production and poison in a test suite: it makes the aerodrome table depend
+    on whether the machine running the tests has egress. A CI runner resolves
+    thousands of Canadian aerodromes; a sandbox behind an allowlist falls back
+    to the 28-airport seed. Same commit, same command, different geography - so
+    tests about "the nearest station" or "what is in the corridor" answer
+    differently in the two places, and a green local run says nothing about CI.
+
+    That is not hypothetical: it let two tests pass here and fail there, and the
+    deploy they gated never shipped while production stayed broken.
+
+    Same reasoning as the two fixtures above - a module global that leaks the
+    environment into the result - so it is pinned the same way. Tests that want
+    to exercise the rebuild patch ``ensure_airport_data`` themselves and are
+    unaffected (see ``test_airports_dataset.py``); the live smoke tests reach
+    the network directly and never come through here.
+    """
+    import scripts.refresh_airport_data as refresh
+    monkeypatch.setattr(refresh, "ensure_airport_data", lambda *a, **k: None)
+    yield
