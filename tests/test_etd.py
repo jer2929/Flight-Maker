@@ -291,3 +291,94 @@ def test_circuits_collapse_to_the_etd_plus_the_pad():
     lo, hi = orchestrator.flight_span(etd)
     assert lo == etd
     assert hi == etd + timedelta(minutes=orchestrator.WINDOW_PAD_MIN)
+
+
+# ---------------------------------------------------------------------------
+# Per-endpoint windows: each field is read at the time you are actually there.
+# ---------------------------------------------------------------------------
+#
+# The flight this pins is a real one - CYFD -> CYQA, ETD 1400Z, ETA 1505Z, with
+# a destination TAF carrying fog under a TEMPO that ends at 1400Z. Both ends
+# used to be gated over the shared ETD->ETA span, so a group that was over an
+# hour before the arrival failed the destination's ceiling and visibility rows
+# and made the flight a NO-GO.
+
+# ETD is +2 h from BASE, ETA +3 h. The fog TEMPO runs +0 h to +2 h: it ends at
+# the exact instant the flight departs, and is long gone by the arrival.
+_ETD = BASE + timedelta(hours=2)
+_ETA = BASE + timedelta(hours=3)
+
+TAF_FOG_BEFORE_ETD = (
+    f"CYQA {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
+    f"27008KT P6SM SCT040 "
+    f"TEMPO {_dh(BASE)}/{_dh(BASE + timedelta(hours=2))} 1/2SM FG VV002"
+)
+# The same TAF with the fog moved to straddle the arrival instead.
+TAF_FOG_AT_ETA = (
+    f"CYQA {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
+    f"27008KT P6SM SCT040 "
+    f"TEMPO {_dh(BASE + timedelta(hours=3))}/{_dh(BASE + timedelta(hours=5))} "
+    f"1/2SM FG VV002"
+)
+
+
+def test_arrival_window_is_centred_on_the_eta():
+    lo, hi = orchestrator.arrival_span(_ETD, _ETA)
+    pad = timedelta(minutes=orchestrator.WINDOW_PAD_MIN)
+    assert (lo, hi) == (_ETA - pad, _ETA + pad)
+
+
+def test_arrival_window_never_opens_before_the_aeroplane_does():
+    # A leg shorter than the pad would otherwise back the window up past the
+    # ETD and read weather from before the flight existed.
+    short_eta = _ETD + timedelta(minutes=10)
+    lo, _hi = orchestrator.arrival_span(_ETD, short_eta)
+    assert lo == _ETD
+
+
+def test_departure_window_does_not_depend_on_the_eta():
+    assert orchestrator.departure_span(_ETD) == orchestrator.flight_span(_ETD)
+
+
+def test_fog_that_lifts_before_you_arrive_does_not_gate_the_destination():
+    segs = wx.parse_taf_segments(TAF_FOG_BEFORE_ETD)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, TAF_FOG_BEFORE_ETD, segs, _fc(), _ETA,
+        orchestrator.arrival_span(_ETD, _ETA))
+    # The TEMPO's 1/2 SM and VV002 must not reach the values that gate.
+    assert ws.visibility_sm and ws.visibility_sm > 3
+    assert ws.ceiling_agl_ft is None or ws.ceiling_agl_ft > 1000
+    checks = evaluator.conditions_checks(ws, None, "day", ceiling_mode="endpoint")
+    failed = {c.key for c in checks if not c.passed}
+    assert "ceiling" not in failed and "visibility" not in failed
+
+
+def test_the_same_fog_still_gates_when_it_straddles_the_arrival():
+    # The mirror case, so the fix cannot be "stop reading the destination TAF".
+    segs = wx.parse_taf_segments(TAF_FOG_AT_ETA)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, TAF_FOG_AT_ETA, segs, _fc(), _ETA,
+        orchestrator.arrival_span(_ETD, _ETA))
+    assert ws.visibility_sm == 0.5
+    assert ws.ceiling_agl_ft == 200
+
+
+def test_fog_before_the_etd_is_still_reported_as_out_of_window():
+    # Not gating is not the same as not saying. The group has to stay visible,
+    # described as what it is: weather that clears before you get there.
+    segs = wx.parse_taf_segments(
+        TAF_FOG_BEFORE_ETD.replace("1/2SM FG VV002", "1/2SM +TSRA VV002"))
+    _inside, outside, _prob = orchestrator._window_hazards(
+        [], segs, _ETD, _ETA, "CYFD", "CYQA")
+    assert [o["ident"] for o in outside] == ["CYQA"]
+    assert "thunderstorm" in outside[0]["hazards"]
+
+
+def test_a_departure_tempo_ending_at_the_etd_does_not_gate():
+    # The same rule read from the departure end: the overlay overlap test used
+    # to be closed at both ends, so a group ending at the exact ETD counted.
+    segs = wx.parse_taf_segments(TAF_FOG_BEFORE_ETD)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, TAF_FOG_BEFORE_ETD, segs, _fc(), _ETD,
+        orchestrator.departure_span(_ETD))
+    assert ws.visibility_sm and ws.visibility_sm > 3

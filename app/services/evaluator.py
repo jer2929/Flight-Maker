@@ -93,6 +93,46 @@ def _attribute(check: LimitCheck, weather: WeatherSummary, field: str, *,
     return check
 
 
+def gust_spread_floor_kt() -> float:
+    """Peak gust below which the gust-spread row reports but does not gate.
+
+    One reader for the number, because three places have to agree about it: the
+    endpoint rows, the route card's own row, and the automatic "strong or gusty
+    winds" threat. If they drifted apart, a card would excuse a spread on one
+    row and fail the flight for it on the next.
+
+    ``.get`` with a default rather than a bare lookup: a profile saved before
+    this key existed is still a valid profile and must not raise.
+    """
+    return float(get_limits()["hard_limits"]["wind"].get("gust_spread_floor_kt", 15))
+
+
+def gust_spread_gates(gust_kt: float | None) -> bool:
+    """Whether a spread this peak gust produced is allowed to fail a flight.
+
+    See ``gust_spread_floor_kt`` in ``limits.yaml`` for why a spread alone is not
+    enough: a model's wind and its gust are different statistics, and 10 kt of
+    spread under a 12 kt peak is not the weather the limit was written for.
+    """
+    floor = gust_spread_floor_kt()
+    return floor <= 0 or (gust_kt is not None and gust_kt >= floor)
+
+
+def _spread_advisory_text(gust_kt: float | None) -> str:
+    return (f"{gust_kt:.0f} kt peak - below your {gust_spread_floor_kt():.0f} kt "
+            f"floor, advisory only")
+
+
+def apply_gust_spread_floor(check: LimitCheck, gust_kt: float | None) -> LimitCheck:
+    """Turn a failing gust-spread row into an advisory when the peak is small."""
+    if check.passed or gust_spread_gates(gust_kt):
+        return check
+    check.passed = True
+    check.advisory = True
+    check.actual_text = f"{check.actual_text} ({_spread_advisory_text(gust_kt)})"
+    return check
+
+
 def _clears(limit: float, actual: float | None) -> bool:
     """Whether a value passes a minimum-type limit, on the same terms the rows do.
 
@@ -143,10 +183,10 @@ def conditions_checks(
     ), weather, "wind_kt"))
     # Gust spread
     spread = (weather.gust_kt - weather.wind_kt) if (weather.gust_kt is not None and weather.wind_kt is not None) else None
-    checks.append(_attribute(_num_check(
+    checks.append(apply_gust_spread_floor(_attribute(_num_check(
         "gust_spread", "Gust spread", w["gust_spread_max_kt"], spread,
         unit="kt", source=gust_src,
-    ), weather, "gust_kt"))
+    ), weather, "gust_kt"), weather.gust_kt))
     # Crosswind (uses gust crosswind if present)
     xw = None
     xw_label = ""
@@ -481,7 +521,11 @@ def derive_threats(
     sustained_trip, spread_trip = wind_threat_thresholds()
     if weather.wind_kt is not None and weather.wind_kt >= sustained_trip:
         threats.add("strong_or_gusty_winds")
-    if weather.gust_kt is not None and weather.wind_kt is not None and (weather.gust_kt - weather.wind_kt) >= spread_trip:
+    # Same floor as the hard-limit row, or the threat stack would simply re-fire
+    # a spread the row above has just said is too small to mean anything.
+    if (weather.gust_kt is not None and weather.wind_kt is not None
+            and (weather.gust_kt - weather.wind_kt) >= spread_trip
+            and gust_spread_gates(weather.gust_kt)):
         threats.add("strong_or_gusty_winds")
     if "thunderstorm" in weather.hazards:
         threats.add("convective_nearby")

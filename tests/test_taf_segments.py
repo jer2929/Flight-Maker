@@ -461,3 +461,36 @@ def test_a_sustained_group_below_minimums_still_stops_the_flight():
     assert rows["window_ceiling"].passed is False
     assert rows["window_ceiling"].temporary is False
     assert verdict.value == "NO-GO"
+
+
+# The same boundary read from the overlay side. Overlays used to keep a closed
+# test at both ends, which is how a destination TEMPO of fog running to 1400Z
+# gated a flight whose window opened at 1400Z.
+TAF_TEMPO_HANDOVER = (
+    f"CYQA {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM SCT040 "
+    f"TEMPO {_dd(D)}12/{_dd(D)}14 1/2SM FG VV002"
+)
+
+
+def test_an_overlay_ending_at_the_window_start_does_not_govern():
+    w = worst_in_window(parse_taf_segments(TAF_TEMPO_HANDOVER), _q(14), _q(15))
+    assert w["ceiling_agl_ft"] is None
+    assert w["visibility_sm"] is None or w["visibility_sm"] > 3
+    assert [s["label"] for s in w["governing"]] == ["MAIN"]
+
+
+def test_an_overlay_starting_at_the_window_end_still_governs():
+    # Closed at the far end, deliberately: a TEMPO that begins at the moment you
+    # land is one you may still meet on the approach, and dropping it on a
+    # technicality is the wrong way to be wrong.
+    w = worst_in_window(parse_taf_segments(TAF_TEMPO_HANDOVER), _q(10), _q(12))
+    assert w["ceiling_agl_ft"] == 200
+    assert "TEMPO" in [s["label"] for s in w["governing"]]
+
+
+def test_an_overlay_ending_inside_the_window_still_governs():
+    # Again a boundary, not an amnesty: depart at 1330Z and you spend half an
+    # hour in the fog before it lifts.
+    w = worst_in_window(parse_taf_segments(TAF_TEMPO_HANDOVER),
+                        _q(13) + timedelta(minutes=30), _q(15))
+    assert w["ceiling_agl_ft"] == 200

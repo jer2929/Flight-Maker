@@ -12,7 +12,13 @@ from app.config import (
     merge_limits,
 )
 from app.models import RunwayWind, Source, WeatherSummary
-from app.services.evaluator import decision, derive_threats, wind_threat_thresholds
+from app.services.evaluator import (
+    conditions_checks,
+    decision,
+    derive_threats,
+    gust_spread_floor_kt,
+    wind_threat_thresholds,
+)
 
 
 def test_merge_overrides_leaf_keeps_defaults():
@@ -138,7 +144,9 @@ def _rw(crosswind_kt=0.0):
 # (prefs, weather, runway, mode, ceiling_mode, flight_rules)
 RESPECTED = {
     "wind.sustained": ({"wind": {"sustained_max_kt": 40}}, _wx(wind_kt=25), None, "day", "xc", "vfr"),
-    "wind.gust_spread": ({"wind": {"gust_spread_max_kt": 20}}, _wx(wind_kt=5, gust_kt=14), None, "day", "xc", "vfr"),
+    # 12G26: a 14 kt spread under a 26 kt peak, so it clears the gust-spread
+    # floor and the row is testing the pilot's limit rather than the floor.
+    "wind.gust_spread": ({"wind": {"gust_spread_max_kt": 20}}, _wx(wind_kt=12, gust_kt=26), None, "day", "xc", "vfr"),
     "wind.crosswind": ({"wind": {"crosswind_max_kt": 25}}, _wx(), _rw(15), "day", "xc", "vfr"),
     "ceiling.day_xc": ({"ceiling_agl_ft": {"day_xc": 1000}}, _wx(ceiling_agl_ft=2500), None, "day", "xc", "vfr"),
     "ceiling.day_circuit": ({"ceiling_agl_ft": {"day_circuit": 800}}, _wx(ceiling_agl_ft=1200), None, "day", "circuit", "vfr"),
@@ -196,9 +204,10 @@ def test_wind_threat_thresholds_track_raised_limits():
 
 
 def test_gust_spread_within_raised_limit_is_not_a_threat():
-    # The reported bug: 5G14 is a 9 kt spread. Default (10 kt limit) flags it;
-    # a pilot who set 20 kt has said it is unremarkable.
-    wx = _wx(wind_kt=5, gust_kt=14)
+    # The reported bug: 12G21 is a 9 kt spread. Default (10 kt limit) flags it;
+    # a pilot who set 20 kt has said it is unremarkable. The peak clears the
+    # gust-spread floor, so what is under test here is the limit, not the floor.
+    wx = _wx(wind_kt=12, gust_kt=21)
     assert "strong_or_gusty_winds" in derive_threats(wx, [])
     with limits_override({"wind": {"gust_spread_max_kt": 20}}):
         assert "strong_or_gusty_winds" not in derive_threats(wx, [])
@@ -206,7 +215,7 @@ def test_gust_spread_within_raised_limit_is_not_a_threat():
 
 def test_lowering_a_limit_tightens_the_trigger_too():
     # Scaling cuts both ways - a cautious pilot's lower limit trips sooner.
-    wx = _wx(wind_kt=5, gust_kt=11)  # 6 kt spread, under the default 8 kt trip
+    wx = _wx(wind_kt=14, gust_kt=20)  # 6 kt spread, under the default 8 kt trip
     assert "strong_or_gusty_winds" not in derive_threats(wx, [])
     with limits_override({"wind": {"gust_spread_max_kt": 5}}):
         assert "strong_or_gusty_winds" in derive_threats(wx, [])
@@ -287,3 +296,45 @@ def test_wait_advisory_unknown_leaf_is_dropped():
     base = get_default_limits()
     merged = merge_limits(base, {"wait_advisory": {"nonsense_key": 3}})
     assert "nonsense_key" not in merged["hard_limits"]["wait_advisory"]
+
+
+# ---- the gust-spread floor -------------------------------------------------
+#
+# A model's wind and its gust are different statistics (instantaneous vs. max
+# over the preceding hour), so their difference runs larger than the METAR G the
+# spread limit was written against. Below a peak-gust floor the spread is
+# reported and does not gate. See ``gust_spread_floor_kt`` in ``limits.yaml``.
+
+
+def test_a_big_spread_under_a_small_peak_does_not_gate():
+    # 2G13: an 11 kt spread, over the default 10 kt limit - but a 13 kt peak is
+    # not the weather that limit exists for. This is the reported symptom.
+    wx = _wx(wind_kt=2, gust_kt=13)
+    checks = {c.key: c for c in conditions_checks(wx, None, "day")}
+    row = checks["gust_spread"]
+    assert row.passed and row.advisory, "reported, but not a no-go"
+    assert "13 kt peak" in row.actual_text
+    assert "strong_or_gusty_winds" not in derive_threats(wx, [])
+
+
+def test_the_same_spread_over_a_real_wind_still_gates():
+    # 18G29: the same 11 kt spread, the day the limit was written for.
+    wx = _wx(wind_kt=18, gust_kt=29)
+    row = {c.key: c for c in conditions_checks(wx, None, "day")}["gust_spread"]
+    assert not row.passed and not row.advisory
+    assert "strong_or_gusty_winds" in derive_threats(wx, [])
+
+
+def test_the_floor_is_the_pilots_to_set():
+    wx = _wx(wind_kt=2, gust_kt=13)
+    with limits_override({"wind": {"gust_spread_floor_kt": 0}}):
+        row = {c.key: c for c in conditions_checks(wx, None, "day")}["gust_spread"]
+        assert not row.passed, "a floor of 0 means gate on the spread alone"
+        assert "strong_or_gusty_winds" in derive_threats(wx, [])
+
+
+def test_a_profile_saved_before_the_floor_existed_still_works():
+    # ``limits_override`` publishes a whole wind block; one written before this
+    # key existed must not raise, and must fall back to the packaged default.
+    with limits_override({"wind": {"gust_spread_max_kt": 10}}):
+        assert gust_spread_floor_kt() == 15
