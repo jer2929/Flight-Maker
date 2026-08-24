@@ -1808,7 +1808,7 @@ function endpointCard(a, role, timeLabel) {
     ${runwaysBlock(a)}
     <div class="links">${linksHtml(a)}</div>
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
-    ${w.raw_metar ? `<div class="raw">METAR ${escapeHtml(w.raw_metar)}${ageChip(w.raw_metar)}</div>` : ""}
+    ${obsLine(w.raw_metar)}
     ${tafBlock(w, timeLabel)}
     ${metarHistory(a)}
   </div>`;
@@ -1970,7 +1970,7 @@ function nearbyBlock(n, timeLabel) {
     ? `<div class="hint nearby-caveat">Reference only - ${escapeHtml(n.ident)} is ${n.distance_nm} NM away, so this forecast does not count against your limits.</div>`
     : "";
   return `<div class="nearby"><span class="nlabel">Nearest reporting station</span> <strong>${n.ident}</strong>${n.name ? " · " + n.name : ""} - ${n.distance_nm} NM ${n.direction} of here
-    ${n.metar ? `<div class="raw">METAR ${escapeHtml(n.metar)}${ageChip(n.metar)}</div>` : ""}${taf}${caveat}
+    ${obsLine(n.metar)}${taf}${caveat}
     ${trendsBlock(n)}${metarHistoryList(n.metar_history)}</div>`;
 }
 // One advisory: a collapsed one-line teaser that expands to the full product
@@ -2041,7 +2041,7 @@ function metarHistory(a) {
 }
 function metarHistoryList(h) {
   if (!h || h.length < 2) return "";
-  return `<details class="mhist"><summary>METAR history (${h.length})</summary>${h.map((m) => `<div class="raw">${escapeHtml(m)}${ageChip(m)}</div>`).join("")}</details>`;
+  return `<details class="mhist"><summary>Observation history (${h.length})</summary>${h.map((m) => obsLine(m)).join("")}</details>`;
 }
 
 function runwaysBlock(a) {
@@ -2397,7 +2397,7 @@ function discoveryCard(a) {
     ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div><strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div>${windLegend(rw, w)}</div></div>` : `<div class="rwy-na">Runway data unavailable</div>`}
     ${runwaysBlock(a)}
     <div class="meta">${notamToggle(a)}<span class="links">${linksHtml(a)}</span></div>
-    ${w.raw_metar ? `<div class="raw">METAR ${escapeHtml(w.raw_metar)}${ageChip(w.raw_metar)}</div>` : ""}
+    ${obsLine(w.raw_metar)}
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
   </div>`;
 }
@@ -3032,6 +3032,20 @@ function ageChipFromMin(mins, { staleAfter = 90 } = {}) {
 }
 function ageChip(raw) {
   return ageChipFromMin(metarAgeMin(raw));
+}
+// One observation line, labelled with what the report actually is.
+//
+// Every call site used to hardcode "METAR " in front of the raw text, so a
+// SPECI - a special observation issued off the hour precisely because something
+// changed - was displayed as an ordinary hourly report, and read as one. The
+// label comes from the report's own type token, which is also stripped from the
+// text so a feed that includes the prefix does not render it twice.
+function obsLine(raw, cls = "raw") {
+  if (!raw) return "";
+  const m = /^\s*(METAR|SPECI)\s+/i.exec(raw);
+  const label = m ? m[1].toUpperCase() : "METAR";
+  const body = m ? raw.slice(m[0].length) : raw;
+  return `<div class="${cls}">${label} ${escapeHtml(body)}${ageChip(raw)}</div>`;
 }
 // Minutes since an ISO8601 stamp - what the advisory feeds carry, where a METAR
 // carries its own DDHHMM group.

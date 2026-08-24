@@ -123,6 +123,15 @@ def weather_checks(
     # reaches; see ``_forecast_hazard``.
     prob_hazards: set[str] = frozenset(),
     prob_labels: list[str] = (),              # e.g. ["PROB30 1800Z-2300Z"]
+    # Does the widespread-IMC row stop the flight? False on an IFR flight - IMC
+    # is what the rating is for, and the ceiling and visibility along the route
+    # are already gated against the pilot's IFR minimums by the conditions rows -
+    # and false when the pilot has taken "Widespread IMC" off their own
+    # auto-NO-GO list. Either way the row is still built and still says where the
+    # IMC is; it is marked not-applicable rather than removed, so the detail stays
+    # one click away. A bool rather than a flight_rules string keeps this module a
+    # decider that reads no config, as the module docstring describes.
+    widespread_imc_gates: bool = True,
 ) -> list[LimitCheck]:
     blob = raw_text.upper()
     area = area_text.upper()
@@ -370,8 +379,12 @@ def weather_checks(
         why = " · ".join(
             ([f"{imc_pts} IMC point{'s' if imc_pts != 1 else ''}"] if imc_pts else [])
             + (["vis below personal limit"] if below_personal else []))
-        add("widespread_ifr", "Widespread IMC", widespread,
+        if not widespread_imc_gates:
+            why += " · not applied on this flight"
+        add("widespread_ifr", "Widespread IMC",
+            widespread and widespread_imc_gates,
             f"{_values(worst)}{tail} - {why}",
+            applicable=widespread_imc_gates,
             location=worst["label"], source="route sample",
             source_text="\n".join(
                 f"{o['label']}: {_values(o)}"

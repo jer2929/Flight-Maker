@@ -284,7 +284,7 @@ def winds_aloft_at_index(fc: dict, i: int) -> list[WindAloft]:
 
 
 def _cruise_for_hour(fc: dict, i: int, cruise: dict | None,
-                     ceiling_ft: float | None) -> dict:
+                     ceiling_ft: float | None, flight_rules: str = "vfr") -> dict:
     """This hour's best cruising altitude and the route wind it would see.
 
     Returns ``{}`` unless the caller supplied the route geometry, so every
@@ -301,7 +301,7 @@ def _cruise_for_hour(fc: dict, i: int, cruise: dict | None,
     rec = recommend_altitude(
         levels, cruise["course_true"], cruise["cruise_kt"],
         course_mag=cruise.get("course_mag"), ceiling_ft=ceiling_ft,
-        flight_rules=cruise.get("flight_rules", "vfr"),
+        flight_rules=flight_rules,
         distance_nm=cruise.get("distance_nm"),
         field_elev_ft=cruise.get("field_elev_ft"))
     if rec is None:
@@ -340,6 +340,7 @@ def build_timeline(
     dest_lon: float | None = None,
     static_hazards: set[str] | None = None,
     cruise: dict | None = None,
+    flight_rules: str = "vfr",
 ) -> list[HourCondition]:
     times = _series(dep_fc, "time")
     if not times:
@@ -390,7 +391,13 @@ def build_timeline(
         )
         mode = "day" if daylight else "night"
         hour_threats = base_threats if daylight else base_threats + ["night_operations"]
-        verdict, reasons, _ = evaluate(ws, rw, mode, hour_threats)
+        # The pilot's flight rules pick the limits for every hour, exactly as they
+        # do for the route card. Leaving this off gated an IFR flight's whole
+        # 48-hour strip - and with it the best windows, the wait advisory and the
+        # "depart N h later" suggestion - against the VFR ceiling and visibility,
+        # so the card read one minimum and the banner above it quoted another.
+        verdict, reasons, _ = evaluate(ws, rw, mode, hour_threats,
+                                       flight_rules=flight_rules)
 
         wind_dir_mag = None
         if ws.wind_dir_true is not None and w_lat is not None:
@@ -398,7 +405,7 @@ def build_timeline(
 
         # The cruise picture for this hour, gated on this hour's own ceiling.
         # Pure arithmetic over winds already in the response - no extra fetch.
-        cr = _cruise_for_hour(dep_fc, i, cruise, ws.ceiling_agl_ft)
+        cr = _cruise_for_hour(dep_fc, i, cruise, ws.ceiling_agl_ft, flight_rules)
 
         timeline.append(HourCondition(
             time=tstr, verdict=verdict,

@@ -51,6 +51,7 @@ from app.services.evaluator import (
     window_checks,
     decision,
     derive_threats,
+    gating_hazards,
     threat_check_list,
     threat_result_label,
     threat_verdict,
@@ -364,7 +365,7 @@ def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None,
             ws.field_sources["temp"] = Source.OBSERVED
         if m["altimeter_inhg"] is not None:
             ws.field_sources["pressure"] = Source.OBSERVED
-        tm = re.search(r"\b(\d{6})Z\b", metar)
+        tm = wx.OBS_TIME_RE.search(metar)
         ws.as_of = tm.group(1) + "Z" if tm else None
         if model_now and model_now.get("wind_kt") is not None and m["wind_kt"] is not None:
             ws.model_vs_obs_wind_kt = round(model_now["wind_kt"] - m["wind_kt"], 1)
@@ -1598,6 +1599,20 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         fetch_health.record(fetch_health.HISTORY)
     awc_hist, cfps_hist = awc_hist or {}, cfps_hist or {}
     metar_hist = {s: (awc_hist.get(s) or cfps_hist.get(s, [])) for s in sites}
+    # The gating observation and the history come from two different feeds -
+    # CFPS above, aviationweather.gov here - and until now nothing reconciled
+    # them, so the card could show a history whose top entry was newer than the
+    # observation it was gating on. That gap is where a SPECI goes missing: the
+    # AWC feed carries specials interleaved with the hourly reports, and if the
+    # CFPS product lags or omits one, the newer observation was sitting in the
+    # history all along, unread. Promote it - but only when it really is newer,
+    # so a lagging history feed can never pull the card backwards in time.
+    for s in sites:
+        newest = wx.newest_report(metar_hist.get(s) or [], now)
+        current, newest_dt = metars.get(s), wx.obs_time(newest, now)
+        current_dt = wx.obs_time(current, now)
+        if newest and newest_dt and (current_dt is None or newest_dt > current_dt):
+            metars[s] = newest
     # Parse each TAF once - the endpoint assessment, the hazard window, the
     # period highlight and the timeline all want the same segments.
     dep_segs = wx.parse_taf_segments(tafs.get(dep.ident) or "")
@@ -1922,6 +1937,13 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # turbulence rows grade exactly the products the card is showing.
         planned_low_ft=haz_low_ft,
         planned_high_ft=haz_high_ft,
+        # Widespread IMC gates a VFR flight that has it on its auto-NO-GO list,
+        # and nothing else. On IFR the route ceiling and visibility rows above
+        # already test these same points against the pilot's IFR minimums, so
+        # letting this row fail too turned one bust into two - on a card whose
+        # own My Minimums pane says it is "not applied on IFR flights".
+        widespread_imc_gates=(flight_rules != "ifr"
+                              and "widespread_ifr" in gating_hazards()),
     )
 
     # What the TAF forecasts across the flight, at each end. On a future ETD the
@@ -1988,8 +2010,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # already in the response - it is what lets the wait advisory talk about
         # the wind at cruise rather than the wind on the ground.
         cruise={"course_true": bearing, "course_mag": bearing_mag,
-                "cruise_kt": get_cruise_kt(), "flight_rules": flight_rules,
+                "cruise_kt": get_cruise_kt(),
                 "distance_nm": distance, "field_elev_ft": dep.elevation_ft},
+        # Every hour is judged against the same minimums as the card above it.
+        flight_rules=flight_rules,
     )
     # An empty timeline has exactly one cause - no hourly forecast came back -
     # and it used to render as "No clearly favourable window in the next 48 h",
