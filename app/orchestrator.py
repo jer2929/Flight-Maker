@@ -2219,11 +2219,14 @@ async def suggest(
     # Origin ceiling gates the cruising altitude along with each destination's, so a
     # low deck near home lowers the suggestion for every candidate (the "enroute
     # ceiling" - origin + destination, without an extra forecast call per candidate).
-    # The model hour AND what the origin actually reports: a METAR/TAF deck at home
-    # is as real as a modelled one, and the lower of the two is what you fly under.
-    origin_ceiling = lowest_ceiling(
-        [_point_at(origin_fc, None if is_now else etd_utc).get("ceiling_ft") if origin_fc else None,
-         *_card_ceilings(origin_a.weather)])
+    # Read off the origin's finished card, not the raw model hour. The card is
+    # already the model with the TAF laid over it (``_merge_model_taf``, the one
+    # implementation of TAF-beats-model) and the METAR's own reading on a "now"
+    # departure, so this is the model wherever nothing better exists and the
+    # forecaster's number wherever one does. Taking the lower of the two instead
+    # let a modelled deck stand at a field whose TAF forecast none - the same
+    # phantom ceiling the METAR path refuses to substitute in ``_endpoint_weather``.
+    origin_ceiling = lowest_ceiling(_card_ceilings(origin_a.weather))
     results: list[AirportAssessment] = []
     for airport, dist in candidates:
         bearing = initial_bearing_true(origin.lat, origin.lon, airport.lat, airport.lon)
@@ -2231,16 +2234,21 @@ async def suggest(
         # Each candidate is read at its own ETA: a 20 nm hop and a 200 nm leg
         # from the same ETD arrive into different weather.
         cand_eta = etd_utc + timedelta(hours=flight_time_hr(dist, cruise_kt))
+        # The candidate has not been assessed yet, so its own METAR/TAF is not
+        # available to gate with - the model hour stands in, purely so the ETA
+        # below is estimated at a level the flight could plausibly use. The gate
+        # the pilot is shown is rebuilt from the finished card further down; this
+        # provisional one never reaches the card.
         cand_ceiling = (_point_at(cand_fc, None if is_now else cand_eta).get("ceiling_ft")
                         if cand_fc else None)
         # Carried with the aerodrome it came from: the gate spans both ends, and
         # a deck the pilot is told about has to say where it is.
-        gate_ceiling, deck_at = _lowest_deck(
+        prov_ceiling, _prov_at = _lowest_deck(
             [(origin_ceiling, origin_ident), (cand_ceiling, airport.ident)])
         alt = recommend_altitude(
             levels_now, bearing, cruise_kt,
             course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
-            ceiling_ft=gate_ceiling, flight_rules=flight_rules,
+            ceiling_ft=prov_ceiling, flight_rules=flight_rules,
             distance_nm=dist, field_elev_ft=origin.elevation_ft)
         # The arrival the card is actually assessed at, at the altitude we would
         # fly. ``cand_eta`` above is the cruise-TAS estimate the ceiling gate
@@ -2264,16 +2272,28 @@ async def suggest(
             span=arrival_span(etd_utc, eta),
             is_now=is_now, show_obs=show_obs,
         )
-        # The ceilings this card reports - the candidate's METAR now, or its TAF
-        # across the window - are only known once it has been assessed, and the
-        # gate above saw only the model. Re-gate against them so no card ever
-        # shows a cruising altitude above a deck printed on the same card. This
-        # only ever lowers the pick, so the ETA it was assessed at (from the
-        # faster, higher level) stays a conservative estimate.
+        # The gate the pilot is actually shown, rebuilt from the two finished
+        # cards - the origin's above and this candidate's, now that it has been
+        # assessed. Both carry the model with the TAF laid over it, so the deck
+        # in the advisory is a deck the card prints.
+        #
+        # This used to *lower* the provisional gate onto the card's ceilings
+        # instead of replacing it, which meant the model's own reading could
+        # never be overruled: a modelled 1,600 ft layer at a field whose TAF said
+        # BKN050 produced "none clears the 1,600 ft AGL deck at CYYZ" on a card
+        # headlining a 5,000 ft ceiling. Rebuilding lets the TAF win, and the
+        # candidate's METAR/TAF still gates as hard as it ever did when it is the
+        # lower of the two.
         gate_ceiling, deck_at = _lowest_deck(
-            [(gate_ceiling, deck_at),
+            [(origin_ceiling, origin_ident),
              *[(c, airport.ident) for c in _card_ceilings(a.weather)]])
-        if alt and not clears_ceiling(alt.altitude_ft, gate_ceiling, flight_rules):
+        # Re-pick whenever the real gate is not the provisional one - it can now
+        # rise as well as fall, and a pick made under a deck the card never shows
+        # is as wrong as one made above a deck it does. The ETA stays as assessed:
+        # re-picking moves the groundspeed by a few knots over a leg already
+        # rounded to the minute, and the model has nothing finer than the hour.
+        if gate_ceiling != prov_ceiling or (
+                alt and not clears_ceiling(alt.altitude_ft, gate_ceiling, flight_rules)):
             alt = recommend_altitude(
                 levels_now, bearing, cruise_kt,
                 course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
