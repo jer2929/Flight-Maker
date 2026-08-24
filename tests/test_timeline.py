@@ -376,3 +376,92 @@ def test_the_nudge_can_point_backwards_to_an_earlier_departure():
     s = etd_nudge(tldata, etd, 1.0, Verdict.NOGO, daylight_only=True, now=_etd_of(tldata[0]))
     assert s.etd_utc == tldata[1].time
     assert s.delta_min == -60
+
+
+# --- the strip is judged against the pilot's own flight rules --------------
+#
+# The hourly verdicts feed the best-window list, the wait advisory and the
+# "depart N h later" nudge. They used to be computed against the VFR minimums
+# whatever the pilot had selected, so an IFR card could read "Ceiling (XC, route)
+# ... limit >= 1,000 ft AGL" while the banner directly above it explained the
+# hourly strip in terms of a 4,000 ft VFR limit it was never flying to.
+
+
+def _fc_ifr(n=6):
+    """Calm wind under a 2,000 ft deck in 5 SM - a NO-GO under the default VFR
+    XC minimums (4,000 ft / 9 SM), comfortably legal under the default IFR ones
+    (1,500 ft / 3 SM)."""
+    return {
+        "utc_offset_seconds": 0,
+        "hourly": {
+            "time": _times(n),
+            "winddirection_10m": [50] * n,
+            "windspeed_10m": [5] * n,
+            "windgusts_10m": [6] * n,
+            "cloudcover": [90] * n,
+            "cloud_base": [610] * n,        # metres -> ~2,000 ft
+            "visibility": [8047] * n,       # metres -> 5.0 SM
+            "is_day": [1] * n,
+        },
+    }
+
+
+def test_hours_are_gated_on_vfr_minimums_by_default():
+    fc = _fc_ifr()
+    tldata = build_timeline(fc, fc, [], [], RWY, RWY, hours=6)
+    assert tldata[0].verdict == Verdict.NOGO
+    assert any("Ceiling" in r for r in tldata[0].reasons)
+
+
+def test_hours_are_gated_on_ifr_minimums_on_an_ifr_flight():
+    fc = _fc_ifr()
+    tldata = build_timeline(fc, fc, [], [], RWY, RWY, hours=6, flight_rules="ifr")
+    assert tldata[0].verdict == Verdict.GO
+    assert not tldata[0].reasons
+
+
+def test_the_reasons_an_ifr_hour_reports_quote_the_ifr_limit():
+    # What the "Stops applying:" line on the ETD nudge is built from - it reads
+    # straight out of these strings, so a VFR number here is a VFR number there.
+    fc = {
+        "utc_offset_seconds": 0,
+        "hourly": {
+            "time": _times(3), "winddirection_10m": [50] * 3,
+            "windspeed_10m": [5] * 3, "windgusts_10m": [6] * 3,
+            "cloudcover": [95] * 3,
+            "cloud_base": [244] * 3,        # ~800 ft: below the IFR floor too
+            "visibility": [8047] * 3, "is_day": [1] * 3,
+        },
+    }
+    tldata = build_timeline(fc, fc, [], [], RWY, RWY, hours=3, flight_rules="ifr")
+    ceiling = [r for r in tldata[0].reasons if "Ceiling" in r]
+    assert ceiling, tldata[0].reasons
+    assert "1,500 ft" in ceiling[0] and "4,000 ft" not in ceiling[0]
+
+
+def test_an_ifr_flight_gets_a_nudge_the_vfr_limits_would_have_hidden():
+    # Hours 0-1 are below the IFR ceiling floor; hours 2+ clear it but stay
+    # under the VFR one. Gated on VFR the whole strip is NO-GO and there is
+    # nothing to suggest; gated on IFR there is a real departure time to offer.
+    n = 6
+    bases = [244, 244] + [610] * (n - 2)     # ~800 ft then ~2,000 ft
+    fc = {
+        "utc_offset_seconds": 0,
+        "hourly": {
+            "time": _times(n), "winddirection_10m": [50] * n,
+            "windspeed_10m": [5] * n, "windgusts_10m": [6] * n,
+            "cloudcover": [90] * n, "cloud_base": bases,
+            "visibility": [8047] * n, "is_day": [1] * n,
+        },
+    }
+    etd = datetime.strptime(_times(n)[0], "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
+
+    vfr = build_timeline(fc, fc, [], [], RWY, RWY, hours=n)
+    assert all(h.verdict == Verdict.NOGO for h in vfr)
+    assert etd_nudge(vfr, etd, 1.0, Verdict.NOGO, daylight_only=True, now=etd) is None
+
+    ifr = build_timeline(fc, fc, [], [], RWY, RWY, hours=n, flight_rules="ifr")
+    nudge = etd_nudge(ifr, etd, 1.0, Verdict.NOGO, daylight_only=True, now=etd)
+    assert nudge is not None
+    assert nudge.verdict == Verdict.GO
+    assert nudge.etd_utc == ifr[2].time

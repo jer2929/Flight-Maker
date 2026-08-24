@@ -17,7 +17,10 @@ should cost detail, not the whole picture.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.config import get_settings
+from app.services import weather as wx
 from app.sources import _http, cache
 
 _BASE = "https://aviationweather.gov/api/data"
@@ -136,12 +139,22 @@ async def metar_history(idents: list[str], hours: int = 6) -> dict[str, list[str
             _METAR_URL,
             {"ids": ",".join(idents), "format": "json", "hours": hours})
 
-        rows: dict[str, list[tuple[int, str]]] = {}
+        rows: dict[str, list[tuple[float, str]]] = {}
+        now = datetime.now(timezone.utc)
         for item in data if isinstance(data, list) else []:
             ident = (item.get("icaoId") or item.get("id") or "").upper()
             raw = item.get("rawOb") or item.get("raw_text")
             if ident and raw:
-                rows.setdefault(ident, []).append((item.get("obsTime") or 0, raw))
+                # This feed carries SPECIs interleaved with the hourly reports,
+                # so the timestamp is the only thing that says which is newest.
+                # A row missing ``obsTime`` used to fall back to 0 and sink to
+                # the bottom of the history; read the time out of the report
+                # itself before assuming it is the oldest thing here.
+                when = item.get("obsTime")
+                if not isinstance(when, (int, float)):
+                    dt = wx.obs_time(raw, now)
+                    when = dt.timestamp() if dt else 0
+                rows.setdefault(ident, []).append((float(when), raw))
         out: dict[str, list[str]] = {}
         for ident, lst in rows.items():
             lst.sort(key=lambda t: t[0], reverse=True)  # newest first

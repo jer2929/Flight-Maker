@@ -77,6 +77,89 @@ def cloud_layers(text: str) -> list[dict]:
     return sorted(layers, key=lambda lyr: lyr["height_ft"])
 
 
+# ---------------------------------------------------------------------------
+# Report identity: when an observation was taken, and whether it is a SPECI.
+#
+# The ``DDHHMMZ`` group used to be re-read in four places with four different
+# answers - a display string here, another in the orchestrator, a *lexical* sort
+# key in the CFPS client, and the only real datetime in ``services.trends``. The
+# lexical one is why "which report is newest" was never reliably answered: it
+# ranks ``312350`` above ``010030``, so on the 1st of a month yesterday sorts
+# newest. Everything that has to order or compare observations now shares these.
+# ---------------------------------------------------------------------------
+
+OBS_TIME_RE = re.compile(r"\b(\d{6})Z\b")
+_REPORT_TYPE_RE = re.compile(r"^\s*(METAR|SPECI)\b", re.IGNORECASE)
+
+
+def report_type(raw: str | None) -> str:
+    """``"SPECI"`` for a special report, ``"METAR"`` otherwise.
+
+    A SPECI is issued because something changed between the hourly reports, so
+    it is very often the observation that matters - and a feed carries it in the
+    same list as the routine ones, distinguished only by this prefix. Reports
+    that carry no prefix at all (CFPS strips it on some products) read as METAR,
+    which is what they are unless they say otherwise.
+    """
+    m = _REPORT_TYPE_RE.match(raw or "")
+    return m.group(1).upper() if m else "METAR"
+
+
+def obs_time(raw: str | None, ref: datetime | None = None) -> Optional[datetime]:
+    """The UTC instant a report was taken, from its ``DDHHMMZ`` group.
+
+    Accepts either a whole raw report or a bare ``DDHHMM``/``DDHHMMZ`` stamp, so
+    the fetchers can sort raw text and the trend engine can keep passing the
+    stamp it already extracted.
+
+    A METAR carries a day and a time but no month, so the answer is only defined
+    relative to *when you are reading it*: ``ref`` defaults to now. A stamp more
+    than a day ahead of ``ref`` belongs to the previous month - that is the
+    rollover, and it is the whole reason this cannot be a string comparison.
+    Returns ``None`` for anything unparseable, which callers treat as "cannot be
+    ordered" rather than as "oldest".
+    """
+    if not raw:
+        return None
+    text = raw.strip()
+    m = OBS_TIME_RE.search(text) or re.fullmatch(r"(\d{6})Z?", text)
+    if not m:
+        return None
+    stamp = m.group(1)
+    ref = ref or datetime.now(timezone.utc)
+    try:
+        day, hour, minute = int(stamp[0:2]), int(stamp[2:4]), int(stamp[4:6])
+    except ValueError:
+        return None
+    month, year = ref.month, ref.year
+    if day > ref.day + 1:          # stamp belongs to the previous month
+        month -= 1
+        if month < 1:
+            month, year = 12, year - 1
+    try:
+        return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
+    except ValueError:             # e.g. day 31 in a 30-day month
+        return None
+
+
+def newest_report(reports, ref: datetime | None = None) -> Optional[str]:
+    """The most recently *observed* report in ``reports``, or None if empty.
+
+    Order in the list is not evidence of anything - a feed may return a SPECI
+    before or after the hourly METAR it sits between, and picking the last one
+    to arrive is what silently dropped SPECIs. Reports whose time cannot be read
+    lose to any that can, and ties keep the later-arriving one.
+    """
+    best, best_dt = None, None
+    for raw in reports:
+        if not raw:
+            continue
+        dt = obs_time(raw, ref)
+        if best is None or (dt is not None and (best_dt is None or dt >= best_dt)):
+            best, best_dt = raw, dt
+    return best
+
+
 def parse_metar(raw: str) -> dict:
     """Return a dict of parsed METAR fields; tolerant of parse failures."""
     out: dict = {
@@ -89,7 +172,7 @@ def parse_metar(raw: str) -> dict:
         return out
     text = raw.strip()
     out["cloud_layers"] = cloud_layers(text)
-    tm = re.search(r"\b(\d{6})Z\b", text)
+    tm = OBS_TIME_RE.search(text)
     out["time_z"] = tm.group(1) + "Z" if tm else None
     try:
         obs = Metar.Metar(text.replace("METAR ", "", 1))

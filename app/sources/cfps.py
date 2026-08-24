@@ -8,9 +8,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from datetime import datetime, timezone
 from typing import Iterable
 
 from app.config import get_settings
+from app.services import weather as wx
 from app.sources import _http, cache
 
 _NOTAM_NUM = re.compile(r"\b([A-Z]\d{3,4}/\d{2})\b")
@@ -81,23 +83,44 @@ def _location(item: dict) -> str:
 
 
 async def metars(sites: list[str]) -> dict[str, str]:
-    """Latest METAR text per site (most recent kept)."""
-    out: dict[str, str] = {}
-    for item in await _fetch("metar", sites):
-        loc = _location(item)
-        if loc:
-            out[loc] = _text(item)  # API returns newest last; keep latest
-    return out
+    """Latest observation text per site - the report that gates the flight.
+
+    This is ``metar_history``'s first entry rather than a second walk of the same
+    data, and that is the fix, not a tidy-up. It used to keep whichever report
+    arrived last in the response, on the strength of a comment asserting that an
+    undocumented API returns them oldest-first. A SPECI is issued off the hour
+    precisely because something changed, and it rides in the same list as the
+    routine reports; whenever one arrived before the hourly METAR it sits next
+    to, last-wins threw away the newer observation and gated the flight on the
+    older one. Ordering by the time in the report answers the question that was
+    actually being asked, and sharing the one selection means the card's
+    observation and the top of its history can no longer disagree.
+
+    Both calls go through the same cached ``_fetch``, so this costs no extra
+    round trip.
+    """
+    hist = await metar_history(sites, limit=1)
+    return {loc: reports[0] for loc, reports in hist.items() if reports}
 
 
-def _metar_time_key(raw: str) -> str:
-    """DDHHMM from the METAR timestamp, for chronological sorting."""
-    m = re.search(r"\b(\d{6})Z\b", raw or "")
-    return m.group(1) if m else ""
+def _metar_time_key(raw: str, ref: datetime) -> tuple:
+    """Sort key placing the most recently observed report first.
+
+    ``(has_time, when)`` - a report whose stamp cannot be read sorts last rather
+    than first, which a bare ``datetime.min`` could not express."""
+    dt = wx.obs_time(raw, ref)
+    return (dt is not None, dt or datetime.min.replace(tzinfo=timezone.utc))
 
 
 async def metar_history(sites: list[str], limit: int = 8) -> dict[str, list[str]]:
-    """Recent raw METARs per site, newest first (deduplicated)."""
+    """Recent raw observations per site, newest first (deduplicated).
+
+    METARs and SPECIs alike: both are observations, both are ordered by the time
+    they were taken. The sort used to run on the raw ``DDHHMM`` digits as a
+    *string*, which is right for 23 hours out of 24 and wrong on the 1st of a
+    month, where ``312350`` outranks ``010030`` and yesterday reads as newest.
+    """
+    ref = datetime.now(timezone.utc)
     by_site: dict[str, list[str]] = {s.upper(): [] for s in sites}
     for item in await _fetch("metar", sites):
         loc = _location(item)
@@ -106,7 +129,7 @@ async def metar_history(sites: list[str], limit: int = 8) -> dict[str, list[str]
     out: dict[str, list[str]] = {}
     for loc, texts in by_site.items():
         uniq = list(dict.fromkeys(t for t in texts if t))
-        uniq.sort(key=_metar_time_key, reverse=True)
+        uniq.sort(key=lambda raw: _metar_time_key(raw, ref), reverse=True)
         out[loc] = uniq[:limit]
     return out
 

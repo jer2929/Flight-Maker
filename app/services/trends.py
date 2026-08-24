@@ -19,6 +19,8 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
+from app.services import weather as wx
+
 
 def _ft(v) -> str:
     return f"{round(v):,} ft"
@@ -26,22 +28,15 @@ def _ft(v) -> str:
 
 def _obs_dt(time_z: str | None, ref: datetime) -> datetime | None:
     """Resolve a METAR ``DDHHMMZ`` stamp to a UTC datetime near ``ref`` (handles
-    day/month rollover for a few days of history)."""
+    day/month rollover for a few days of history).
+
+    One line over ``weather.obs_time``, which is the same rollover generalised to
+    take a whole raw report as well as a bare stamp - the fetchers need it to
+    decide which observation is newest, and two copies of a calendar rule is one
+    too many."""
     if not time_z or len(time_z) < 6:
         return None
-    try:
-        day, hour, minute = int(time_z[0:2]), int(time_z[2:4]), int(time_z[4:6])
-    except ValueError:
-        return None
-    month, year = ref.month, ref.year
-    if day > ref.day + 1:  # stamp belongs to the previous month
-        month -= 1
-        if month < 1:
-            month, year = 12, year - 1
-    try:
-        return datetime(year, month, day, hour, minute, tzinfo=timezone.utc)
-    except ValueError:
-        return None
+    return wx.obs_time(time_z, ref)
 
 
 def _suffix(hours: int | None) -> str:

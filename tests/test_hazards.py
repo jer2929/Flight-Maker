@@ -241,3 +241,51 @@ def test_lowering_ceiling_accepts_a_bare_flag_from_an_older_caller():
 def test_lowering_ceiling_steady_says_nothing_extra():
     c = _run(lowering_ceiling=None)["lowering_ceiling"]
     assert c.passed and c.location is None and c.source is None
+
+
+# --- when the widespread-IMC row does not apply ----------------------------
+#
+# Two reasons it can be switched off: the flight is IFR (IMC is what the rating
+# is for, and the route ceiling/visibility rows already test these same points
+# against the pilot's IFR minimums), or the pilot has taken "Widespread IMC" off
+# their own auto-NO-GO list. Both arrive here as one boolean.
+
+
+def test_widespread_imc_does_not_gate_when_switched_off():
+    c = _run(ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2],
+             point_labels=LABELS, widespread_imc_gates=False)["widespread_ifr"]
+    assert c.passed              # the row no longer fails …
+    assert not c.applicable      # … and is excluded from the verdict entirely
+    assert "not applied on this flight" in c.actual_text
+
+
+def test_a_switched_off_widespread_imc_row_still_says_where_the_imc_is():
+    # Not-applicable is not the same as not-worth-reading: the pilot can still
+    # open "N checks passed" and find out that there is IMC at 500 ft, and where.
+    c = _run(ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2],
+             point_labels=LABELS, widespread_imc_gates=False)["widespread_ifr"]
+    assert c.location == "CYFD (departure)"
+    assert "500 ft" in c.actual_text and "2 IMC points" in c.actual_text
+    assert "CYQA (destination)" in c.source_text
+    assert c.source
+
+
+def test_a_switched_off_widespread_imc_row_is_kept_out_of_the_verdict():
+    from app.models import Verdict
+    from app.services.evaluator import checks_verdict
+    rows = weather_checks(
+        raw_text="", hazards=set(), night=False, llj_kt=None,
+        ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2],
+        lowering_ceiling=False, freezing_level_ft=None, personal_vis_sm=3,
+        gfa_region=gfa_region(43.1, -80.3), window_hazards=set(),
+        metar_hazards=set(), out_of_window=[], etd_is_now=True,
+        widespread_imc_gates=False)
+    assert checks_verdict(rows) == Verdict.GO
+
+
+def test_widespread_imc_still_gates_by_default():
+    # The VFR default is unchanged - this is the row's whole reason to exist.
+    c = _run(ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2],
+             point_labels=LABELS)["widespread_ifr"]
+    assert not c.passed and c.applicable
+    assert "not applied" not in c.actual_text
