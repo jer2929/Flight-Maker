@@ -2190,6 +2190,11 @@ async def suggest(
     cfps_sites = [s for s in [origin_ident] + [a.ident for a, _ in candidates]
                   if _REPORTING_RE.match(s)]
     cand_points = [(a.lat, a.lon) for a, _ in candidates]
+    # The origin rides along in the candidates' blend request rather than going
+    # without: it is one request either way, and since discovery started
+    # assessing the departure aerodrome its wind gates every card on the page -
+    # so it cannot be the one field here still reading a single model's gust.
+    ens_points = [(origin.lat, origin.lon)] + cand_points
     now = datetime.now(timezone.utc)
     etd_utc = etd or now
     is_now = etd is None or etd <= now + timedelta(minutes=NOW_GRACE_MIN)
@@ -2209,7 +2214,7 @@ async def suggest(
         # The multi-model wind blend is a current-hour product - it has nothing
         # to say about a future ETD. Unlabelled: it is a refinement over the
         # single-model wind, which is still there when the blend does not answer.
-        _safe(openmeteo.ensemble_wind_many(cand_points, days), []) if is_now
+        _safe(openmeteo.ensemble_wind_many(ens_points, days), []) if is_now
         else asyncio.sleep(0, result=[]),
     )
     # Every candidate's wind, ceiling and cruising altitude is read off these,
@@ -2220,7 +2225,10 @@ async def suggest(
         fetch_health.record(fetch_health.HRDPS)
     levels_now = _winds_aloft_at(origin_fc, None if is_now else etd_utc) if origin_fc else []
     fc_by_ident = {a.ident: (fcs[i] if i < len(fcs) else None) for i, (a, _) in enumerate(candidates)}
-    ens_by_ident = {a.ident: (ens[i] if i < len(ens) else None) for i, (a, _) in enumerate(candidates)}
+    # ``ens`` is indexed like ``ens_points``: the origin first, then the
+    # candidates in order.
+    origin_ens = ens[0] if ens else None
+    ens_by_ident = {a.ident: (ens[i + 1] if i + 1 < len(ens) else None) for i, (a, _) in enumerate(candidates)}
 
     xw_limit = get_limits()["hard_limits"]["wind"]["crosswind_max_kt"]
     cruise_kt = get_cruise_kt()
@@ -2234,7 +2242,8 @@ async def suggest(
     # the same, and carries the origin's failing rows so the badge is explained.
     origin_a = _assess_endpoint(
         origin, metars.get(origin_ident), tafs.get(origin_ident), origin_fc,
-        notams, mode, manual_threats, 0.0, 0.0, None, flight_rules=flight_rules,
+        notams, mode, manual_threats, 0.0, 0.0, None, ensemble=origin_ens,
+        flight_rules=flight_rules,
         ceiling_mode="xc", when=etd_utc, is_now=is_now,
         span=departure_span(etd_utc), show_obs=show_obs)
     # Every row that explains the origin's verdict, restamped as the departure so
