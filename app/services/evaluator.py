@@ -228,30 +228,46 @@ def conditions_checks(
     return checks
 
 
-def _ceiling_limits(mode: str, ceiling_mode: str, flight_rules: str) -> tuple[float, float]:
+def _ceiling_limits(mode: str, ceiling_mode: str, flight_rules: str) -> tuple[float, float | None]:
     """(applicable ceiling limit, circuit limit) in ft AGL.
 
     IFR reads the ``ifr_minimums`` section; VFR reads ``hard_limits``.
+
+    A circuit limit of ``None`` means no circuit minimum is in force. That is
+    the IFR case, and it is not an absence of data: an IFR flight is flown to a
+    published approach minimum, so "is this ceiling circuit-capable?" is not a
+    question it asks. The IFR block carries a single flat floor
+    (``day_xc``/``night_xc``) which applies in every ``ceiling_mode``, circuits
+    included - asking it for ``day_circuit`` used to miss and fall through to a
+    hardcoded 2,000 ft, putting a VFR number on an IFR card.
     """
     full_limits = get_limits()
     if flight_rules == "ifr":
         c = full_limits.get("ifr_minimums", {}).get(
             "ceiling_agl_ft", full_limits["hard_limits"]["ceiling_agl_ft"])
-    else:
-        c = full_limits["hard_limits"]["ceiling_agl_ft"]
+        flat = c.get("night_xc", c.get("night_xc_cloud_base", 12000)) if mode == "night" else c.get("day_xc", 4000)
+        return flat, None
+    c = full_limits["hard_limits"]["ceiling_agl_ft"]
     circuit_limit = c.get("night_circuit", 3000) if mode == "night" else c.get("day_circuit", 2000)
     xc_limit = c.get("night_xc", c.get("night_xc_cloud_base", 12000)) if mode == "night" else c.get("day_xc", 4000)
     return (circuit_limit if ceiling_mode == "circuit" else xc_limit), circuit_limit
 
 
 def _visibility_limit(mode: str, ceiling_mode: str, flight_rules: str) -> tuple[float, str]:
-    """(applicable visibility limit in SM, row label)."""
+    """(applicable visibility limit in SM, row label).
+
+    IFR has one flat visibility floor and no circuit minimum, so ``circuit``
+    mode reads the same number as every other mode. The row is still *labelled*
+    "(circuits)" there - that names the flight being assessed, not where the
+    limit came from.
+    """
     full_limits = get_limits()
     if flight_rules == "ifr":
         v = full_limits.get("ifr_minimums", {}).get(
             "visibility_sm", full_limits["hard_limits"]["visibility_sm"])
-    else:
-        v = full_limits["hard_limits"]["visibility_sm"]
+        flat = v.get("night_xc", 9) if mode == "night" else v.get("day_xc", 9)
+        return flat, ("Visibility (circuits)" if ceiling_mode == "circuit" else "Visibility (XC)")
+    v = full_limits["hard_limits"]["visibility_sm"]
     if ceiling_mode == "circuit":
         return (v.get("night_circuit", 6) if mode == "night" else v.get("day_circuit", 5)), "Visibility (circuits)"
     return (v.get("night_xc", 9) if mode == "night" else v.get("day_xc", 9)), "Visibility (XC)"
@@ -427,13 +443,21 @@ def _ceiling_check(limit, actual, wx_source, src, mode="xc", circuit_limit=None)
     mode: the circuit minimum in ``circuit`` mode, the XC minimum in ``xc`` and
     ``endpoint`` mode. ``endpoint`` (departure/destination of a cross-country)
     additionally says whether the ceiling is even circuit-capable, so a failing
-    row distinguishes "circuits only" from "below every personal minimum"."""
+    row distinguishes "circuits only" from "below every personal minimum".
+
+    ``circuit_limit=None`` says no circuit minimum applies - the IFR case, where
+    the personal floor is flat. The endpoint note then says only that the floor
+    was missed: neither "below circuit minimum" (a VFR distinction) nor "IMC"
+    (which is where an IFR flight lives) tells an IFR pilot anything.
+
+    The orchestrator writes the same notes for the route card's endpoint rows
+    (``_route_conditions_checks``). Two renderings of one rule - change both."""
     if mode == "endpoint":
-        label, limit_text = "Ceiling (departure/dest)", f"≥ {limit:,} ft AGL (XC)"
+        label, limit_text = "Ceiling (departure/dest)", f"≥ {limit:,.0f} ft AGL (XC)"
     elif mode == "circuit":
-        label, limit_text = "Ceiling (circuits)", f"≥ {limit:,} ft AGL"
+        label, limit_text = "Ceiling (circuits)", f"≥ {limit:,.0f} ft AGL"
     else:
-        label, limit_text = "Ceiling (XC)", f"≥ {limit:,} ft AGL"
+        label, limit_text = "Ceiling (XC)", f"≥ {limit:,.0f} ft AGL"
     base = dict(key="ceiling", label=label, limit_text=limit_text, source=src)
     if actual is None:
         if wx_source == Source.OBSERVED:
@@ -441,11 +465,14 @@ def _ceiling_check(limit, actual, wx_source, src, mode="xc", circuit_limit=None)
         return LimitCheck(actual_text="no data", passed=True, **base)
     val = round(actual / 100) * 100
     if mode == "endpoint" and actual < limit:
-        cl = circuit_limit if circuit_limit is not None else limit
-        note = ("below circuit minimum" if actual < cl else
-                "circuit OK, below XC minimum")
-        if actual < 1000:
+        if circuit_limit is None:
+            note = "below your IFR minimum"
+        elif actual < 1000:
             note = "IMC"
+        elif actual < circuit_limit:
+            note = "below circuit minimum"
+        else:
+            note = "circuit OK, below XC minimum"
         return LimitCheck(actual_text=f"{val:,} ft AGL - {note}", passed=False, **base)
     return LimitCheck(actual_text=f"{val:,} ft AGL", passed=actual >= limit, **base)
 
