@@ -1782,7 +1782,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
             return None
         note = next((n for n in notes if "eiling" in n), "ceiling lowering")
         return {"location": ident, "source": "METAR trend",
-                "text": note.lstrip("📉📈🌤🌥 ").strip(),
+                "text": note.strip(),
                 "detail": "recent observations",
                 # The observations the trend was read from, newest last.
                 "full": f"{ident} recent METARs\n" + "\n".join(reversed(h))}

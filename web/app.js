@@ -1717,6 +1717,34 @@ function windRunwaySvg(rwy, w, opts = {}) {
   } catch (e) { return ""; }
 }
 
+// ---------- Wind-diagram key ----------
+// The diagram says everything in colour, so the colours need a caption or the
+// picture is a guess. The key sits in the text column beside the diagram (the
+// space the runway line leaves empty) and draws its swatches from the very same
+// classes and arrowheads the SVG uses, so it can never drift from the picture.
+// One key per card: it explains every diagram on that card, so it rides with the
+// first one drawn rather than repeating under each.
+// Either component turns red when it stops being routine, so the key says "red"
+// in red - the third colour is explained without needing a fourth row.
+const WR_RED = `<span class="wr-key-red">red</span>`;
+
+function windKeyRow(cls, marker, label, note) {
+  return `<svg class="wr-key-arrow" viewBox="0 0 26 10" aria-hidden="true" focusable="false">`
+    + `<line class="${cls}" x1="1" y1="5" x2="17" y2="5" stroke-width="2.4" marker-end="url(#${marker})"/></svg>`
+    + `<span class="wr-key-lbl">${label}${note ? ` <span class="wr-key-note">${note}</span>` : ""}</span>`;
+}
+
+function windLegend(w) {
+  // Nothing to caption when the diagram drew no vectors at all (calm, or a
+  // variable direction) - the picture is a runway and a word, not three colours.
+  if (!w || w.wind_kt == null || w.wind_kt < 1 || w.wind_dir_true == null) return "";
+  return `<div class="wr-key">
+    ${windKeyRow("wr-wind", "wr-arrow-wind", "Total wind", "blowing this way")}
+    ${windKeyRow("wr-head", "wr-arrow-head", "Headwind component", `${WR_RED} = tailwind`)}
+    ${windKeyRow("wr-cross wr-sev-mit", "wr-arrow-cross-mit", "Crosswind component", `${WR_RED} = wind over ${XW_SEVERE_DEG}&deg; off the runway`)}
+  </div>`;
+}
+
 function endpointCard(a, role, timeLabel) {
   const w = a.weather || {};
   const issues = a.reasons || [];
@@ -1726,6 +1754,9 @@ function endpointCard(a, role, timeLabel) {
   // aerodrome (circuits) shows both.
   const showTakeoff = role !== "Destination";
   const showLanding = role !== "Departure";
+  // An aerodrome card draws both diagrams; the key explains both, so it goes
+  // under the first one only.
+  const keyOn = showTakeoff && to ? "takeoff" : "landing";
   const gust = (g) => g ? ` (gust ${Math.round(Math.abs(g))})` : "";
   // The green line and the badge answer different questions, so the card says
   // both. `reasons` is failing *hard limits* only; a verdict off the threat
@@ -1745,8 +1776,8 @@ function endpointCard(a, role, timeLabel) {
       ${w.visibility_sm != null ? `<span><span class="mk">Vis</span> ${w.visibility_sm} SM</span>` : ""}
       ${notamToggle(a)}
     </div>
-    ${showTakeoff && to ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(to, w)}</span><div class="rwy-lines"><div><strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt${gust(to.headwind_kt_gust)} · xwind ${Math.round(to.crosswind_kt)} kt${gust(to.crosswind_kt_gust)}</div></div></div>` : ""}
-    ${showLanding && ld ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(ld, w)}</span><div class="rwy-lines"><div><strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · headwind ${Math.round(ld.headwind_kt)} kt${gust(ld.headwind_kt_gust)} · xwind ${Math.round(ld.crosswind_kt)} kt${gust(ld.crosswind_kt_gust)}</div></div></div>` : ""}
+    ${showTakeoff && to ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(to, w)}</span><div class="rwy-lines"><div><strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt${gust(to.headwind_kt_gust)} · xwind ${Math.round(to.crosswind_kt)} kt${gust(to.crosswind_kt_gust)}</div>${keyOn === "takeoff" ? windLegend(w) : ""}</div></div>` : ""}
+    ${showLanding && ld ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(ld, w)}</span><div class="rwy-lines"><div><strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · headwind ${Math.round(ld.headwind_kt)} kt${gust(ld.headwind_kt_gust)} · xwind ${Math.round(ld.crosswind_kt)} kt${gust(ld.crosswind_kt_gust)}</div>${keyOn === "landing" ? windLegend(w) : ""}</div></div>` : ""}
     ${a.nearby_station ? nearbyBlock(a.nearby_station, timeLabel) : ""}
     ${trendsBlock(a)}
     ${runwaysBlock(a)}
@@ -2338,7 +2369,7 @@ function discoveryCard(a) {
       ${w.visibility_sm != null ? `<span><span class="mk">Vis</span> ${w.visibility_sm} SM</span>` : ""}
       ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below every ceiling on this card (reported now and forecast for your window) and scaled to leg distance"><span class="mk">Best alt</span> ${fmtFt(a.altitude.altitude_ft)}</span><span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "tailwind" : "headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
-    ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div><strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div></div>` : `<div class="rwy-na">Runway data unavailable</div>`}
+    ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div><strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div>${windLegend(w)}</div></div>` : `<div class="rwy-na">Runway data unavailable</div>`}
     ${runwaysBlock(a)}
     <div class="meta">${notamToggle(a)}<span class="links">${linksHtml(a)}</span></div>
     ${w.raw_metar ? `<div class="raw">METAR ${escapeHtml(w.raw_metar)}${ageChip(w.raw_metar)}</div>` : ""}
