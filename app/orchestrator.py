@@ -2184,19 +2184,46 @@ async def suggest(
 
     xw_limit = get_limits()["hard_limits"]["wind"]["crosswind_max_kt"]
     cruise_kt = get_cruise_kt()
+    # The departure aerodrome, assessed like any other endpoint - because "where
+    # can I go from base" is a question about a flight, and a flight that cannot
+    # legally leave the circuit at home does not have destinations. Discovery
+    # used to read the origin for its ceiling alone and never for a verdict, so
+    # a 900 ft overcast over the departure field produced a page of GO cards for
+    # every candidate that happened to be clear. The route page has always taken
+    # the worse of its two ends (see ``verdict_now``); each card here now does
+    # the same, and carries the origin's failing rows so the badge is explained.
+    origin_a = _assess_endpoint(
+        origin, metars.get(origin_ident), tafs.get(origin_ident), origin_fc,
+        notams, mode, manual_threats, 0.0, 0.0, None, flight_rules=flight_rules,
+        ceiling_mode="xc", when=etd_utc, is_now=is_now,
+        span=departure_span(etd_utc), show_obs=show_obs)
+    # Every row that explains the origin's verdict, restamped as the departure so
+    # it can never be read as the candidate's own weather - the exact confusion
+    # the old cruising-altitude row caused when it printed a deck at the origin
+    # on a card headlining a 4,800 ft ceiling at the destination.
+    origin_rows = [_as_departure_row(c, origin_ident)
+                   for c in origin_a.limit_checks
+                   if not c.passed and c.applicable and not c.advisory]
+    # A verdict the origin's threat stack produced has no failing row to carry,
+    # so say it in one rather than moving a badge with nothing behind it.
+    if origin_a.verdict != Verdict.GO and not origin_rows:
+        stacked = [t.label for t in origin_a.threat_checks if t.present]
+        why = ("stacked threats: " + ", ".join(stacked)) if stacked else "see its own card"
+        origin_rows.append(LimitCheck(
+            key="departure_verdict", label="Departure",
+            limit_text="GO at your departure aerodrome",
+            actual_text=f"{origin_a.verdict.value} ({why})",
+            passed=False, group="conditions",
+            location=f"{origin_ident} (departure)",
+            reason_text=f"{origin_ident} (departure) is {origin_a.verdict.value} - {why}"))
     # Origin ceiling gates the cruising altitude along with each destination's, so a
     # low deck near home lowers the suggestion for every candidate (the "enroute
     # ceiling" - origin + destination, without an extra forecast call per candidate).
     # The model hour AND what the origin actually reports: a METAR/TAF deck at home
     # is as real as a modelled one, and the lower of the two is what you fly under.
-    origin_ws = _endpoint_weather_at(
-        metars.get(origin_ident), tafs.get(origin_ident),
-        wx.parse_taf_segments(tafs.get(origin_ident) or ""), origin_fc, None,
-        when=etd_utc, is_now=is_now, span=departure_span(etd_utc),
-        field_elev_ft=origin.elevation_ft)
     origin_ceiling = lowest_ceiling(
         [_point_at(origin_fc, None if is_now else etd_utc).get("ceiling_ft") if origin_fc else None,
-         *_card_ceilings(origin_ws)])
+         *_card_ceilings(origin_a.weather)])
     results: list[AirportAssessment] = []
     for airport, dist in candidates:
         bearing = initial_bearing_true(origin.lat, origin.lon, airport.lat, airport.lon)
@@ -2206,7 +2233,10 @@ async def suggest(
         cand_eta = etd_utc + timedelta(hours=flight_time_hr(dist, cruise_kt))
         cand_ceiling = (_point_at(cand_fc, None if is_now else cand_eta).get("ceiling_ft")
                         if cand_fc else None)
-        gate_ceiling = lowest_ceiling([origin_ceiling, cand_ceiling])
+        # Carried with the aerodrome it came from: the gate spans both ends, and
+        # a deck the pilot is told about has to say where it is.
+        gate_ceiling, deck_at = _lowest_deck(
+            [(origin_ceiling, origin_ident), (cand_ceiling, airport.ident)])
         alt = recommend_altitude(
             levels_now, bearing, cruise_kt,
             course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
@@ -2240,7 +2270,9 @@ async def suggest(
         # shows a cruising altitude above a deck printed on the same card. This
         # only ever lowers the pick, so the ETA it was assessed at (from the
         # faster, higher level) stays a conservative estimate.
-        gate_ceiling = lowest_ceiling([gate_ceiling, *_card_ceilings(a.weather)])
+        gate_ceiling, deck_at = _lowest_deck(
+            [(gate_ceiling, deck_at),
+             *[(c, airport.ident) for c in _card_ceilings(a.weather)]])
         if alt and not clears_ceiling(alt.altitude_ft, gate_ceiling, flight_rules):
             alt = recommend_altitude(
                 levels_now, bearing, cruise_kt,
@@ -2248,18 +2280,38 @@ async def suggest(
                 ceiling_ft=gate_ceiling, flight_rules=flight_rules,
                 distance_nm=dist, field_elev_ft=origin.elevation_ft)
             a.altitude = alt
+        # The origin's verdict, and the rows behind it, on every card. Merged
+        # before the filters below so ``go_only`` and the sort read the same
+        # verdict the pilot will.
+        if origin_rows:
+            a.limit_checks = a.limit_checks + origin_rows
+        a.verdict = _worse_verdict(a.verdict, origin_a.verdict)
         # Make the cloud gate visible: if winds are known but the ceiling left no
         # legal VFR cruising altitude (≥500 ft below the deck), say so on the card
         # instead of silently omitting the altitude.
+        #
+        # Advisory, not a limit. Losing the hemispheric cruising altitudes is not
+        # a NO-GO on its own - the rule only applies above 3,000 ft AGL, so the
+        # answer is to plan below that, which is what the route page has always
+        # said in its note. What *does* stop the flight is a ceiling under your
+        # personal minimum, and that is the ceiling row, at whichever end of the
+        # leg it fails. This row used to fail instead, and because it was
+        # appended after the verdict was computed it could never move one: a card
+        # carrying an "over your limits" bullet under a GO badge.
         if (alt is None and flight_rules == "vfr" and levels_now
                 and gate_ceiling is not None):
             deck = f"{round(gate_ceiling / 100) * 100:,.0f} ft AGL"
+            where = f" at {deck_at}" if deck_at else ""
             a.limit_checks.append(LimitCheck(
                 key="vfr_cruise_ceiling", label="VFR cruising altitude",
-                limit_text="≥ 500 ft below the deck", actual_text=f"clouds at {deck}",
-                passed=False, group="conditions", location=airport.ident,
-                reason_text=f"Ceiling too low for a VFR cruising altitude (clouds at {deck})"))
-            a.reasons.append(reason_line(a.limit_checks[-1]))
+                limit_text="≥ 500 ft below the deck",
+                actual_text=(f"none clears the {deck} deck{where} - "
+                             f"plan below 3,000 ft AGL"),
+                passed=True, advisory=True, group="conditions",
+                location=deck_at or airport.ident))
+        # Every failing row on the finished card, including the origin's - the
+        # card renders its "why" from the rows, and the timeline from these.
+        a.reasons = _explicit_reasons(a.limit_checks)
         rw = a.best_runway
         if into_wind and (not rw or rw.headwind_kt < 0 or rw.crosswind_kt > xw_limit):
             continue
@@ -2281,6 +2333,36 @@ async def suggest(
         results.append(a)
     results.sort(key=_sort_key(sort))
     return results
+
+
+def _lowest_deck(pairs: list[tuple[float | None, str | None]]) -> tuple[float | None, str | None]:
+    """:func:`lowest_ceiling`, but it also says which aerodrome reported it.
+
+    The cruising-altitude gate spans both ends of the leg, so the deck that
+    lowers a pick is often nowhere near the card the pick is printed on. Telling
+    a pilot "clouds at 900 ft" on a card headlining a 4,800 ft ceiling is worse
+    than saying nothing; telling them the 900 ft is at their departure field is
+    the whole of the information.
+    """
+    known = [(v, ident) for v, ident in pairs if v is not None]
+    if not known:
+        return None, None
+    return min(known, key=lambda p: p[0])
+
+
+def _as_departure_row(c: LimitCheck, ident: str) -> LimitCheck:
+    """One of the origin's failing rows, restamped for a candidate's card.
+
+    ``location`` names the departure explicitly - "CYFD (departure)" rather than
+    the bare ident every other row on the card carries - so a bust at home is
+    never read as a bust at the destination. Rows that write their own sentence
+    (``reason_text``) get the same treatment inside it: the template that
+    appends the location does not reach them.
+    """
+    row = c.model_copy(update={"location": f"{ident} (departure)"})
+    if row.reason_text and ident not in row.reason_text:
+        row.reason_text = f"{row.reason_text} at {ident} (departure)"
+    return row
 
 
 def _max(a, b):
