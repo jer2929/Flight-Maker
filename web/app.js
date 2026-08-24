@@ -230,30 +230,49 @@ function applyTheme(pref) {
   }
 }
 
+// The cycle order the header button steps through. Auto first because it is the
+// default, and because Auto -> Light -> Dark reads as "let the device decide,
+// then override it one way, then the other".
+const THEME_CYCLE = ["auto", "light", "dark"];
+const THEME_WORDS = {
+  auto: "Auto (following your device)",
+  light: "Light",
+  dark: "Dark",
+};
+
 function wireTheme() {
   let pref = loadTheme();
   applyTheme(pref);
-  const seg = document.getElementById("theme-seg");
-  if (seg) {
-    const btns = [...seg.querySelectorAll(".seg-btn")];
-    const paint = () => btns.forEach((x) => {
-      const on = x.dataset.theme === pref;
-      x.classList.toggle("active", on);
-      x.setAttribute("aria-pressed", String(on));
+  const btn = document.getElementById("theme-toggle");
+
+  // The button is a cycle, not an on/off, so aria-pressed would be a lie - it
+  // is defined for two states. Instead the accessible name carries the current
+  // mode and what the next tap does, and is rewritten on every change.
+  const paint = () => {
+    if (!btn) return;
+    btn.dataset.themePref = pref;                       // picks the icon in CSS
+    const next = THEME_CYCLE[(THEME_CYCLE.indexOf(pref) + 1) % THEME_CYCLE.length];
+    const label = `Theme: ${THEME_WORDS[pref]}. Switch to ${THEME_WORDS[next]}.`;
+    btn.setAttribute("aria-label", label);
+    btn.setAttribute("title", label);
+  };
+  paint();
+
+  if (btn) {
+    btn.addEventListener("click", () => {
+      pref = THEME_CYCLE[(THEME_CYCLE.indexOf(pref) + 1) % THEME_CYCLE.length];
+      saveTheme(pref);
+      applyTheme(pref);
+      paint();
     });
-    paint();
-    // The generic .seg-btn handler in wire() also toggles .active and would do
-    // the same job - but wire() is never reached if /api/config failed, and the
-    // theme has to keep working on a page that could not reach the backend.
-    // Both handlers setting the same class on the same element is idempotent.
-    btns.forEach((b) => b.addEventListener("click", () => {
-      pref = b.dataset.theme; saveTheme(pref); applyTheme(pref); paint();
-    }));
   }
-  // Auto has to keep following the OS while the tab sits open.
+
+  // Auto has to keep following the OS while the tab sits open. The label moves
+  // too: on Auto the icon means "whatever the device says", and the device just
+  // said something different.
   if (window.matchMedia) {
     matchMedia("(prefers-color-scheme: light)")
-      .addEventListener("change", () => { if (pref === "auto") applyTheme(pref); });
+      .addEventListener("change", () => { if (pref === "auto") { applyTheme(pref); paint(); } });
   }
 }
 

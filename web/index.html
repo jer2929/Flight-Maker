@@ -118,6 +118,41 @@
         <span id="current-time" class="clock-val live">-</span>
       </div>
     </div>
+    <!-- Theme. Deliberately an icon and not the words "Day / Night": this app
+         already has a Day flight / Night flight control on the Route tab, and
+         there it means the civil-twilight definition that selects which set of
+         personal minimums a flight is gated against. Two controls with the same
+         name meaning different things, on the same app, is how someone ends up
+         reading the wrong assessment.
+
+         One tap cycles Auto -> Light -> Dark. Auto stays reachable on purpose:
+         a plain sun/moon flip would strip it away on the first tap, with no way
+         back to following the device. The label and title are rewritten by
+         applyTheme() so the current mode is always announced, and the icon is
+         aria-hidden because the button already carries the name.
+
+         Static markup, not built in wire(): the theme has to work when the
+         backend is down, and wire() is never reached if /api/config fails. -->
+    <button type="button" id="theme-toggle" class="theme-btn"
+            data-theme-pref="auto" aria-label="Theme: Auto" title="Theme: Auto">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <!-- Auto: a sun whose right half is filled, for "whatever the device says" -->
+        <g data-icon="auto">
+          <circle cx="12" cy="12" r="5.5" class="theme-icon-ring" />
+          <path d="M12 6.5a5.5 5.5 0 0 1 0 11z" class="theme-icon" />
+        </g>
+        <!-- Light: sun -->
+        <g data-icon="light">
+          <circle cx="12" cy="12" r="4.2" class="theme-icon" />
+          <path d="M12 2.4v2.6M12 19v2.6M4.4 12H1.8M22.2 12h-2.6M6.6 6.6 4.8 4.8M19.2 19.2l-1.8-1.8M17.4 6.6l1.8-1.8M4.8 19.2l1.8-1.8"
+                class="theme-icon-ring" stroke-linecap="round" />
+        </g>
+        <!-- Dark: crescent moon -->
+        <g data-icon="dark">
+          <path d="M20 14.2A8.2 8.2 0 0 1 9.8 4a8.2 8.2 0 1 0 10.2 10.2z" class="theme-icon" />
+        </g>
+      </svg>
+    </button>
   </header>
 
   <section class="panel">
@@ -395,27 +430,6 @@
           <span id="minimums-status" class="set-status"></span>
         </div>
       </form>
-    </div>
-
-    <!-- Appearance. Deliberately NOT called "Day / Night": this app already has
-         a Day flight / Night flight control on the Route tab, and there it means
-         the civil-twilight definition that selects which set of personal
-         minimums a flight is gated against. Two controls with the same name
-         meaning different things, on the same app, is how someone ends up
-         reading the wrong assessment.
-         Outside #minimums-form on purpose, so Save/Reset profile never touch it. -->
-    <div class="panel">
-      <h2 class="set-title">Appearance</h2>
-      <p class="set-intro">How the app looks in this browser. It changes nothing about how a flight is assessed.</p>
-      <fieldset class="set-group">
-        <legend>Theme</legend>
-        <div class="seg" id="theme-seg" role="group" aria-label="Theme">
-          <button type="button" class="seg-btn" data-theme="auto" aria-pressed="true">Auto</button>
-          <button type="button" class="seg-btn" data-theme="light" aria-pressed="false">Light</button>
-          <button type="button" class="seg-btn" data-theme="dark" aria-pressed="false">Dark</button>
-        </div>
-        <p class="set-hint">Auto follows your device&#39;s light/dark setting.</p>
-      </fieldset>
     </div>
   </section>
 
