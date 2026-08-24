@@ -159,7 +159,9 @@ def test_future_etd_reads_the_taf_not_the_metar():
     from app.services import weather as wx
     taf = ("TAF CYKF 151140Z 1512/1612 27010KT P6SM SKC "
            "FM152000 27012KT P6SM BKN025")
-    segs = wx.parse_taf_segments(taf)
+    # Pinned: the TAF's bare day numbers ("1512/1612") only line up with the
+    # query time below if the parse resolves them into the same month.
+    segs = wx.parse_taf_segments(taf, now=datetime(2026, 8, 15, 12, tzinfo=timezone.utc))
     pt = {"ceiling_ft": None, "vis_sm": 20, "sampled": True}
     orchestrator._merge_enroute_report(
         pt, STATION, 28.0, _metar("SKC"), segs,

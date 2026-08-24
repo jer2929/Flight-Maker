@@ -51,6 +51,50 @@ def test_exactly_one_theme_color_meta():
     assert INDEX.count('name="theme-color"') == 1
 
 
+def _header() -> str:
+    i = INDEX.index("<header>")
+    return INDEX[i : INDEX.index("</header>", i)]
+
+
+def test_theme_toggle_lives_in_the_header():
+    # It is a header control on purpose - a theme switch buried in a settings
+    # tab is the wrong place for something people flip on sight.
+    assert 'id="theme-toggle"' in _header()
+
+
+def test_the_settings_appearance_panel_is_gone():
+    # One control for one preference. Two would drift.
+    assert "theme-seg" not in INDEX
+    assert "theme-seg" not in APP_JS
+
+
+def test_toggle_cycles_all_three_prefs():
+    # A two-state sun/moon flip would strip Auto away on the first tap, with no
+    # way back to following the device. The cycle is what keeps it reachable.
+    i = APP_JS.index("THEME_CYCLE = [")
+    cycle = APP_JS[i : APP_JS.index("]", i)]
+    for pref in ("auto", "light", "dark"):
+        assert f'"{pref}"' in cycle, f"{pref} missing from the cycle"
+
+
+def test_toggle_is_static_markup_not_built_by_wire():
+    # wire() is never reached when /api/config fails, and the theme has to work
+    # on a page that could not reach the backend - so the button cannot be
+    # created there. Pin that it exists in the served HTML.
+    assert INDEX.count('id="theme-toggle"') == 1
+    assert "theme-toggle" not in APP_JS.split("function wire(")[-1].split("\nfunction ")[0]
+
+
+def test_header_reflows_before_the_clock_would_clip():
+    # A <select> is sized by its longest option, so the header row overflowed
+    # below ~855px and html{overflow-x:clip} hid it - the clock just vanished on
+    # tablets. The wrap has to engage above that, not at the phone breakpoint.
+    assert "@media (max-width: 880px)" in CSS
+    wrap = CSS[CSS.index("@media (max-width: 880px)") :]
+    wrap = wrap[: wrap.index("\n}")]
+    assert "flex-wrap: wrap" in wrap
+
+
 def test_light_block_only_re_points_existing_tokens():
     dark = set(re.findall(r"(--[a-z0-9-]+)\s*:", _block(":root")))
     light = set(re.findall(r"(--[a-z0-9-]+)\s*:", _block(':root[data-theme="light"]')))

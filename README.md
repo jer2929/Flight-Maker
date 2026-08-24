@@ -637,11 +637,15 @@ tests/               offline logic tests + auto-skipping live smoke tests
 
 ### Light and dark
 
-**My Minimums -> Appearance** switches the app between **Auto**, **Light** and
-**Dark**. Auto - the default - follows your device's setting. The choice is
-per-browser (`localStorage`, key `minima.theme.v1`) and is deliberately not part
-of your profile: it changes how the app looks, never how a flight is assessed,
-so "Reset to defaults" leaves it alone.
+The **sun/moon button in the top-right of the header**, beside the clock, cycles
+**Auto -> Light -> Dark**. Auto - the default - follows your device's setting,
+and stays reachable on purpose: a plain two-state flip would strip it away on
+the first tap with no way back. The icon shows which mode you are in (half-lit
+circle for Auto), and its tooltip says what the next tap does.
+
+The choice is per-browser (`localStorage`, key `minima.theme.v1`) and is
+deliberately not part of your profile: it changes how the app looks, never how a
+flight is assessed, so "Reset to defaults" leaves it alone.
 
 This is a different thing from the **Day flight / Night flight** control on the
 Route tab. That one is civil twilight, and it decides which set of your personal

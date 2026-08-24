@@ -154,7 +154,33 @@ header p { margin: 4px 0 0; color: var(--muted); }
   .logo { height: 32px; }
   .clock-label { font-size: .58rem; }
   .clock-val { font-size: .72rem; }
+  /* The theme button deliberately does NOT shrink here. Everything else in the
+     header is text and can afford to; this is a touch target, and 34px is
+     already under the 44px Apple/WCAG guideline. */
 }
+
+/* Theme button - the only control in the header that is not about the flight.
+   Quiet by default (it is a preference, not information) and it never shrinks:
+   flex:0 0 auto keeps it square while .clock beside it takes the slack. */
+.theme-btn {
+  flex: 0 0 auto; width: 34px; height: 34px; padding: 0;
+  display: grid; place-items: center;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  cursor: pointer;
+}
+.theme-btn:hover { color: var(--ink); border-color: var(--muted); }
+.theme-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-btn svg { display: block; width: 18px; height: 18px; }
+/* currentColor, so the icon inherits the states above rather than restating
+   them - and so it never carries a colour literal (tests/test_theme.py). */
+.theme-icon { fill: currentColor; }
+.theme-icon-ring { fill: none; stroke: currentColor; stroke-width: 1.6; }
+/* One <svg> holds all three icons; the button's data-theme-pref picks one. */
+.theme-btn [data-icon] { display: none; }
+.theme-btn[data-theme-pref="auto"]  [data-icon="auto"],
+.theme-btn[data-theme-pref="light"] [data-icon="light"],
+.theme-btn[data-theme-pref="dark"]  [data-icon="dark"] { display: block; }
 /* Aircraft / true-airspeed picker (header, between logo and clock) */
 .aircraft { display: flex; flex-direction: column; gap: 4px; }
 .aircraft-row { display: flex; align-items: center; gap: 6px; }
@@ -173,10 +199,18 @@ header p { margin: 4px 0 0; color: var(--muted); }
   .aircraft-label { min-width: 0; }
   .aircraft-sel { max-width: 96px; font-size: .74rem; }
 }
-@media (max-width: 480px) {
-  /* Phones can't fit logo + picker + clock on one line, so the picker gets its
-     own full-width header row rather than being dropped - TAS drives every time
-     and groundspeed number, so it has to be reachable on a phone too. */
+/* Logo + picker + clock + theme button stop fitting on one line well before
+   phone widths, because a <select> is sized by its LONGEST option ("T182 Turbo
+   Skylane"), not the selected one. Measured, that row overflows below 855px -
+   and html{overflow-x:clip} (see the note above body) meant it was CLIPPED
+   rather than scrollable, so the clock simply vanished off the right edge on
+   tablets and half-screen laptop windows. Nothing said so; it just wasn't there.
+
+   From 880px down the picker gets its own full-width header row instead of
+   being squeezed or dropped - TAS drives every time and groundspeed number, so
+   it has to stay reachable at every width. The theme button keeps the default
+   order:0 against the picker's order:3, so it stays on row 1 beside the clock. */
+@media (max-width: 880px) {
   header { flex-wrap: wrap; }
   header h1 { flex: 0 0 auto; }
   .clock { flex: 1 1 auto; }
@@ -188,6 +222,8 @@ header p { margin: 4px 0 0; color: var(--muted); }
      don't fit, flex-wrap drops TAS to its own line instead of clipping it. */
   .aircraft-row:first-child { flex: 1 1 180px; min-width: 0; }
   .aircraft-sel { flex: 1 1 0; min-width: 0; max-width: none; }
+}
+@media (max-width: 480px) {
   /* The "Aircraft" caption costs ~65px that the model names need to stay
      readable ("T182 Turbo Skylane" clips to "T182 T" with it). The selects
      keep their aria-labels, and the TAS field alongside names the group. */
