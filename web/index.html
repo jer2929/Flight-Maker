@@ -14,12 +14,38 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <!-- "default", not "black-translucent". black-translucent draws the status bar
+       transparent with WHITE glyphs and lets the page run underneath it - which
+       put white clock/battery glyphs on top of the now-white light-mode header.
+       iOS reads this at launch and it cannot be media-queried or scripted, so it
+       has to be one value that works in both themes: "default" gives an opaque
+       status bar that follows the page background. VERIFY ON A REAL DEVICE - this
+       does not reproduce in a desktop browser. -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Minima" />
   <meta name="mobile-web-app-capable" content="yes" />
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="/style.css?v=__SHELL_VERSION__" />
+  <script>
+    /* Theme boot. Inline, in <head>, and synchronous on purpose: app.js loads at
+       the end of <body>, so without this a light-theme user would get a full
+       dark paint and then a repaint to light on every single load.
+
+       The stored preference is "auto" | "light" | "dark"; what lands on the
+       element is always the RESOLVED value, so style.css needs one light block
+       and no prefers-color-scheme media query (see the note at the top of it).
+       The key is duplicated in app.js (loadTheme/saveTheme) because this script
+       cannot import from it - tests/test_theme.py pins the two together. */
+    (function () {
+      var pref = "auto";
+      try { pref = localStorage.getItem("minima.theme.v1") || "auto"; } catch (e) {}
+      if (pref !== "light" && pref !== "dark") pref = "auto";
+      var light = pref === "light" || (pref === "auto" && window.matchMedia &&
+        matchMedia("(prefers-color-scheme: light)").matches);
+      document.documentElement.dataset.theme = light ? "light" : "dark";
+    })();
+  </script>
 </head>
 <body>
   <!-- Shared arrowheads for the wind-vs-runway diagrams. Defined once globally so the
@@ -369,6 +395,27 @@
           <span id="minimums-status" class="set-status"></span>
         </div>
       </form>
+    </div>
+
+    <!-- Appearance. Deliberately NOT called "Day / Night": this app already has
+         a Day flight / Night flight control on the Route tab, and there it means
+         the civil-twilight definition that selects which set of personal
+         minimums a flight is gated against. Two controls with the same name
+         meaning different things, on the same app, is how someone ends up
+         reading the wrong assessment.
+         Outside #minimums-form on purpose, so Save/Reset profile never touch it. -->
+    <div class="panel">
+      <h2 class="set-title">Appearance</h2>
+      <p class="set-intro">How the app looks in this browser. It changes nothing about how a flight is assessed.</p>
+      <fieldset class="set-group">
+        <legend>Theme</legend>
+        <div class="seg" id="theme-seg" role="group" aria-label="Theme">
+          <button type="button" class="seg-btn" data-theme="auto" aria-pressed="true">Auto</button>
+          <button type="button" class="seg-btn" data-theme="light" aria-pressed="false">Light</button>
+          <button type="button" class="seg-btn" data-theme="dark" aria-pressed="false">Dark</button>
+        </div>
+        <p class="set-hint">Auto follows your device&#39;s light/dark setting.</p>
+      </fieldset>
     </div>
   </section>
 

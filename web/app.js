@@ -185,6 +185,78 @@ function currentTas() {
   return CONFIG ? CONFIG.cruise_kt : null;
 }
 
+// ---------- Appearance (per-browser) ----------
+// Auto follows the OS; Light and Dark pin it. The inline boot script in
+// index.html has already applied the resolved theme before first paint - this
+// pair is what keeps the stored choice, the toggle and the theme-color meta
+// agreeing with each other afterwards.
+//
+// Deliberately NOT part of PROFILE: appearance changes how the app looks, never
+// how a flight is assessed, so it must not travel with the minimums and must
+// not be wiped by "Reset to defaults".
+//
+// Note this is a different axis from the Day flight / Night flight control on
+// the Route tab. That one is civil twilight and decides which set of personal
+// minimums a flight is gated against; this one is only the colour scheme.
+const THEME_KEY = "minima.theme.v1";   // duplicated in the boot script in index.html
+function loadTheme() {
+  try {
+    const v = localStorage.getItem(THEME_KEY);
+    if (v === "light" || v === "dark" || v === "auto") return v;
+  } catch (_) {}
+  return "auto";
+}
+function saveTheme(v) {
+  // Storing nothing for "auto" collapses "never chose" and "chose Auto" into one
+  // state - same convention as saveProfile() dropping its defaults.
+  try {
+    if (v === "auto") localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, v);
+  } catch (_) {}
+}
+const prefersLight = () =>
+  !!(window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches);
+
+function applyTheme(pref) {
+  const resolved = pref === "auto" ? (prefersLight() ? "light" : "dark") : pref;
+  document.documentElement.dataset.theme = resolved;
+  // The address bar / task-switcher colour. Read back off --bg rather than kept
+  // as a second copy of the hex, so the meta can never disagree with the
+  // stylesheet about what the page background actually is.
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) {
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+    if (bg) meta.setAttribute("content", bg);
+  }
+}
+
+function wireTheme() {
+  let pref = loadTheme();
+  applyTheme(pref);
+  const seg = document.getElementById("theme-seg");
+  if (seg) {
+    const btns = [...seg.querySelectorAll(".seg-btn")];
+    const paint = () => btns.forEach((x) => {
+      const on = x.dataset.theme === pref;
+      x.classList.toggle("active", on);
+      x.setAttribute("aria-pressed", String(on));
+    });
+    paint();
+    // The generic .seg-btn handler in wire() also toggles .active and would do
+    // the same job - but wire() is never reached if /api/config failed, and the
+    // theme has to keep working on a page that could not reach the backend.
+    // Both handlers setting the same class on the same element is idempotent.
+    btns.forEach((b) => b.addEventListener("click", () => {
+      pref = b.dataset.theme; saveTheme(pref); applyTheme(pref); paint();
+    }));
+  }
+  // Auto has to keep following the OS while the tab sits open.
+  if (window.matchMedia) {
+    matchMedia("(prefers-color-scheme: light)")
+      .addEventListener("change", () => { if (pref === "auto") applyTheme(pref); });
+  }
+}
+
 function fillModelOptions(make) {
   const sel = $("#ac-model");
   const names = Object.keys(AIRCRAFT_CATALOG[make] || {});
@@ -239,6 +311,10 @@ function buildAircraftPicker() {
 
 // ---------- Init ----------
 async function init() {
+  // Before the config fetch, and outside the try: the theme must still apply and
+  // the toggle must still work when the backend is down, which is exactly when
+  // someone is sitting here staring at the error banner.
+  wireTheme();
   // Everything below is built from CONFIG - threats, sliders, default limits - so
   // a failed config fetch used to leave a shell with no controls and no
   // explanation. Say what happened and offer the retry.
@@ -938,6 +1014,13 @@ const radarFallback = () => `<div class="panel radar-panel"><h3>Radar</h3>
 // W08100 - N4400 W08100 - ..." is a shape, and reading it as a shape is the
 // difference between "there is weather somewhere in Ontario" and "it is forty
 // miles north of your track".
+// THEME-INDEPENDENT ON PURPOSE. Every colour in this map section is painted over
+// OSM raster tiles and a 70%-opacity radar overlay, and that substrate is light
+// whichever theme the app is in. These are not app chrome, so they must NOT be
+// re-pointed at CSS tokens when the theme flips - doing so would break the
+// contrast reasoning in the comments on pirepStyle() and the radar ring below.
+// The only genuinely themed map surface is .leaflet-container's background (the
+// void behind the tiles), which style.css owns.
 const HAZARD_COLORS = {
   conv: "#e0483a", ts: "#e0483a", ice: "#4aa3df", turb: "#e8a33d",
   ifr: "#8f6fd6", mtn_obs: "#7d8c99", llws: "#d46fa8", sfc_wind: "#d46fa8",

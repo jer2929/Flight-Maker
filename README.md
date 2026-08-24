@@ -635,6 +635,26 @@ web/                 single-page dashboard (Route + Discovery tabs)
 tests/               offline logic tests + auto-skipping live smoke tests
 ```
 
+### Light and dark
+
+**My Minimums -> Appearance** switches the app between **Auto**, **Light** and
+**Dark**. Auto - the default - follows your device's setting. The choice is
+per-browser (`localStorage`, key `minima.theme.v1`) and is deliberately not part
+of your profile: it changes how the app looks, never how a flight is assessed,
+so "Reset to defaults" leaves it alone.
+
+This is a different thing from the **Day flight / Night flight** control on the
+Route tab. That one is civil twilight, and it decides which set of your personal
+minimums the flight is gated against - see "Day or night, and whether night is a
+threat" above.
+
+For anyone editing `web/style.css`: every colour lives in the two token blocks at
+the top of that file, and rules reference them via `var()`. A tint is
+`color-mix(in srgb, var(--token) N%, transparent)`, and a translucent overlay is
+mixed from `--ink` rather than from white so it inverts with the theme. Adding a
+light theme took one 20-line block because of this; `tests/test_theme.py` fails
+if a colour literal creeps back into a rule.
+
 ## Configuration
 
 Override via `FM_`-prefixed env vars (see `app/config.py`): `FM_ORIGIN`
