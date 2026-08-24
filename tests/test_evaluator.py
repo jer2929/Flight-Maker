@@ -125,6 +125,71 @@ def test_endpoint_ceiling_above_xc_minimum_passes():
     assert checks["ceiling"].advisory is False
 
 
+# ---- A circuit minimum is a VFR idea and must not reach an IFR flight -------
+#
+# The IFR block carries one flat floor and no circuit keys. Asking it for
+# ``day_circuit`` missed and fell through to a hardcoded 2,000 ft, so an IFR
+# card gated on a VFR number the pilot had never set for IFR.
+
+def test_ifr_has_no_circuit_ceiling_minimum():
+    for ceiling_mode in ("xc", "endpoint", "circuit"):
+        limit, circuit = evaluator._ceiling_limits("day", ceiling_mode, "ifr")
+        assert circuit is None, ceiling_mode
+        assert limit == 1500, ceiling_mode      # the flat IFR day floor
+    assert evaluator._ceiling_limits("night", "circuit", "ifr") == (1500, None)
+    # VFR is untouched: XC limit applied, circuit limit reported alongside it.
+    assert evaluator._ceiling_limits("day", "endpoint", "vfr") == (4000, 2000)
+    assert evaluator._ceiling_limits("day", "circuit", "vfr") == (2000, 2000)
+
+
+def test_ifr_circuits_use_the_flat_ifr_visibility():
+    # Not the 5 SM / 6 SM VFR circuit numbers.
+    assert evaluator._visibility_limit("day", "circuit", "ifr")[0] == 3
+    assert evaluator._visibility_limit("night", "circuit", "ifr")[0] == 3
+    assert evaluator._visibility_limit("day", "circuit", "vfr")[0] == 5
+
+
+def test_ifr_endpoint_row_says_nothing_about_circuits():
+    # The reported bug: an IFR destination below the pilot's IFR floor came back
+    # as "1,200 ft AGL - below circuit minimum" against "≥ 2,000 ft AGL (circuit)".
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15,
+                        ceiling_agl_ft=1200, source=Source.OBSERVED)
+    row = {c.key: c for c in conditions_checks(
+        wx, good_runway(), "day", ceiling_mode="endpoint", flight_rules="ifr")}["ceiling"]
+    assert row.passed is False                       # still below the 1,500 ft IFR floor
+    assert "circuit" not in row.actual_text
+    assert "circuit" not in row.limit_text
+    assert "2,000" not in row.limit_text
+    assert "below your IFR minimum" in row.actual_text
+
+
+def test_ifr_endpoint_below_1000_is_not_captioned_imc():
+    # "IMC" is a VFR-only caption. An IFR flight in IMC is a normal IFR flight;
+    # the only thing worth saying is that the personal floor was missed.
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15,
+                        ceiling_agl_ft=900, source=Source.OBSERVED)
+    row = {c.key: c for c in conditions_checks(
+        wx, good_runway(), "day", ceiling_mode="endpoint", flight_rules="ifr")}["ceiling"]
+    assert "IMC" not in row.actual_text
+    assert "below your IFR minimum" in row.actual_text
+    # VFR keeps it.
+    vfr = {c.key: c for c in conditions_checks(
+        wx, good_runway(), "day", ceiling_mode="endpoint", flight_rules="vfr")}["ceiling"]
+    assert "IMC" in vfr.actual_text
+
+
+def test_ifr_endpoint_above_the_ifr_floor_passes():
+    # 1,200 ft with a 1,000 ft IFR floor: nothing to report at all. Under the old
+    # hardcoded 2,000 ft circuit limit this was a NO-GO.
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=8, visibility_sm=15,
+                        ceiling_agl_ft=1200, source=Source.OBSERVED)
+    with limits_override({"ifr_ceiling_agl_ft": {"day_xc": 1000}}):
+        row = {c.key: c for c in conditions_checks(
+            wx, good_runway(), "day", ceiling_mode="endpoint", flight_rules="ifr")}["ceiling"]
+        assert row.passed is True
+        assert "circuit" not in row.actual_text
+
+
 def test_threat_rule_mapping():
     assert threat_verdict(0) == Verdict.GO
     assert threat_verdict(1) == Verdict.MITIGATE

@@ -30,10 +30,14 @@ const MIN_FIELDS = [
   { group: "visibility_sm",  key: "night_circuit",        id: "set-vis-night-circuit", label: "Night circuit",      unit: "SM", grp: "grp-vis",         min: 0,   max: 20,    step: 1   },
   { group: "visibility_sm",  key: "night_xc",             id: "set-vis-night-xc",      label: "Night cross-country",unit: "SM", grp: "grp-vis",         min: 0,   max: 20,    step: 1   },
   { group: "density_altitude", key: "advisory_above_field_ft", id: "set-da-advisory", label: "Advise above field by", unit: "ft", grp: "grp-da", min: 0, max: 5000, step: 100 },
-  { group: "ifr_ceiling_agl_ft", key: "day_xc",   id: "set-ifr-ceil-day",  label: "IFR day XC",   unit: "ft", grp: "grp-ifr-ceiling", min: 100, max: 15000, step: 100 },
-  { group: "ifr_ceiling_agl_ft", key: "night_xc", id: "set-ifr-ceil-night",label: "IFR night XC", unit: "ft", grp: "grp-ifr-ceiling", min: 100, max: 15000, step: 100 },
-  { group: "ifr_visibility_sm",  key: "day_xc",   id: "set-ifr-vis-day",   label: "IFR day XC",   unit: "SM", grp: "grp-ifr-vis",     min: 0,   max: 20,    step: 1   },
-  { group: "ifr_visibility_sm",  key: "night_xc", id: "set-ifr-vis-night", label: "IFR night XC", unit: "SM", grp: "grp-ifr-vis",     min: 0,   max: 20,    step: 1   },
+  // One flat floor each, day and night - IFR has no circuit/cross-country
+  // split, so the labels carry no "XC". The KEYS stay day_xc/night_xc: they are
+  // the wire format (config._NUMERIC_LIMITS) and the saved-profile shape, and
+  // renaming them would silently drop every pilot's stored IFR minimums.
+  { group: "ifr_ceiling_agl_ft", key: "day_xc",   id: "set-ifr-ceil-day",  label: "IFR day",   unit: "ft", grp: "grp-ifr-ceiling", min: 100, max: 15000, step: 100 },
+  { group: "ifr_ceiling_agl_ft", key: "night_xc", id: "set-ifr-ceil-night",label: "IFR night", unit: "ft", grp: "grp-ifr-ceiling", min: 100, max: 15000, step: 100 },
+  { group: "ifr_visibility_sm",  key: "day_xc",   id: "set-ifr-vis-day",   label: "IFR day",   unit: "SM", grp: "grp-ifr-vis",     min: 0,   max: 20,    step: 1   },
+  { group: "ifr_visibility_sm",  key: "night_xc", id: "set-ifr-vis-night", label: "IFR night", unit: "SM", grp: "grp-ifr-vis",     min: 0,   max: 20,    step: 1   },
 ];
 
 // ---- My Minimums: pilot fitness & external pressure item catalogue ----

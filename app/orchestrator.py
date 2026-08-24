@@ -1299,13 +1299,16 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
 
     # Ceiling - IFR uses ifr_minimums section; VFR uses hard_limits.
     full_limits = get_limits()
+    ceil_limit = _xc_ceiling_minimum(mode, flight_rules)
+    # ``None`` = no circuit minimum in force. IFR has one flat floor and flies
+    # published approaches, so there is no circuit number to be below; the IFR
+    # block carries no circuit keys, and reading them anyway used to fall
+    # through to a hardcoded 2,000 ft that gated IFR flights on a VFR limit.
     if flight_rules == "ifr":
-        ifr = full_limits.get("ifr_minimums", {})
-        c_block = ifr.get("ceiling_agl_ft", L["ceiling_agl_ft"])
+        circuit_limit = None
     else:
         c_block = L["ceiling_agl_ft"]
-    ceil_limit = _xc_ceiling_minimum(mode, flight_rules)
-    circuit_limit = c_block.get("night_circuit", 3000) if mode == "night" else c_block.get("day_circuit", 2000)
+        circuit_limit = c_block.get("night_circuit", 3000) if mode == "night" else c_block.get("day_circuit", 2000)
     # The XC ceiling minimum applies to the whole route, ends included - a deck
     # below it over the departure field is as much a no-go as one at midpoint,
     # so this row is the worst ceiling anywhere on the route, not just enroute.
@@ -1314,7 +1317,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     if route_ceils:
         lbl, val, src, txt = min(route_ceils, key=lambda t: t[1])
         checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, route)",
-                                 limit_text=f"≥ {ceil_limit:,} ft AGL",
+                                 limit_text=f"≥ {ceil_limit:,.0f} ft AGL",
                                  actual_text=f"{round(val / 100) * 100:,} ft AGL",
                                  passed=val >= ceil_limit, location=lbl, source=src,
                                  source_text=txt))
@@ -1353,26 +1356,36 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
             text = f"no ceiling{top}"
             src = Source.OBSERVED.value if obs_backed else Source.MODEL.value
         checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, route)",
-                                 limit_text=f"≥ {ceil_limit:,} ft AGL",
+                                 limit_text=f"≥ {ceil_limit:,.0f} ft AGL",
                                  actual_text=text, passed=True, source=src))
 
     # Departure/destination ceiling against the *circuit* minimum. The XC row above
     # already fails anything below the XC minimum; this row says whether the end in
     # question is even circuit-capable, so "circuits only" reads differently from
     # "below every personal minimum".
+    #
+    # On IFR there is no circuit minimum, so the row keeps only the part that
+    # still carries information: it names the *end* that is below your floor,
+    # which the route row above will not do when a worse point sits enroute.
+    # Notes here and in ``evaluator._ceiling_check`` are one rule - change both.
     for lbl, _w, _g, ce, _v, src, txt in (pts[0], pts[-1]):
         if ce is None or ce >= ceil_limit:
             continue
         cv = round(ce / 100) * 100
-        if ce < circuit_limit:
+        if circuit_limit is None:
+            checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
+                                     limit_text=f"≥ {ceil_limit:,.0f} ft AGL",
+                                     actual_text=f"{cv:,} ft AGL - below your IFR minimum",
+                                     passed=False, location=lbl, source=src, source_text=txt))
+        elif ce < circuit_limit:
             note = "IMC" if ce < 1000 else "below circuit minimum"
             checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
-                                     limit_text=f"≥ {circuit_limit:,} ft AGL (circuit)",
+                                     limit_text=f"≥ {circuit_limit:,.0f} ft AGL (circuit)",
                                      actual_text=f"{cv:,} ft AGL - {note}", passed=False,
                                      location=lbl, source=src, source_text=txt))
         else:
             checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
-                                     limit_text=f"≥ {circuit_limit:,} ft AGL (circuit)",
+                                     limit_text=f"≥ {circuit_limit:,.0f} ft AGL (circuit)",
                                      actual_text=f"{cv:,} ft AGL - circuits only",
                                      passed=True, advisory=True, location=lbl, source=src,
                                      source_text=txt))
@@ -2434,7 +2447,10 @@ async def assess_circuits(
 
     Uses circuit personal minimums (day_circuit / night_circuit ceiling and
     visibility) rather than cross-country limits. No enroute or altitude
-    recommendation - this is a stay-in-the-pattern check."""
+    recommendation - this is a stay-in-the-pattern check.
+
+    On IFR there are no circuit minimums to use: the IFR block is a single flat
+    floor, and that floor is what an IFR circuits assessment gates on."""
     settings = get_settings()
     airport = ap.get_airport(aerodrome_ident)
     if airport is None:

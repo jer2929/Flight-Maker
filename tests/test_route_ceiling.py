@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from app import orchestrator
+from app.config import limits_override
 from app.models import Airport, Source, WeatherSummary
 
 
@@ -26,10 +27,10 @@ def _endpoint(ident, ceiling=8000, vis=15):
         best_runway=None, density_altitude=None)
 
 
-def _rows(enroute, dep_ceiling=8000, dest_ceiling=8000):
+def _rows(enroute, dep_ceiling=8000, dest_ceiling=8000, flight_rules="vfr"):
     checks = orchestrator._route_conditions_checks(
         _endpoint("CYKF", dep_ceiling), _endpoint("CYFD", dest_ceiling),
-        enroute, "day")
+        enroute, "day", flight_rules=flight_rules)
     return {c.key: c for c in checks}
 
 
@@ -234,3 +235,49 @@ def test_ceiling_dropping_reports_the_fall_it_found():
     # The series is what the popover prints, one entry per hour looked at.
     assert len(d["series"]) >= 2
     assert d["series"][0] == d["from_ft"] and min(d["series"]) == d["to_ft"]
+
+
+# --- The endpoint row must not gate an IFR flight on a circuit minimum -------
+#
+# Reported against an IFR CYFD -> CYKF: the card failed on
+# "Endpoint ceiling  1,200 ft AGL - below circuit minimum   ≥ 2,000 ft AGL (circuit)".
+# A circuit minimum is a VFR idea - on IFR you fly an approach to a DA/MDA - and
+# the 2,000 ft it was measured against was a hardcoded fallback, reached because
+# the IFR minimums block has no ``day_circuit`` key to read.
+
+def _enroute(ceiling=8000):
+    return [{"ceiling_ft": ceiling, "sampled": True},
+            {"ceiling_ft": ceiling, "sampled": True}]
+
+
+def test_ifr_endpoint_row_drops_the_circuit_language():
+    rows = _rows(_enroute(), dest_ceiling=1200, flight_rules="ifr")
+    row = rows["ceiling_endpoint"]
+    assert row.location == "CYFD (destination)"
+    assert "circuit" not in row.actual_text
+    assert "circuit" not in row.limit_text
+    assert "2,000" not in row.limit_text, "the hardcoded VFR circuit minimum"
+    # It is measured against the pilot's own IFR floor, and still says which end.
+    assert "1,500 ft AGL" in row.limit_text
+    assert row.actual_text == "1,200 ft AGL - below your IFR minimum"
+
+
+def test_ifr_endpoint_above_the_ifr_floor_emits_no_row():
+    # 1,200 ft against a 1,000 ft IFR floor is within minimums, so the card says
+    # nothing about it. The old code failed it against the hardcoded 2,000 ft.
+    with limits_override({"ifr_ceiling_agl_ft": {"day_xc": 1000}}):
+        rows = _rows(_enroute(), dest_ceiling=1200, flight_rules="ifr")
+    assert "ceiling_endpoint" not in rows
+    assert rows["ceiling"].passed is True
+
+
+def test_vfr_endpoint_row_is_unchanged():
+    # The circuit distinction is real under VFR and stays exactly as it was.
+    below = _rows(_enroute(), dest_ceiling=1900)["ceiling_endpoint"]
+    assert below.passed is False
+    assert below.actual_text == "1,900 ft AGL - below circuit minimum"
+    assert "(circuit)" in below.limit_text
+    # Circuit-capable but below the 4,000 ft XC floor: an advisory, not a failure.
+    circuits_only = _rows(_enroute(), dest_ceiling=2500)["ceiling_endpoint"]
+    assert circuits_only.passed is True and circuits_only.advisory is True
+    assert "circuits only" in circuits_only.actual_text
