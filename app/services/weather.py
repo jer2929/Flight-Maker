@@ -204,26 +204,60 @@ def _parse_group(text: str) -> dict:
 
 
 def _dhm(day: int, hour: int, ref: datetime) -> datetime:
-    """Resolve a TAF day/hour (UTC) to a datetime near the issue time ``ref``,
-    handling 24:00 and month rollover."""
+    """Resolve a TAF day-of-month + hour (UTC) to the real datetime nearest ``ref``.
+
+    A TAF names days by number only ("1718/1818"), so the month has to be
+    inferred. This used to be ``if day < ref.day - 5: month += 1`` - a guess that
+    could only ever roll *forward*, and it was wrong in both directions:
+
+      - A TAF issued on the 31st and read on the 1st of the next month asked for
+        e.g. 31 September, and ``datetime`` raised ValueError. parse_taf_segments
+        catches everything and returns [], so the effect was silent: on the 1st
+        of every month after a 31-day one, every TAF issued the day before was
+        dropped and the assessment quietly fell back to model data.
+      - Any day number more than 5 behind ``ref`` was pushed a month into the
+        future even when the near reading was the correct one.
+
+    Picking the nearest calendar month carrying that day-of-month handles both,
+    and needs no magic number: a real TAF is at most ~30 h old or ~30 h ahead, so
+    the nearest occurrence is always the intended one. Months that have no such
+    day (31 September) are skipped rather than raising.
+    """
     extra = 0
-    if hour == 24:
+    if hour == 24:          # "2400" is midnight ending that day
         hour = 0
         extra = 1
-    month, year = ref.month, ref.year
-    if day < ref.day - 5:  # wrapped into next month
-        month += 1
-        if month > 12:
+    best = None
+    for delta in (-1, 0, 1):
+        month, year = ref.month + delta, ref.year
+        if month < 1:
+            month, year = 12, year - 1
+        elif month > 12:
             month, year = 1, year + 1
-    return datetime(year, month, day, hour, tzinfo=timezone.utc) + timedelta(days=extra)
+        try:
+            cand = datetime(year, month, day, hour, tzinfo=timezone.utc)
+        except ValueError:  # e.g. day 31 in a 30-day month
+            continue
+        if best is None or abs(cand - ref) < abs(best - ref):
+            best = cand
+    if best is None:        # a day number no nearby month has - unparseable
+        raise ValueError(f"no month near {ref:%Y-%m} has a day {day}")
+    return best + timedelta(days=extra)
 
 
-def parse_taf_segments(raw: str) -> list[dict]:
+def parse_taf_segments(raw: str, now: Optional[datetime] = None) -> list[dict]:
     """Parse a TAF into ``{kind, start, end, cond}`` segments (UTC times).
 
     ``kind`` is ``"base"`` for the main/FM/BECMG forecast (selected by latest
     start) or ``"overlay"`` for TEMPO/PROB (possible temporary worsening).
     Returns ``[]`` if it can't parse - callers then fall back to model data.
+
+    ``now`` is the reference the TAF's bare day-numbers are resolved against
+    (see ``_dhm``); it defaults to the wall clock, which is what production
+    wants. Tests pass it explicitly, because a fixture with fixed day numbers
+    otherwise means something different depending on the date the suite runs -
+    which is how this suite came to be green on the 1st-20th of a month and red
+    on the 21st-31st, and blocked a deploy on the 24th.
     """
     if not raw:
         return []
@@ -233,7 +267,7 @@ def parse_taf_segments(raw: str) -> list[dict]:
         period = re.search(r"\b(\d{2})(\d{2})/(\d{2})(\d{2})\b", up)
         if not issue or not period:
             return []
-        ref = _dhm(int(issue.group(1)), int(issue.group(2)), datetime.now(timezone.utc))
+        ref = _dhm(int(issue.group(1)), int(issue.group(2)), now or datetime.now(timezone.utc))
         main_start = _dhm(int(period.group(1)), int(period.group(2)), ref)
         main_end = _dhm(int(period.group(3)), int(period.group(4)), ref)
 
