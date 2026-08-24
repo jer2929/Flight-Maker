@@ -849,7 +849,6 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .wr-key-arrow { width: 30px; height: 12px; overflow: visible; }
 .wr-key-lbl { min-width: 0; }
 .wr-key-note { opacity: .8; }
-.wr-key-red { color: var(--nogo-ink); font-weight: 600; }
 @media (max-width: 480px) { .rwy-wrap { flex-direction: column; gap: 6px; } }
 /* Prior permission required. A condition of the aerodrome, not a verdict - so
    it annotates the ident rather than wearing the verdict's box. */
