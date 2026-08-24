@@ -841,7 +841,14 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .wr-ah-tail { fill: var(--nogo); }
 .wr-ah-cross-mit { fill: var(--mitigate); }
 .wr-ah-cross-nogo { fill: var(--nogo); }
-.wr-legend { fill: var(--muted); font-family: system-ui, sans-serif; }
+/* Key for the wind-vs-runway diagram. A two-column grid (swatch, label) so the
+   arrows and their captions line up in the space beside the picture, and the
+   swatches reuse the diagram's own classes and arrowheads. */
+.wr-key { display: inline-grid; grid-template-columns: auto 1fr; align-items: center;
+  gap: 4px 8px; margin-top: 8px; font-size: .78rem; color: var(--muted); line-height: 1.3; }
+.wr-key-arrow { width: 30px; height: 12px; overflow: visible; }
+.wr-key-lbl { min-width: 0; }
+.wr-key-note { opacity: .8; }
 @media (max-width: 480px) { .rwy-wrap { flex-direction: column; gap: 6px; } }
 /* Prior permission required. A condition of the aerodrome, not a verdict - so
    it annotates the ident rather than wearing the verdict's box. */

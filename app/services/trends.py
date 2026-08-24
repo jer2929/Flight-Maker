@@ -214,7 +214,7 @@ def _ceiling_trend(obs: list[dict], times: list[datetime | None]) -> tuple[list[
         # gone. Report that rather than quoting its stale height as "current".
         gone = obs[idx[-1]]["ceiling_agl_ft"]
         if gone <= 6000:
-            notes.append(f"🌤 Ceiling cleared: was {_ft(gone)}{_suffix(_span_h(times[idx[-1]], times[-1]))}")
+            notes.append(f"Ceiling cleared: was {_ft(gone)}{_suffix(_span_h(times[idx[-1]], times[-1]))}")
         return notes, False
 
     # Walk back from the newest ceiling while each step stays on the same layer.
@@ -236,10 +236,10 @@ def _ceiling_trend(obs: list[dict], times: list[datetime | None]) -> tuple[list[
 
     if len(seg) >= 2:
         if c1 < c0 - 800 and c1 <= 6000:
-            notes.append(f"📉 Ceilings lowering: {_ft(c0)} → {_ft(c1)}{_suffix(_run_h(stamps, vals, rising=False))}")
+            notes.append(f"Ceilings lowering: {_ft(c0)} → {_ft(c1)}{_suffix(_run_h(stamps, vals, rising=False))}")
             lowering = True
         elif c1 > c0 + 800:
-            notes.append(f"📈 Ceilings lifting: {_ft(c0)} → {_ft(c1)}{_suffix(_run_h(stamps, vals, rising=True))}")
+            notes.append(f"Ceilings lifting: {_ft(c0)} → {_ft(c1)}{_suffix(_run_h(stamps, vals, rising=True))}")
 
     # What the current ceiling layer took over from. This happened before the
     # trend above, so it leads the notes.
@@ -249,17 +249,17 @@ def _ceiling_trend(obs: list[dict], times: list[datetime | None]) -> tuple[list[
         was = prev.get("ceiling_agl_ft")
         sfx = _suffix(since)
         if was is not None and was < c0:
-            deck.append(f"🌤 Lower deck cleared: ceiling now {_ft(c1)} (was {_ft(was)}){sfx}")
+            deck.append(f"Lower deck cleared: ceiling now {_ft(c1)} (was {_ft(was)}){sfx}")
         elif step and c1 <= 6000:
             above = step.get("above")
             under = f" below the {_ft(above)} layer" if above else ""
             if step["kind"] == "filled":
-                deck.append(f"🌥 {_ft(step['height'])} layer thickened {step['cover']} → "
+                deck.append(f"{_ft(step['height'])} layer thickened {step['cover']} → "
                             f"{step['to_cover']}: ceiling now {_ft(c1)}{sfx}")
             elif step["kind"] == "new":
-                deck.append(f"🌥 New deck{under}: ceiling {_ft(c1)}{sfx}")
+                deck.append(f"New deck{under}: ceiling {_ft(c1)}{sfx}")
             else:
-                deck.append(f"🌥 Ceiling formed: {_ft(c1)}{sfx}")
+                deck.append(f"Ceiling formed: {_ft(c1)}{sfx}")
             # A ceiling that has only just dropped to a lower layer is still a
             # developing deterioration; one that settled hours ago is not.
             lowering = lowering or (c1 <= 5000 and (since is None or since <= FRESH_SWITCH_H))
@@ -297,25 +297,25 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
         sfx = _suffix(_run_h([t for t, _ in spreads], [v for _, v in spreads], rising=False)) if narrowing else ""
         if cur <= 3:
             tail = " and narrowing" if narrowing else ""
-            notes.append(f"💧 Temp/dew-point spread {cur:.0f}°C{tail} - humid, fog / low-cloud risk{sfx}")
+            notes.append(f"Temp/dew-point spread {cur:.0f}°C{tail} - humid, fog / low-cloud risk{sfx}")
         elif narrowing:
-            notes.append(f"💧 Temp/dew-point spread narrowing to {cur:.0f}°C - humidity rising{sfx}")
+            notes.append(f"Temp/dew-point spread narrowing to {cur:.0f}°C - humidity rising{sfx}")
 
     # Visibility trend (drop or improve)
     viss = [h.get("visibility_sm") for h in obs if h.get("visibility_sm") is not None]
     if len(viss) >= 2:
         if viss[-1] < viss[0] - 2:
-            notes.append(f"📉 Visibility dropping: {viss[0]:g} → {viss[-1]:g} SM{_suffix(run_h('visibility_sm', rising=False))}")
+            notes.append(f"Visibility dropping: {viss[0]:g} → {viss[-1]:g} SM{_suffix(run_h('visibility_sm', rising=False))}")
         elif viss[-1] > viss[0] + 2:
-            notes.append(f"📈 Visibility improving: {viss[0]:g} → {viss[-1]:g} SM{_suffix(run_h('visibility_sm', rising=True))}")
+            notes.append(f"Visibility improving: {viss[0]:g} → {viss[-1]:g} SM{_suffix(run_h('visibility_sm', rising=True))}")
 
     # Wind speed trend (up or down)
     winds = [h.get("wind_kt") for h in obs if h.get("wind_kt") is not None]
     if len(winds) >= 2:
         if winds[-1] >= winds[0] + 8:
-            notes.append(f"💨 Wind increasing: {round(winds[0])} → {round(winds[-1])} kt{_suffix(run_h('wind_kt', rising=True))}")
+            notes.append(f"Wind increasing: {round(winds[0])} → {round(winds[-1])} kt{_suffix(run_h('wind_kt', rising=True))}")
         elif winds[-1] <= winds[0] - 8:
-            notes.append(f"🍃 Wind easing: {round(winds[0])} → {round(winds[-1])} kt{_suffix(run_h('wind_kt', rising=False))}")
+            notes.append(f"Wind easing: {round(winds[0])} → {round(winds[-1])} kt{_suffix(run_h('wind_kt', rising=False))}")
 
     # Wind direction shift (veering = clockwise, backing = counter-clockwise)
     dirs = [h.get("wind_dir_true") for h in obs if h.get("wind_dir_true") is not None]
@@ -324,7 +324,7 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
         if abs(shift) >= 30:
             verb = "veering" if shift > 0 else "backing"
             d0, d1 = round(dirs[0] / 10) * 10 % 360, round(dirs[-1] / 10) * 10 % 360
-            notes.append(f"🧭 Wind {verb} {d0:03d}° → {d1:03d}° ({abs(round(shift))}°){_suffix(span_h)}")
+            notes.append(f"Wind {verb} {d0:03d}° → {d1:03d}° ({abs(round(shift))}°){_suffix(span_h)}")
 
     # Gusts developing / increasing (an instantaneous state - no duration suffix)
     gusts = [(h.get("wind_kt"), h.get("gust_kt")) for h in obs]
@@ -332,9 +332,9 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
     lw, lg = gusts[-1]
     if lg is not None and lw is not None and lg > lw:
         if not had_gust:
-            notes.append(f"💨 Gusts developing - now G{round(lg)} kt")
+            notes.append(f"Gusts developing - now G{round(lg)} kt")
         else:
-            notes.append(f"💨 Gusty - G{round(lg)} kt")
+            notes.append(f"Gusty - G{round(lg)} kt")
 
     # Precipitation onset / change / clearing
     precips = [h.get("precip") for h in obs]
@@ -348,16 +348,16 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
         hrs = None
         if times[onset] and times[-1]:
             hrs = max(1, round((times[-1] - times[onset]).total_seconds() / 3600))
-        notes.append(f"🌧 {cur_precip.capitalize()} began{_suffix(hrs)}")
+        notes.append(f"{cur_precip.capitalize()} began{_suffix(hrs)}")
     elif not cur_precip and any(precips[:-1]):
-        notes.append("🌤 Precip ended")
+        notes.append("Precip ended")
 
     # Pressure (altimeter) trend
     alts = [h.get("altimeter_inhg") for h in obs if h.get("altimeter_inhg") is not None]
     if len(alts) >= 2:
         if alts[-1] <= alts[0] - 0.06:
-            notes.append(f"🔻 Pressure falling: {alts[0]:.2f} → {alts[-1]:.2f} inHg - may be deteriorating{_suffix(run_h('altimeter_inhg', rising=False))}")
+            notes.append(f"Pressure falling: {alts[0]:.2f} → {alts[-1]:.2f} inHg - may be deteriorating{_suffix(run_h('altimeter_inhg', rising=False))}")
         elif alts[-1] >= alts[0] + 0.06:
-            notes.append(f"🔺 Pressure rising: {alts[0]:.2f} → {alts[-1]:.2f} inHg - improving{_suffix(run_h('altimeter_inhg', rising=True))}")
+            notes.append(f"Pressure rising: {alts[0]:.2f} → {alts[-1]:.2f} inHg - improving{_suffix(run_h('altimeter_inhg', rising=True))}")
 
     return notes, ceiling_lowering
