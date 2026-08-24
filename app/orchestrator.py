@@ -52,6 +52,7 @@ from app.services.evaluator import (
     decision,
     derive_threats,
     gating_hazards,
+    gust_spread_kt,
     threat_check_list,
     threat_result_label,
     threat_verdict,
@@ -1281,8 +1282,10 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
 
     # Gust spread - endpoints only. The peak gust rides along because the row
     # only gates above a floor (``evaluator.gust_spread_gates``); the endpoint
-    # cards apply the same floor, and the two must not disagree.
-    spreads = [(lbl, gk - wk, src, gk) for lbl, wk, gk, _c, _v, src, _t in endpoint_pts if wk is not None and gk is not None]
+    # cards apply the same floor, and the two must not disagree. The spread
+    # itself comes from ``gust_spread_kt`` for the same reason - it is the
+    # difference of the printed knots, not of the tenths behind them.
+    spreads = [(lbl, gust_spread_kt(wk, gk), src, gk) for lbl, wk, gk, _c, _v, src, _t in endpoint_pts if wk is not None and gk is not None]
     if spreads:
         lbl, val, src, peak = max(spreads, key=lambda t: t[1])
         row = LimitCheck(key="gust_spread", label="Gust spread", limit_text=f"≤ {w['gust_spread_max_kt']} kt",

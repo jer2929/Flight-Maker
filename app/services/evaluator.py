@@ -11,6 +11,7 @@ returns the legacy ``(verdict, reasons, count)`` tuple used by the timeline.
 """
 from __future__ import annotations
 
+import math
 from typing import Iterable
 
 from app.config import get_limits
@@ -107,19 +108,54 @@ def gust_spread_floor_kt() -> float:
     return float(get_limits()["hard_limits"]["wind"].get("gust_spread_floor_kt", 15))
 
 
+def printed_kt(v: float) -> int:
+    """A wind speed in the whole knots the card prints it in.
+
+    ``math.floor(v + 0.5)`` rather than ``round``, which is banker's rounding:
+    ``round(10.5)`` is 10, while the browser's ``Math.round`` - the thing that
+    actually renders the number - takes 10.5 to 11. Rounding here exists to
+    agree with what the pilot reads, so the tie has to break the same way.
+    """
+    return math.floor(v + 0.5)
+
+
+def gust_spread_kt(wind_kt: float | None, gust_kt: float | None) -> float | None:
+    """The gust spread, taken from the knots the card actually prints.
+
+    The multi-model blend answers in tenths (``openmeteo.ensemble_at_index``)
+    and every rendering of a wind rounds the two components independently:
+    10.4G19.6 prints as "10G20". Differencing the raw values instead made the
+    row contradict the wind above it - a card reading 10G20 passed a 10 kt limit
+    on a 9.2 kt spread while one reading 9G19 failed it on 10.8, and the failing
+    row then said "Gust spread 10 kt exceeds your limit (≤ 10 kt)", because the
+    same rounding that hid the difference was applied again on the way out.
+
+    Rounding first makes the printed wind the whole truth: two fields showing
+    the same wind get the same verdict, and a row that fails names a number that
+    is genuinely over the limit.
+    """
+    if wind_kt is None or gust_kt is None:
+        return None
+    return float(printed_kt(gust_kt) - printed_kt(wind_kt))
+
+
 def gust_spread_gates(gust_kt: float | None) -> bool:
     """Whether a spread this peak gust produced is allowed to fail a flight.
 
     See ``gust_spread_floor_kt`` in ``limits.yaml`` for why a spread alone is not
     enough: a model's wind and its gust are different statistics, and 10 kt of
     spread under a 12 kt peak is not the weather the limit was written for.
+
+    The peak is compared as printed, for the same reason the spread is: a card
+    showing G15 against a 15 kt floor has to gate, whatever the tenths behind it
+    said.
     """
     floor = gust_spread_floor_kt()
-    return floor <= 0 or (gust_kt is not None and gust_kt >= floor)
+    return floor <= 0 or (gust_kt is not None and printed_kt(gust_kt) >= floor)
 
 
 def _spread_advisory_text(gust_kt: float | None) -> str:
-    return (f"{gust_kt:.0f} kt peak - below your {gust_spread_floor_kt():.0f} kt "
+    return (f"{printed_kt(gust_kt)} kt peak - below your {gust_spread_floor_kt():.0f} kt "
             f"floor, advisory only")
 
 
@@ -182,7 +218,7 @@ def conditions_checks(
         unit="kt", source=wind_src,
     ), weather, "wind_kt"))
     # Gust spread
-    spread = (weather.gust_kt - weather.wind_kt) if (weather.gust_kt is not None and weather.wind_kt is not None) else None
+    spread = gust_spread_kt(weather.wind_kt, weather.gust_kt)
     checks.append(apply_gust_spread_floor(_attribute(_num_check(
         "gust_spread", "Gust spread", w["gust_spread_max_kt"], spread,
         unit="kt", source=gust_src,
@@ -550,8 +586,8 @@ def derive_threats(
         threats.add("strong_or_gusty_winds")
     # Same floor as the hard-limit row, or the threat stack would simply re-fire
     # a spread the row above has just said is too small to mean anything.
-    if (weather.gust_kt is not None and weather.wind_kt is not None
-            and (weather.gust_kt - weather.wind_kt) >= spread_trip
+    spread = gust_spread_kt(weather.wind_kt, weather.gust_kt)
+    if (spread is not None and spread >= spread_trip
             and gust_spread_gates(weather.gust_kt)):
         threats.add("strong_or_gusty_winds")
     if "thunderstorm" in weather.hazards:
