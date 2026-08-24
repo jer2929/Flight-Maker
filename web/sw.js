@@ -34,6 +34,16 @@ const SHELL = [
   "/icon-maskable-512.png",
   "/apple-touch-icon.png",
   "/favicon-32.png",
+  /* The three type roles, latin subset. These are in the SHELL and not fetched
+     from a font CDN precisely because of the line above this list: a
+     cross-origin request is bypassed by this worker, so an installed app
+     opened offline would lose its type and re-flow every number column. */
+  "/fonts/plex-sans-400.woff2",
+  "/fonts/plex-sans-600.woff2",
+  "/fonts/plex-sans-condensed-600.woff2",
+  "/fonts/plex-sans-condensed-700.woff2",
+  "/fonts/plex-mono-400.woff2",
+  "/fonts/plex-mono-500.woff2",
 ];
 
 self.addEventListener("install", (event) => {

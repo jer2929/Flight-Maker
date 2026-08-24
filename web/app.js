@@ -989,7 +989,7 @@ function drawGfa() {
   const etdFrame = GFA.etd ? gfaFrameFor(frames, GFA.etd) : -1;
   const etdNote = !GFA.etd ? ""
     : gfaCovers(fr, GFA.etd) ? `Covers your ETD ${zHM(GFA.etd)} · `
-    : `⚠ Does not cover your ETD ${zHM(GFA.etd)} - latest chart stops short · `;
+    : `Does not cover your ETD ${zHM(GFA.etd)} - latest chart stops short · `;
   const tabs = subs.map((s) => `<button class="gfa-tab ${s === GFA.sub ? "active" : ""}" data-sub="${s}">${GFA_LABELS[s] || s}</button>`).join("");
   const frameBtns = frames.length > 1
     ? `<div class="gfa-frames">${frames.map((f, i) => `<button class="gfa-frame ${i === GFA.frame ? "active" : ""}${i === etdFrame ? " etd" : ""}" data-frame="${i}"${i === etdFrame ? ' title="covers your ETD"' : ""}>${gfaFrameLabel(f, i)}</button>`).join("")}</div>`
@@ -1386,7 +1386,7 @@ function renderCircuits(r) {
   const v = r.verdict;
   const frLabel = currentFlightRules() === "ifr" ? " · IFR" : " · VFR";
   setHealth("route-data-health", dataHealthBanner(r.data_health, "runRoute"));
-  $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.airport.ident} circuits: ${v} now${frLabel}</div>`;
+  $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.airport.ident} circuits: <span class="vb-state">${v}</span> now${frLabel}</div>`;
   $("#route-checklist").innerHTML = checklistGroups(r, "(circuit minimums)");
   $("#route-advisories").innerHTML = advisoriesBlock(r);
   $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
@@ -1426,7 +1426,7 @@ function renderRoute(r) {
   const notes = (win && win.notes.length)
     ? `<small>${win.notes.map(escapeHtml).join(" · ")}</small>` : "";
   setHealth("route-data-health", dataHealthBanner(r.data_health, "runRoute"));
-  $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.departure.airport.ident} → ${r.destination.airport.ident}: ${v} ${when}${frLabel}${notes}</div>`;
+  $("#route-verdict").innerHTML = `<div class="verdict-banner ${cls(v)}">${r.departure.airport.ident} → ${r.destination.airport.ident}: <span class="vb-state">${v}</span> ${when}${frLabel}${notes}</div>`;
   // Directly under the verdict: the nudge that reaches a GO first, then the
   // "you could do better" options, which are subordinate to it by definition -
   // one is about becoming legal, the other about a flight that already is.
@@ -1437,13 +1437,13 @@ function renderRoute(r) {
 
   const alt = r.altitude;
   $("#route-summary").innerHTML = `<div class="panel meta">
-      ${win ? `<span title="Conditions are assessed for this window">🕐 ETD ${zHM(win.etd_utc)} → ETA ${zEnd(win.etd_utc, win.eta_utc)}${win.eta_provisional ? " (est.)" : ""}</span>` : ""}
-      <span>📏 ${r.distance_nm} nm · course ${dirM(r.bearing_mag, r.bearing_true)}</span>
-      <span>⏱ ${fmtHrMin(r.flight_time_hr)}</span>
-      ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud">⬆ Best alt ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
+      ${win ? `<span title="Conditions are assessed for this window">ETD ${zHM(win.etd_utc)} → ETA ${zEnd(win.etd_utc, win.eta_utc)}${win.eta_provisional ? " (est.)" : ""}</span>` : ""}
+      <span><span class="mk">Dist</span> ${r.distance_nm} nm · course ${dirM(r.bearing_mag, r.bearing_true)}</span>
+      <span><span class="mk">Time</span> ${fmtHrMin(r.flight_time_hr)}</span>
+      ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud"><span class="mk">Best alt</span> ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
       ${daylightSpan(r.daylight_margin)}
-      ${r.enroute_ceiling_ft != null ? `<span>☁ Enroute ceiling ${fmtCeil(r.enroute_ceiling_ft)}</span>` : ""}
-      ${r.cloud_at_cruise ? `<span class="warn">⚠️ Cloud below planned cruise altitude</span>` : ""}
+      ${r.enroute_ceiling_ft != null ? `<span><span class="mk">Enroute ceiling</span> ${fmtCeil(r.enroute_ceiling_ft)}</span>` : ""}
+      ${r.cloud_at_cruise ? `<span class="warn">Cloud below planned cruise altitude</span>` : ""}
       ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${windDir(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
     </div>`;
 
@@ -1459,7 +1459,7 @@ function renderRoute(r) {
   let windowsHtml;
   if (r.best_windows.length) {
     windowsHtml = `<h3>Best windows (next ${CONFIG.timeline_hours} h) - wind, ceiling &amp; visibility</h3>` +
-      r.best_windows.map((w) => `<div class="window-card">🟢 <strong>${fmtRange(w.start, w.end)}</strong> - ${w.summary}</div>`).join("");
+      r.best_windows.map((w) => `<div class="window-card"><strong>${fmtRange(w.start, w.end)}</strong> - ${w.summary}</div>`).join("");
   } else if ((r.timeline || []).length) {
     // Windows are filtered to those long enough to hold this flight, so say so:
     // otherwise a pilot who saw a window on a shorter leg wonders where it went.
@@ -1468,7 +1468,7 @@ function renderRoute(r) {
     // No timeline means no hourly forecast came back - "no favourable window" is
     // a statement about the weather, and there is no weather here to make it
     // about. This is the sentence that used to be wrong.
-    windowsHtml = `<div class="empty fetch-empty">⚠ Best windows unavailable - the hourly forecast did not download, so none could be searched for. This is <strong>not</strong> "no good window": pull the data again.</div>`;
+    windowsHtml = `<div class="empty fetch-empty">Best windows unavailable - the hourly forecast did not download, so none could be searched for. This is <strong>not</strong> "no good window": pull the data again.</div>`;
   }
   $("#route-windows").innerHTML = `<div class="timeline-wrap">${windowsHtml}</div>`;
   renderTimeline(r.timeline, r.best_windows);
@@ -1528,7 +1528,7 @@ const labelVerdict = (label) => /no-go/i.test(label) ? "NOGO" : /mitigate/i.test
 
 function rowCheck(c) {
   const state = !c.applicable ? "na" : c.advisory ? "advisory" : c.passed ? "pass" : "fail";
-  const mark = { pass: "✓", fail: "✗", advisory: "⚠", na: "–" }[state];
+  const mark = { pass: "✓", fail: "✗", advisory: "!", na: "–" }[state];
   // Where the value came from goes on a second, muted line under it rather than
   // inside the value cell. Three things of different weights in one cell made
   // that column's content swing by 30 characters row to row, which is what you
@@ -1740,13 +1740,13 @@ function endpointCard(a, role, timeLabel) {
     ${whyBlock(a)}
     <div class="meta obs">
       <span>${srcChip(w.source)}${w.as_of ? " " + w.as_of : ""}</span>
-      <span>💨 ${wind}</span>
+      <span><span class="mk">Wind</span> ${wind}</span>
       ${ceilChip(w)}
-      ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
+      ${w.visibility_sm != null ? `<span><span class="mk">Vis</span> ${w.visibility_sm} SM</span>` : ""}
       ${notamToggle(a)}
     </div>
-    ${showTakeoff && to ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(to, w)}</span><div class="rwy-lines"><div>🛫 <strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt${gust(to.headwind_kt_gust)} · xwind ${Math.round(to.crosswind_kt)} kt${gust(to.crosswind_kt_gust)}</div></div></div>` : ""}
-    ${showLanding && ld ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(ld, w)}</span><div class="rwy-lines"><div>🛬 <strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · headwind ${Math.round(ld.headwind_kt)} kt${gust(ld.headwind_kt_gust)} · xwind ${Math.round(ld.crosswind_kt)} kt${gust(ld.crosswind_kt_gust)}</div></div></div>` : ""}
+    ${showTakeoff && to ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(to, w)}</span><div class="rwy-lines"><div><strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt${gust(to.headwind_kt_gust)} · xwind ${Math.round(to.crosswind_kt)} kt${gust(to.crosswind_kt_gust)}</div></div></div>` : ""}
+    ${showLanding && ld ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(ld, w)}</span><div class="rwy-lines"><div><strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · headwind ${Math.round(ld.headwind_kt)} kt${gust(ld.headwind_kt_gust)} · xwind ${Math.round(ld.crosswind_kt)} kt${gust(ld.crosswind_kt_gust)}</div></div></div>` : ""}
     ${a.nearby_station ? nearbyBlock(a.nearby_station, timeLabel) : ""}
     ${trendsBlock(a)}
     ${runwaysBlock(a)}
@@ -1826,9 +1826,9 @@ function enrouteRow(e) {
     <div class="er-head"><strong>${escapeHtml(e.airport.ident)}</strong> ${escapeHtml(e.airport.name)}${e.access_note ? ` <span class="ppr">${escapeHtml(e.access_note)}</span>` : ""}</div>
     <div class="er-meta">
       <span>${Math.round(e.along_track_nm)} nm along · ${where}</span>
-      <span>${e.overfly_utc ? "🕐 " + zHM(e.overfly_utc) : ""}</span>
-      <span>💨 ${wind}</span>
-      ${rw ? `<span>🛬 RWY ${rw.runway_ident}${dimsText(rw) ? " · " + dimsText(rw) : ""} · xwind ${Math.round(rw.crosswind_kt)} kt</span>`
+      <span>${e.overfly_utc ? '<span class="mk">Over</span> ' + zHM(e.overfly_utc) : ""}</span>
+      <span><span class="mk">Wind</span> ${wind}</span>
+      ${rw ? `<span><span class="mk">Rwy</span> RWY ${rw.runway_ident}${dimsText(rw) ? " · " + dimsText(rw) : ""} · xwind ${Math.round(rw.crosswind_kt)} kt</span>`
            : `<span class="rwy-na">runway data unavailable</span>`}
     </div></div>`;
 }
@@ -1861,7 +1861,7 @@ function dataHealthBanner(health, retry) {
         health.details.map((d) => `<li>${escapeHtml(d)}</li>`).join("")}</ul></details>`
     : "";
   return `<div class="fetch-fail" role="alert">
-    <div class="fetch-fail-title">⚠ Failed to fetch some data</div>
+    <div class="fetch-fail-title">Failed to fetch some data</div>
     <p>These did not download, so anything below was assessed without them - and
        a missing forecast looks the same on the page as a clear sky. Pull the
        data again before you use this.</p>
@@ -1875,7 +1875,7 @@ function dataHealthBanner(health, retry) {
 // because "Failed to fetch" and "500" send you to different places.
 function fetchFailedBanner(detail, retry) {
   return `<div class="fetch-fail" role="alert">
-    <div class="fetch-fail-title">⚠ Failed to fetch</div>
+    <div class="fetch-fail-title">Failed to fetch</div>
     <p>The request did not complete, so nothing below is current.
        ${detail ? `<span class="fetch-fail-detail">${escapeHtml(detail)}</span>` : ""}</p>
     <button type="button" class="fetch-retry" onclick="${retry}()">Pull the data again</button>
@@ -1894,7 +1894,7 @@ function trendsBlock(a) {
   // of the same route. Say which, so an absent panel always means the former.
   if (!t.length) {
     return a.history_unavailable
-      ? `<div class="trends-na">⚠ Trend data unavailable - the observation history service did not respond. Your verdict is unaffected.</div>`
+      ? `<div class="trends-na">Trend data unavailable - the observation history service did not respond. Your verdict is unaffected.</div>`
       : "";
   }
   return `<details class="trends" open><summary>Trends from recent METARs (${t.length})</summary>${t.map((x) => `<div class="trend">${x}</div>`).join("")}</details>`;
@@ -1990,7 +1990,7 @@ function metarHistoryList(h) {
 
 function runwaysBlock(a) {
   const comps = a.runway_components || [];
-  if (!comps.length) return `<div class="rwy-na">🛬 Runway data unavailable</div>`;
+  if (!comps.length) return `<div class="rwy-na">Runway data unavailable</div>`;
   const w = a.weather || {};
   const usable = comps.filter((c) => c.tailwind_kt <= 0).sort((x, y) => y.headwind_kt - x.headwind_kt);
   if (!usable.length) return "";
@@ -2008,8 +2008,8 @@ function linksHtml(a) {
 }
 
 function notamToggle(a) {
-  if (!a.notam_count) return `<span>📋 0 NOTAM</span>`;
-  return `<span class="notam-btn" onclick="toggleNotams('${a.airport.ident}')">📋 ${a.notam_count} NOTAM ▾</span>`;
+  if (!a.notam_count) return `<span>0 NOTAM</span>`;
+  return `<span class="notam-btn" onclick="toggleNotams('${a.airport.ident}')">${a.notam_count} NOTAM ▾</span>`;
 }
 // Plain-language NOTAM timing: a colour-coded status + a one-line "when".
 // Green = active now, amber = upcoming, grey = expired. Null when we can't
@@ -2070,12 +2070,14 @@ function etdNudgeCard(s) {
   const why = s.reason
     ? `<div class="nudge-why">Stops applying: ${escapeHtml(s.reason)}</div>` : "";
   return `<div class="window-card etd-nudge ${cls(s.verdict)}">
-    🕑 <strong>Depart ${mag} ${dir} (${zDayTime(s.etd_utc)})</strong> and the
+    <strong>Depart ${mag} ${dir} (${zDayTime(s.etd_utc)})</strong> and the
     hour-by-hour forecast turns ${s.verdict} - ${s.hours_available} h available.
     ${why}</div>`;
 }
 
-const NUDGE_ICON = { tailwind: "💨", ceiling: "☁", hazard: "⛈", crosswind: "↔" };
+/* Why waiting helps, named rather than pictured. These sit at the head of a
+   gain line, so they are set in the same condensed caps as every other label. */
+const NUDGE_ICON = { tailwind: "Wind", ceiling: "Ceiling", hazard: "Wx", crosswind: "Xwind" };
 
 // "Wait and it gets better" - offered even when the flight is already legal,
 // which is the case etdNudgeCard is structurally unable to speak to. Rendered
@@ -2090,7 +2092,7 @@ function etdOptionsCard(options, verdictNow) {
       .map((i) => `<li>${NUDGE_ICON[i.kind] || "•"} ${escapeHtml(i.text)}</li>`)
       .join("");
     return `<div class="window-card etd-option">
-      🕑 <strong>Depart ${mag} ${dir} (${zDayTime(o.etd_utc)})</strong>
+      <strong>Depart ${mag} ${dir} (${zDayTime(o.etd_utc)})</strong>
       - ${o.hours_available} h available
       <ul class="nudge-gains">${gains}</ul></div>`;
   }).join("");
@@ -2124,21 +2126,21 @@ function daylightSpan(m) {
     ? ` · latest ETD ${zHM(m.latest_etd_utc)}` : "";
   const title = "End of evening civil twilight at the destination (CARs 101.01). "
     + "The latest ETD keeps the same 30 min arrival allowance the flight window uses.";
-  return `<span class="${m.margin_min < 30 ? "warn" : ""}" title="${title}">🌇 Last light ${zHM(m.dusk_utc)} · ${state}${latest}</span>`;
+  return `<span class="${m.margin_min < 30 ? "warn" : ""}" title="${title}">Last light ${zHM(m.dusk_utc)} · ${state}${latest}</span>`;
 }
 
 function renderTimeline(timeline, windows) {
   // An empty grid used to be drawn as no grid at all, silently - the same blank
   // space you'd get from a page that simply hadn't got there yet. Say why.
   if (!timeline.length) {
-    $("#route-timeline").innerHTML = `<div class="timeline-wrap"><div class="empty fetch-empty">⚠ Hour-by-hour forecast unavailable - the HRDPS data did not download. Pull the data again.</div></div>`;
+    $("#route-timeline").innerHTML = `<div class="timeline-wrap"><div class="empty fetch-empty">Hour-by-hour forecast unavailable - the HRDPS data did not download. Pull the data again.</div></div>`;
     return;
   }
   const inWindow = (t) => windows.some((w) => t >= w.start && t <= w.end);
   const byDay = {};
   timeline.forEach((h) => { (byDay[h.time.slice(0, 10)] ||= []).push(h); });
   let html = `<div class="timeline-wrap"><h3>Hour-by-hour, Zulu (full decision card; worse of departure &amp; destination)</h3>
-    <div class="legend"><span class="go">GO</span><span class="mit">MITIGATE</span><span class="nogo">NO-GO</span><span>· all times Zulu · dimmed = night · outlined = best window · amber edge = only a chance, not counted against your limits · ⛈ storm 🧊 freezing ❄ snow 🌧 rain</span></div>`;
+    <div class="legend"><span class="go">GO</span><span class="mit">MITIGATE</span><span class="nogo">NO-GO</span><span>· all times Zulu · dimmed = night · outlined = best window · amber edge = only a chance, not counted against your limits · TS storm · FZRA freezing · SN snow · RA rain</span></div>`;
   for (const day of Object.keys(byDay).sort()) {
     const label = (utcDate(day + "T12:00") || new Date()).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
     html += `<div class="tl-day">${label} (Z)</div><div class="tl-row">`;
@@ -2329,14 +2331,14 @@ function discoveryCard(a) {
     ${whyBlock(a)}
     <div class="meta">
       <span>${a.distance_nm} nm · ${dirM(null, a.bearing_true)}</span>
-      <span>⏱ ${fmtHrMin(a.flight_time_hr)}</span>
+      <span><span class="mk">Time</span> ${fmtHrMin(a.flight_time_hr)}</span>
       <span>${srcChip(w.source, a)}</span>
-      <span>💨 ${windStr(w)}</span>
+      <span><span class="mk">Wind</span> ${windStr(w)}</span>
       ${ceilChip(w)}
-      ${w.visibility_sm != null ? `<span>👁 ${w.visibility_sm} SM</span>` : ""}
-      ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below every ceiling on this card (reported now and forecast for your window) and scaled to leg distance">⬆ Best alt ${fmtFt(a.altitude.altitude_ft)}</span><span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "🟢 tailwind" : "🔴 headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
+      ${w.visibility_sm != null ? `<span><span class="mk">Vis</span> ${w.visibility_sm} SM</span>` : ""}
+      ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below every ceiling on this card (reported now and forecast for your window) and scaled to leg distance"><span class="mk">Best alt</span> ${fmtFt(a.altitude.altitude_ft)}</span><span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "tailwind" : "headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
-    ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div>🛬 <strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div></div>` : `<div class="rwy-na">🛬 Runway data unavailable</div>`}
+    ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div><strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div></div></div>` : `<div class="rwy-na">Runway data unavailable</div>`}
     ${runwaysBlock(a)}
     <div class="meta">${notamToggle(a)}<span class="links">${linksHtml(a)}</span></div>
     ${w.raw_metar ? `<div class="raw">METAR ${escapeHtml(w.raw_metar)}${ageChip(w.raw_metar)}</div>` : ""}
@@ -2877,7 +2879,7 @@ function renderSelfAssessment(containerId) {
       ${activeEP.length ? `<fieldset><legend>External pressure - pause &amp; reassess</legend>${gates(activeEP)}</fieldset>` : ""}
     </div>
     <div id="${bannerId}" class="banner hidden">
-      ⚠️ One or more personal factors checked - <strong>PAUSE and reassess.</strong>
+      One or more personal factors checked - <strong>PAUSE and reassess.</strong>
       Would you be comfortable explaining this decision to your instructor?
     </div>
   </div>`;
@@ -2933,17 +2935,21 @@ function windDir(magVal, trueVal) {
 const fmtFt = (ft) => (ft == null ? "-" : `${Math.round(ft).toLocaleString()} ft`);
 const fmtCeil = (ft) => (ft == null ? "-" : `${(Math.round(ft / 100) * 100).toLocaleString()} ft`);
 function ceilChip(w) {
-  if (w.ceiling_agl_ft != null) return `<span>☁ ${fmtCeil(w.ceiling_agl_ft)}</span>`;
-  if (w.source === "Observed") return `<span>☁ no ceiling</span>`;
+  if (w.ceiling_agl_ft != null) return `<span><span class="mk">Ceiling</span> ${fmtCeil(w.ceiling_agl_ft)}</span>`;
+  if (w.source === "Observed") return `<span><span class="mk">Ceiling</span> none</span>`;
   return "";
 }
+/* What the hour holds, in the notation it is reported in. These were weather
+   emoji; a METAR abbreviation is the same information in the vocabulary the
+   pilot reading this page already uses - and it fits a 32px cell, which a
+   colour emoji at .7rem never legibly did. */
 function wxGlyph(h) {
-  if ((h.hazards || []).includes("thunderstorm")) return "⛈";
-  if ((h.hazards || []).includes("freezing_rain")) return "🧊";
+  if ((h.hazards || []).includes("thunderstorm")) return "TS";
+  if ((h.hazards || []).includes("freezing_rain")) return "FZRA";
   if (!h.precip) return "";
-  if (h.precip.includes("snow")) return "❄";
-  if (h.precip.includes("freezing")) return "🧊";
-  return "🌧";
+  if (h.precip.includes("snow")) return "SN";
+  if (h.precip.includes("freezing")) return "FZ";
+  return "RA";
 }
 function precipText(h) {
   if (!h.precip) return "";

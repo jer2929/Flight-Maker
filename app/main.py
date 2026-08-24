@@ -449,6 +449,18 @@ async def manifest():
 _SHELL_FILES = ["index.html", "app.js", "style.css"]
 
 
+def _shell_paths() -> list:
+    """Every file the service worker precaches, in a stable order.
+
+    The fonts joined the SHELL list in sw.js, so they are shell content now: a
+    swapped woff2 with no CSS change would otherwise leave installed browsers
+    serving the old face forever, which is the exact failure the hash exists to
+    prevent. Sorted because glob order is filesystem order, and a version that
+    depends on that would churn every user's cache on a different machine.
+    """
+    return [WEB_DIR / n for n in _SHELL_FILES] + sorted((WEB_DIR / "fonts").glob("*.woff2"))
+
+
 def shell_version() -> str:
     """A cache version derived from the shell files' own bytes.
 
@@ -464,8 +476,7 @@ def shell_version() -> str:
     required from whoever writes the next change.
     """
     h = hashlib.sha256()
-    for name in _SHELL_FILES:
-        p = WEB_DIR / name
+    for p in _shell_paths():
         if p.exists():
             h.update(p.read_bytes())
     return f"minima-{h.hexdigest()[:16]}"
