@@ -1,3 +1,45 @@
+/* Self-hosted IBM Plex, latin subset. Self-hosted and not CDN-linked because
+   this is an offline-capable PWA: a font fetched from fonts.gstatic.com is a
+   cross-origin request the service worker deliberately bypasses, so an
+   installed app opened on a dead link would fall back to system-ui and
+   re-flow every number column. These six files are in the SHELL precache.
+
+   Three roles, and a rule for each:
+     --f-cond  labels, aerodrome idents, headings, verdict boxes. The chart
+               voice: condensed, and set in caps with tracking.
+     --f-mono  every number, and every raw METAR/TAF. Aviation weather is
+               fixed-width by tradition, and tabular figures are what keep a
+               column of values on one x.
+     --f-ui    running prose - hints, descriptions, settings copy. The quiet
+               layer; it should never be the thing you notice.
+   Symbols the latin subset does not carry - the arrows, checks and
+   inequality signs the app draws - fall through to the system stack after
+   each family, which is why every stack below ends in a real fallback. */
+@font-face {
+  font-family: "Plex Sans"; font-style: normal; font-weight: 400;
+  font-display: swap; src: url(/fonts/plex-sans-400.woff2) format("woff2");
+}
+@font-face {
+  font-family: "Plex Sans"; font-style: normal; font-weight: 600;
+  font-display: swap; src: url(/fonts/plex-sans-600.woff2) format("woff2");
+}
+@font-face {
+  font-family: "Plex Cond"; font-style: normal; font-weight: 600;
+  font-display: swap; src: url(/fonts/plex-sans-condensed-600.woff2) format("woff2");
+}
+@font-face {
+  font-family: "Plex Cond"; font-style: normal; font-weight: 700;
+  font-display: swap; src: url(/fonts/plex-sans-condensed-700.woff2) format("woff2");
+}
+@font-face {
+  font-family: "Plex Mono"; font-style: normal; font-weight: 400;
+  font-display: swap; src: url(/fonts/plex-mono-400.woff2) format("woff2");
+}
+@font-face {
+  font-family: "Plex Mono"; font-style: normal; font-weight: 500;
+  font-display: swap; src: url(/fonts/plex-mono-500.woff2) format("woff2");
+}
+
 /* Breakpoints. Two, plus one exception:
      780px - layout: multi-column blocks collapse to one column
      560px - density: multi-column rows collapse (checklist, hourly, TAF)
@@ -29,21 +71,31 @@
    scrims at their dark values. Same hazard the --chk-lim note below describes. */
 :root {
   color-scheme: dark;
-  --go: #1f8a4c; --mitigate: #c98a00; --nogo: #c0392b;
+  /* NIGHT. The same chart as the light theme, read under a map light: a warm
+     near-black ground, paper-white ink, and the same three spot hues lifted
+     just far enough to hold their contrast. It is deliberately not a cool
+     slate - a neutral-grey dark theme is what made the app read as generic,
+     and warmth is what ties the two themes together as one design. */
+  --go: #4e8f5f; --mitigate: #b8862f; --nogo: #b8544a;
   /* The verdict colours above are fills and borders; against the dark panel they
      are too dark to read as text, so verdict *text* uses these lighter tints.
      The relationship inverts under light: there the same fills are too LIGHT to
      read as text, so the light block swaps in darker tints instead. */
-  --go-ink: #6ee7a0; --mit-ink: #f5c451; --nogo-ink: #ff9b8f;
-  --taf-ink: #8fbcff;
-  --bg: #0f1419; --panel: #1a2129; --ink: #e6edf3; --muted: #8b98a5;
-  --line: #2a3540; --accent: #3b82f6;
+  --go-ink: #7dbe8c; --mit-ink: #dfae5c; --nogo-ink: #e08b80;
+  --taf-ink: #7ba9d6;
+  --bg: #13110d; --panel: #1d1a14; --ink: #ebe4d4; --muted: #918876;
+  --line: #3a352a; --accent: #c9639f;
   --ink-hi: #ffffff;        /* one step past --ink: the logo's hover only */
-  --head-top: #18222c;      /* header gradient runs --head-top -> --bg */
-  --on-accent: #fff;        /* text on a saturated accent / nogo fill */
-  --on-accent-dim: #dbeafe; /* its quieter second line, on that same fill */
-  --wind: #6cb6ff;          /* wind vectors in the runway diagrams */
-  --fresh: #6fcf97;         /* "this data is current" - .age.fresh, .adv-chip.live */
+  --head-top: #13110d;      /* header gradient runs --head-top -> --bg (flat here) */
+  /* Text on a saturated accent / nogo fill. Night's accent is the LIGHT
+     magenta, so this inverts: white on #c9639f is 2.6:1, the ground is 8:1. */
+  --on-accent: #13110d;
+  --on-accent-dim: #4a3540; /* its quieter second line, on that same fill */
+  --wind: #7ba9d6;          /* wind vectors in the runway diagrams */
+  --fresh: #7dbe8c;         /* "this data is current" - .age.fresh, .adv-chip.live */
+  /* The logo is pinned, not themed: it keeps the blue it was drawn with in
+     both themes. One token, so following the palette is a one-line change. */
+  --logo-accent: #3b82f6;
 
   /* Translucent surfaces, mixed from --ink so they invert with the theme.
      Light needs a touch more alpha: 5% ink on white separates less than 5%
@@ -76,7 +128,18 @@
   --row-inset: 8px;                          /* rows nested inside a block */
   --row-pad-x: calc(var(--row-inset) - var(--state-bar));
 
-  --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-pill: 999px;
+  /* Chart geometry. A VNC is ruled, not rounded: boxes are square-cornered and
+     hierarchy comes from line weight, so these are hairline radii rather than
+     the 6/8/12 of a card UI. --r-pill is gone entirely: eight classes shared
+     it, and now that the two that survive as objects (.badge, .notam-status)
+     are square, nothing is pill-shaped and nothing should silently become so
+     by reaching for the token. */
+  --r-sm: 2px; --r-md: 2px; --r-lg: 2px;
+
+  /* Type roles - see the @font-face sheet at the top for what each is for. */
+  --f-ui: "Plex Sans", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --f-cond: "Plex Cond", "Plex Sans", system-ui, -apple-system, sans-serif;
+  --f-mono: "Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --fs-2xs: .7rem; --fs-xs: .78rem; --fs-sm: .84rem;
   --fs-md: .9rem;  --fs-lg: .95rem; --fs-xl: 1.05rem;
@@ -97,36 +160,47 @@
    actually illegible on white are restated below. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f6f8; --panel: #ffffff; --ink: #12181f; --muted: #586471;
-  --line: #d5dce3; --accent: #1c5fd0;
-  /* --go (4.4:1) and --nogo (5.4:1) are legible on white unchanged. --mitigate
-     is not: #c98a00 is 2.95:1, and it is used as TEXT - the "that time has
-     passed" note and the legend swatch - so it has to darken. #9a6a00 is
-     4.73:1 on white and its 20% wash (#ebe1cc) is still visibly amber. */
-  --mitigate: #9a6a00;
-  --go-ink: #0f6b3d; --mit-ink: #7a5200; --nogo-ink: #a52a1f; --taf-ink: #1a4fa8;
+  /* DAY, and the theme the whole palette was drawn from: a VNC. Land buff for
+     the ground, the near-white of a chart's data box for raised surfaces,
+     and the three inks a chart actually spends colour on - aeronautical
+     magenta for the accent (on a VNC it already carries the aerodrome symbol
+     and the VFR waypoint, so it means "this is the aeronautical layer"),
+     controlled-airspace blue for forecast provenance, and terrain-map green,
+     ochre and red for the verdicts. */
+  --bg: #e5ddc9; --panel: #f4f0e4; --ink: #1b1913; --muted: #6b6454;
+  --line: #b6ac92; --accent: #8c2f68;
+  /* All three verdict hues re-point here. On the buff ground the night
+     values are far too light to carry a state bar, let alone read as text:
+     #4e8f5f on #f4f0e4 is 2.6:1. These are chart-weight inks - #2f6b3f is
+     4.9:1, #97600d 4.8:1, #a32f26 6.3:1, all as fills and borders. */
+  --go: #2f6b3f; --mitigate: #97600d; --nogo: #a32f26;
+  --go-ink: #24552f; --mit-ink: #7a4d07; --nogo-ink: #8b241c; --taf-ink: #2c5c8a;
   --ink-hi: #000000;
-  --head-top: #ffffff;
-  --wind: #1f6fd0;
-  --fresh: #0f7a3d;
+  --head-top: #e5ddc9;
+  --on-accent: #f4f0e4;     /* day's accent is the DARK magenta - paper on it */
+  --on-accent-dim: #e3c2d5;
+  --wind: #2c5c8a;
+  --fresh: #24552f;
   --scrim:      color-mix(in srgb, var(--ink) 6%,  transparent);
   --scrim-soft: color-mix(in srgb, var(--ink) 4%,  transparent);
   --scrim-line: color-mix(in srgb, var(--ink) 14%, transparent);
   --well: rgba(0,0,0,.05); --well-strong: rgba(0,0,0,.07);
-  --shadow-pop: 0 12px 32px rgba(15,20,25,.18);
+  --shadow-pop: 0 12px 32px rgba(27,25,19,.16);
+  --logo-accent: #3b82f6;   /* pinned: the logo is the same mark in both themes */
 }
 
 /* The only two rules that need a light-mode override rather than a token.
    Both fade text with opacity, which is not theme-neutral even though the CSS
    is: the same .45 that leaves 3.9:1 on the dark panel leaves 2.9:1 on white. */
 :root[data-theme="light"] .taf-p { opacity: .6; }
+:root[data-theme="light"] .tl-cell.night { opacity: .72; }
 :root[data-theme="light"] .chk.na { opacity: .62; }
 * { box-sizing: border-box; }
 /* overflow-x: clip (not hidden) stops sideways scroll without creating a scroll
    container - `hidden` would break the sticky header's freeze-on-scroll. */
 html { overflow-x: clip; }
 body {
-  margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  margin: 0; font-family: var(--f-ui);
   background: var(--bg); color: var(--ink); line-height: 1.45; overflow-x: clip;
 }
 header {
@@ -142,8 +216,8 @@ header p { margin: 4px 0 0; color: var(--muted); }
 /* Data time (frozen) + current Zulu clock (live), top-right of the header */
 .clock { text-align: right; font-variant-numeric: tabular-nums; }
 .clock-row { display: flex; justify-content: flex-end; gap: 8px; align-items: baseline; line-height: 1.5; }
-.clock-label { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
-.clock-val { font-size: .9rem; font-weight: 600; color: var(--ink); white-space: nowrap; }
+.clock-label { color: var(--muted); font-family: var(--f-cond); font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; }
+.clock-val { font-family: var(--f-mono); font-size: .88rem; font-weight: 500; color: var(--ink); white-space: nowrap; }
 .clock-val.live { color: var(--accent); }
 @media (max-width: 560px) {
   .clock-label { font-size: .62rem; }
@@ -185,8 +259,8 @@ header p { margin: 4px 0 0; color: var(--muted); }
 .aircraft { display: flex; flex-direction: column; gap: 4px; }
 .aircraft-row { display: flex; align-items: center; gap: 6px; }
 .aircraft-label {
-  color: var(--muted); font-size: .72rem; text-transform: uppercase;
-  letter-spacing: .04em; min-width: 56px;
+  color: var(--muted); font-family: var(--f-cond); font-size: .72rem;
+  text-transform: uppercase; letter-spacing: .1em; min-width: 56px;
 }
 .aircraft-sel, .aircraft-tas {
   background: var(--bg); color: var(--ink); border: 1px solid var(--line);
@@ -241,7 +315,8 @@ body > .panel {
   max-width: calc(var(--page) - 2 * var(--gutter));
   margin-block: var(--sp-4);
 }
-h2 { margin: 0 0 var(--sp-3); font-size: var(--fs-xl); }
+h2 { margin: 0 0 var(--sp-3); font-family: var(--f-cond); font-size: 1.15rem;
+     letter-spacing: .04em; text-transform: uppercase; }
 .hint { color: var(--muted); font-weight: 400; font-size: .85rem; }
 /* The "+1" day-rollover marker on a Zulu span ("2000Z-0300Z+1"). The only
    superscript the app renders, and it is written by one helper (`supDays`), so
@@ -269,12 +344,20 @@ select, input[type=text], .route-inputs input {
 .threats-label { font-size: .85rem; color: var(--muted); }
 #threats-list { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
 #threats-list label { color: var(--ink); margin: 0; }
-.tabs { display: flex; gap: 8px; }
+.tabs { display: flex; gap: 2px; }
+/* Tabs. The active one was a solid accent-filled rounded rectangle - the
+   single most generic control shape there is. A chart underlines the sheet you
+   are on; so does this. The label keeps its own weight, and the accent is
+   spent on a 2px rule rather than a 40x100px fill. */
 .tab {
-  background: transparent; color: var(--muted); border: none; padding: 8px 14px;
-  border-radius: var(--r-md); cursor: pointer; font-size: .95rem;
+  background: transparent; color: var(--muted); border: none;
+  border-bottom: 2px solid transparent; padding: 8px 12px;
+  border-radius: 0; cursor: pointer;
+  font-family: var(--f-cond); font-weight: 600; font-size: .88rem;
+  text-transform: uppercase; letter-spacing: .08em;
 }
-.tab.active { background: var(--accent); color: var(--on-accent); }
+.tab:hover { color: var(--ink); }
+.tab.active { color: var(--ink); border-bottom-color: var(--accent); }
 .tab-pane { max-width: var(--page); margin: 0 auto; padding: 0 var(--gutter); }
 /* One owner for the gaps between stacked blocks, instead of eleven different
    per-block margins. Block layout, not flex: several #route-* mounts are empty
@@ -296,7 +379,7 @@ select, input[type=text], .route-inputs input {
 /* Tabular numerals because it ticks ten times a second and proportional digits
    would make it jitter sideways while you watch it. */
 .run-timer {
-  color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums;
+  color: var(--muted); font-family: var(--f-mono); font-size: .8rem; font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -342,12 +425,35 @@ select, input[type=text], .route-inputs input {
 .card.MITIGATE { border-left-color: var(--mitigate); }
 .card.NOGO { border-left-color: var(--nogo); }
 .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-.card-head h3 { margin: 0; font-size: var(--fs-xl); }
-.badge { font-weight: 700; padding: 3px 10px; border-radius: var(--r-pill); font-size: .8rem; }
-.badge.GO { background: color-mix(in srgb, var(--go) 20%, transparent); color: var(--go-ink); }
-.badge.MITIGATE { background: color-mix(in srgb, var(--mitigate) 20%, transparent); color: var(--mit-ink); }
-.badge.NOGO { background: color-mix(in srgb, var(--nogo) 20%, transparent); color: var(--nogo-ink); }
+.card-head h3 { margin: 0; font-family: var(--f-cond); font-size: 1.08rem; letter-spacing: .01em; }
+/* A verdict box, and now the only pill-shaped thing in the app besides
+   .notam-status - which is also a state. The fill is gone: on a card that
+   already carries a verdict-coloured state bar, a filled badge was the third
+   time the same fact was stated. An outline is enough to make it an object. */
+.badge {
+  font-family: var(--f-cond); font-weight: 700; font-size: .76rem;
+  text-transform: uppercase; letter-spacing: .1em;
+  padding: 2px 9px; border: 1.5px solid var(--muted); border-radius: 0;
+  color: var(--ink); white-space: nowrap;
+}
+.badge.GO { border-color: var(--go); color: var(--go-ink); }
+.badge.MITIGATE { border-color: var(--mitigate); color: var(--mit-ink); }
+.badge.NOGO { border-color: var(--nogo); color: var(--nogo-ink); }
 .meta { color: var(--muted); font-size: .85rem; margin: 6px 0; display: flex; gap: 14px; flex-wrap: wrap; }
+/* The label that replaced the emoji on a meta line. Every fact on these lines
+   used to open with a pictograph - a puff of wind, an eye, a departing jet -
+   which named the quantity in a vocabulary that has nothing to do with
+   aviation and rendered at whatever size and colour the platform felt like.
+   A chart names its quantities in condensed caps, so this does. It is a
+   label, never the value: it stays --muted while the number takes --ink. */
+.mk {
+  font-family: var(--f-cond); font-weight: 600; font-size: var(--fs-2xs);
+  text-transform: uppercase; letter-spacing: .1em; color: var(--muted);
+  margin-right: 5px;
+}
+/* On a line that is already --muted, the label has to step back further still
+   or it competes with the number it introduces. */
+.meta .mk { opacity: .85; }
 .reasons { margin: 4px 0 0; padding-left: 18px; font-size: .86rem; }
 .reasons li { margin: 2px 0; }
 
@@ -368,11 +474,11 @@ select, input[type=text], .route-inputs input {
    the pilot would go and check. */
 .why-src { font-size: .76rem; color: var(--muted); margin-top: 1px; }
 .why-raw {
-  font-family: ui-monospace, monospace; font-size: .72rem; color: var(--muted);
+  font-family: var(--f-mono); font-size: .72rem; color: var(--muted);
   margin-top: 5px; padding-left: 18px; word-break: break-word; opacity: .85;
 }
 .why-raw-tag { font-family: var(--font, inherit); font-style: italic; margin-right: 6px; }
-.raw { color: var(--muted); font-family: ui-monospace, monospace; font-size: .76rem; margin-top: 8px; word-break: break-word; }
+.raw { color: var(--muted); font-family: var(--f-mono); font-size: .76rem; margin-top: 8px; word-break: break-word; }
 .ok-line { color: var(--go-ink); font-size: .9rem; margin: 6px 0; }
 .meta .warn { color: var(--nogo-ink); }
 .control.checkbox { flex-direction: row; align-items: center; gap: 6px; }
@@ -405,14 +511,18 @@ select, input[type=text], .route-inputs input {
    rows, a limit that wrapped to two lines made row 1 tall and stranded the
    sub-line halfway down the row, away from the number it belongs to. */
 .chk .val { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.chk .act { color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: break-word; }
-.chk .lim { color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.chk .act { color: var(--muted); font-family: var(--f-mono); font-variant-numeric: tabular-nums; overflow-wrap: break-word; }
+.chk .lim { color: var(--muted); font-family: var(--f-mono); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 /* Provenance, under the value it annotates rather than crammed into the same
    line - which is what made the value column's content swing by 30 characters
    row to row, and what kept the limit column ragged. */
-.chk .sub { color: var(--muted); font-size: var(--fs-xs); }
+.chk .sub { color: var(--muted); font-family: var(--f-cond); font-size: var(--fs-xs);
+  text-transform: uppercase; letter-spacing: .05em; }
 .chk.pass { border-left-color: var(--go); } .chk.pass .mark { color: var(--go-ink); }
-.chk.fail { border-left-color: var(--nogo); background: color-mix(in srgb, var(--nogo) 10%, transparent); } .chk.fail .mark { color: var(--nogo-ink); }
+/* No wash on a failing row. The bar, the mark and the bold red value already
+   say it three times; a fourth was what made a page of results read as a
+   heat map rather than a table you scan down. */
+.chk.fail { border-left-color: var(--nogo); } .chk.fail .mark { color: var(--nogo-ink); }
 .chk.advisory { border-left-color: var(--mitigate); } .chk.advisory .mark { color: var(--mit-ink); }
 .chk.na { opacity: .5; }
 .chk a { color: var(--accent); }
@@ -438,25 +548,42 @@ select, input[type=text], .route-inputs input {
 .notam a { color: var(--accent); font-weight: 700; margin-right: 6px; white-space: nowrap; }
 .notam-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
 .notam-text { white-space: pre-wrap; }
-.notam-status { font-size: var(--fs-2xs); font-weight: 700; padding: 1px 7px; border-radius: var(--r-pill);
-  text-transform: uppercase; letter-spacing: .03em; }
-.notam-status.active { background: color-mix(in srgb, var(--go) 18%, transparent); color: var(--go-ink); border: 1px solid var(--go); }
-.notam-status.upcoming { background: color-mix(in srgb, var(--mitigate) 15%, transparent); color: var(--mit-ink); border: 1px solid var(--mitigate); }
-.notam-status.expired { background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); border: 1px solid var(--line); }
+/* The second and last box. Same reasoning as .badge: a NOTAM being live or
+   lapsed is a state, so it keeps an object's outline - without the fill. */
+.notam-status { font-family: var(--f-cond); font-size: var(--fs-2xs); font-weight: 700;
+  padding: 1px 7px; border-radius: 0; text-transform: uppercase; letter-spacing: .1em; }
+.notam-status.active { color: var(--go-ink); border: 1px solid var(--go); }
+.notam-status.upcoming { color: var(--mit-ink); border: 1px solid var(--mitigate); }
+.notam-status.expired { color: var(--muted); border: 1px solid var(--line); }
 .notam-when { font-size: .72rem; color: var(--muted); }
 
-/* source chips */
-.src { font-size: var(--fs-2xs); padding: 1px 6px; border-radius: var(--r-pill); border: 1px solid var(--line); }
-.blend { font-size: .66rem; padding: 1px 6px; border-radius: var(--r-pill); border: 1px solid var(--accent);
-  color: var(--taf-ink); margin-left: 4px; cursor: help; }
-.src.OBSERVED { color: var(--go-ink); border-color: var(--go); }
-.src.TAF { color: var(--taf-ink); border-color: var(--accent); }
-.src.HRDPS { color: var(--mit-ink); border-color: var(--mitigate); }
+/* Source labels. These were pills - a tinted fill, a coloured border and a
+   999px radius, the exact shape .badge uses for a VERDICT. A provenance label
+   is a footnote on a number, not a control and not a state, so it is set as
+   one: condensed caps, tracked, colour-coded, and closed with a short rule in
+   its own colour the way a chart annotates a symbol. No box. */
+.src {
+  font-family: var(--f-cond); font-weight: 600; font-size: var(--fs-2xs);
+  letter-spacing: .1em; color: var(--muted); white-space: nowrap;
+}
+.src::after {
+  content: ""; display: inline-block; width: 11px; height: 1px;
+  background: currentColor; margin: 0 0 .22em 5px; vertical-align: middle;
+  opacity: .8;
+}
+.blend {
+  font-family: var(--f-cond); font-weight: 600; font-size: .66rem;
+  letter-spacing: .08em; color: var(--taf-ink); margin-left: 6px; cursor: help;
+}
+.src.OBSERVED { color: var(--go-ink); }
+.src.TAF { color: var(--taf-ink); }
+.src.HRDPS { color: var(--mit-ink); }
 
 /* A chip you can open. Same pill as the plain one - it must still read as a
    provenance label first - with a caret to say there is more behind it. */
 button.src-pop {
   font: inherit; font-size: var(--fs-2xs); background: transparent; cursor: pointer;
+  border: 0; color: inherit;
   display: inline-flex; align-items: center; gap: 3px;
   /* Fingers are wider than 12px of chip. Padding grows the hit area without
      growing the pill, so a phone can hit it without magnifying the row. */
@@ -492,7 +619,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
   gap: 6px; padding: 3px 5px; border-radius: var(--r-sm); align-items: baseline;
   font-variant-numeric: tabular-nums;
 }
-.wx-h-hd { color: var(--muted); font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: .04em; }
+.wx-h-hd { color: var(--muted); font-family: var(--f-cond); font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: .1em; }
 .wx-h.in { background: color-mix(in srgb, var(--go) 16%, transparent); border-left: 3px solid var(--go); padding-left: 5px; }
 .wx-h.in span { color: var(--go-ink); }
 .wx-h-x { color: var(--muted); }
@@ -520,32 +647,69 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 }
 
 /* The ETD this card was assessed for, beside the aerodrome it applies to. */
+/* The ETD this card was assessed for. Was an outlined pill; it is a timing
+   note on a heading, so it is set as one - mono, because it is a clock time. */
 .planned-etd {
-  margin-left: 8px; font-size: .74rem; font-weight: 600; white-space: nowrap;
-  color: var(--taf-ink); border: 1px solid var(--accent); border-radius: var(--r-pill);
-  padding: 1px 8px; vertical-align: middle;
+  margin-left: 10px; font-family: var(--f-mono); font-size: .74rem; font-weight: 500;
+  white-space: nowrap; color: var(--taf-ink); vertical-align: middle;
 }
 .planned-etd .pe-arrow { opacity: .7; }
 
 /* big route verdict banner. No max-width of its own: it only ever renders inside
    a .tab-pane, which already constrains and gutters it. */
-.verdict-banner { padding: var(--pad-y) var(--pad-x-hair); border-radius: var(--r-lg); font-weight: 700; }
-.verdict-banner.GO { background: color-mix(in srgb, var(--go) 18%, transparent); border: 1px solid var(--go); color: var(--go-ink); }
-.verdict-banner.MITIGATE { background: color-mix(in srgb, var(--mitigate) 18%, transparent); border: 1px solid var(--mitigate); color: var(--mit-ink); }
-.verdict-banner.NOGO { background: color-mix(in srgb, var(--nogo) 18%, transparent); border: 1px solid var(--nogo); color: var(--nogo-ink); }
-.verdict-banner small { display: block; font-weight: 400; color: var(--muted); margin-top: 4px; }
+/* The headline verdict. It used to be a tinted slab with a full border and
+   verdict-coloured text - the same fact in three channels, and the loudest
+   rectangle on the page competing with the card bars below it. Now it is a
+   chart heading: a heavy rule above in the verdict colour, a hairline below,
+   the line itself in --ink, and only the verdict WORD carrying the colour
+   (app.js wraps it in .vb-state). Two channels: the rule, and the word. */
+.verdict-banner {
+  padding: var(--sp-2) 0; border-radius: 0; font-family: var(--f-cond);
+  font-weight: 700; font-size: 1.15rem; letter-spacing: .02em;
+  text-transform: uppercase; color: var(--ink);
+  border-top: 2px solid var(--muted); border-bottom: 1px solid var(--line);
+}
+.verdict-banner.GO { border-top-color: var(--go); }
+.verdict-banner.MITIGATE { border-top-color: var(--mitigate); }
+.verdict-banner.NOGO { border-top-color: var(--nogo); }
+.verdict-banner.GO .vb-state { color: var(--go-ink); }
+.verdict-banner.MITIGATE .vb-state { color: var(--mit-ink); }
+.verdict-banner.NOGO .vb-state { color: var(--nogo-ink); }
+/* The sub-line is prose, so it drops back to the prose face and case. */
+.verdict-banner small {
+  display: block; font-family: var(--f-ui); font-weight: 400; font-size: .82rem;
+  letter-spacing: 0; text-transform: none; color: var(--muted); margin-top: 5px;
+}
 
 /* timeline */
 /* Like .verdict-banner: inside a .tab-pane already, so no width of its own. */
 .timeline-wrap { margin: 0; }
 .timeline-wrap h3 { margin: 0 0 var(--sp-2); font-size: 1rem; }
-.tl-day { font-size: .8rem; color: var(--muted); margin: 10px 0 4px; }
-.tl-row { display: flex; flex-wrap: wrap; gap: 3px; }
-.tl-cell {
-  width: 30px; height: 40px; border-radius: 4px; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; font-size: .62rem; cursor: pointer;
-  border: 1px solid transparent;
+.tl-day { font-family: var(--f-cond); font-size: .8rem; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted); margin: 12px 0 5px; }
+/* The hour strip. It was twelve to twenty-four separate rounded tiles with a
+   3px gap - a row of buttons. It reads as a time SCALE, so it is drawn as one:
+   the cells butt together inside a single ruled box and are divided by
+   hairlines, which is also what lets the eye see a run of good hours as one
+   block rather than counting tiles. width:max-content keeps the box tight to
+   the hours it actually holds instead of stretching across the pane. */
+.tl-row {
+  display: flex; flex-wrap: wrap;
+  width: max-content; max-width: 100%;
+  border: 1px solid var(--line);
+  /* The strip sits in a data box, not on the ground. Both themes' verdict
+     washes are mixed with transparent and composite against whatever is
+     behind them, and against the buff --bg the amber of a MITIGATE hour
+     landed only a few steps off the page itself. On --panel all three read
+     at full strength, in both themes, with no light-specific override. */
+  background: var(--panel);
 }
+.tl-cell {
+  width: 32px; height: 40px; border-radius: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; font-size: .62rem; cursor: pointer;
+  border: 0; border-right: 1px solid var(--line);
+}
+.tl-cell:last-child { border-right: 0; }
 .tl-cell.GO { background: color-mix(in srgb, var(--go) 35%, transparent); }
 .tl-cell.MITIGATE { background: color-mix(in srgb, var(--mitigate) 35%, transparent); }
 .tl-cell.NOGO { background: color-mix(in srgb, var(--nogo) 35%, transparent); }
@@ -555,9 +719,11 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
    amber as the TAF strip's PROB edge, and it means the same thing there: only a
    chance, shown but never counted against your limits. */
 .tl-cell.prob { background-image: linear-gradient(to right, var(--mitigate) 0 3px, transparent 3px); }
-.tl-cell.best { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink) inset; }
+/* The best window. A full white outline made this cell a button among tiles;
+   an underscore in the accent marks it the way a chart underlines a datum. */
+.tl-cell.best { box-shadow: inset 0 -4px 0 var(--accent); }
 .tl-cell.active { outline: 2px solid var(--accent); outline-offset: 1px; }
-.tl-hour { font-weight: 700; }
+.tl-hour { font-family: var(--f-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
 .tl-wx { font-size: .7rem; line-height: 1; margin-top: 1px; }
 .tl-detail {
   margin-top: 8px; padding: 10px 12px; border-radius: var(--r-md);
@@ -588,8 +754,13 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
   margin: 6px 0 0; padding-left: 18px; font-size: .84rem; color: var(--muted);
 }
 .etd-option .nudge-gains li { margin: 2px 0; }
-.legend { font-size: .78rem; color: var(--muted); margin: 8px 0; display: flex; gap: 14px; flex-wrap: wrap; }
-.legend span::before { content: "■ "; }
+.legend { font-family: var(--f-cond); font-size: .74rem; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted); margin: 10px 0;
+  display: flex; gap: 16px; flex-wrap: wrap; }
+/* Only the three verdicts get a swatch. The base rule used to put one on every
+   span in the legend, which gave the trailing "all times Zulu / dimmed =
+   night" note a grey square that read as a fourth state. */
+.legend .go::before, .legend .mit::before, .legend .nogo::before { content: "■ "; }
 .legend .go::before { color: var(--go); } .legend .mit::before { color: var(--mitigate); } .legend .nogo::before { color: var(--nogo); }
 
 /* Day/Night segmented control */
@@ -622,7 +793,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
    rather than scrolled: a TAF is several lines of fixed-width groups, and on a
    phone a horizontal scrollbar would hide the half that matters. */
 .wx-raw {
-  margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 0; font-family: var(--f-mono);
   font-size: .78rem; line-height: 1.5; color: var(--ink);
   white-space: pre-wrap; word-break: break-word;
 }
@@ -672,34 +843,38 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .wr-ah-cross-nogo { fill: var(--nogo); }
 .wr-legend { fill: var(--muted); font-family: system-ui, sans-serif; }
 @media (max-width: 480px) { .rwy-wrap { flex-direction: column; gap: 6px; } }
-.ppr { font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
-  color: var(--mit-ink); border: 1px solid var(--mitigate); border-radius: var(--r-pill); padding: 1px 7px; vertical-align: middle; }
+/* Prior permission required. A condition of the aerodrome, not a verdict - so
+   it annotates the ident rather than wearing the verdict's box. */
+.ppr { font-family: var(--f-cond); font-size: .68rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .1em;
+  color: var(--mit-ink); margin-left: 6px; vertical-align: middle; }
 .nearby { margin: 6px 0; font-size: .84rem; color: var(--ink); background: var(--scrim-soft);
   border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px; }
-.nearby .nlabel { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; }
+.nearby .nlabel { color: var(--muted); font-family: var(--f-cond); font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; }
 /* The neighbour's TAF gets the same green highlight as your own field's, which
    would otherwise read as "this counts". It doesn't. */
 .nearby-caveat { margin-top: 4px; font-style: italic; }
 .advisories { font-size: .84rem; }
 .advisories summary { cursor: pointer; font-weight: 600; }
 .adv { margin: 6px 0; padding: 6px 8px; background: color-mix(in srgb, var(--mitigate) 8%, transparent); border-left: 3px solid var(--mitigate);
-  border-radius: var(--r-sm); font-family: ui-monospace, monospace; font-size: .78rem; word-break: break-word; }
+  border-radius: var(--r-sm); font-family: var(--f-mono); font-size: .78rem; word-break: break-word; }
 .adv-k { font-weight: 700; color: var(--mit-ink); margin-right: 6px; }
 .adv > summary { cursor: pointer; list-style: revert; }
 .adv-text { margin: 6px 0 4px; padding: 8px; white-space: pre-wrap; word-break: break-word;
-  font-family: ui-monospace, monospace; font-size: .76rem; background: var(--well); border-radius: var(--r-sm); }
+  font-family: var(--f-mono); font-size: .76rem; background: var(--well); border-radius: var(--r-sm); }
 .adv-src { font-size: .74rem; color: var(--accent); text-decoration: none; }
 .adv-src:hover { text-decoration: underline; }
 .adv-none { color: var(--muted); font-size: .84rem; }
 /* Altitude band, distance off track and expiry - the three facts that decide
    whether a bulletin is yours, on the collapsed line so you need not open it. */
-.adv-chip { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: var(--r-pill);
-  background: var(--scrim); border: 1px solid var(--line); color: var(--muted);
-  font-family: system-ui, sans-serif; font-size: var(--fs-2xs); white-space: nowrap; }
+/* Altitude band, distance off track and expiry. Three facts on a collapsed
+   summary line - so they are set as data (mono, tracked apart), not boxed. */
+.adv-chip { display: inline-block; margin-left: 12px; color: var(--muted);
+  font-family: var(--f-mono); font-size: var(--fs-2xs); white-space: nowrap; }
 /* Expiry, in the one place it matters: green while the bulletin is actually
    running, faded once it has lapsed. Same green as .age.fresh - a live product
    and a fresh report are the same reassurance, so they read the same. */
-.adv-chip.live { color: var(--fresh); border-color: color-mix(in srgb, var(--fresh) 40%, transparent); background: color-mix(in srgb, var(--fresh) 10%, transparent); }
+.adv-chip.live { color: var(--fresh); font-weight: 500; }
 .adv-chip.expired { opacity: .6; }
 /* Fetched but set aside. Muted, and never with the amber bar - these are not
    warnings, they are the proof that something was looked at. */
@@ -707,11 +882,12 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .adv-aside > summary { cursor: pointer; color: var(--muted); }
 .adv-aside .adv { background: var(--scrim-soft); border-left-color: var(--line); opacity: .85; }
 .adv-aside .adv-k { color: var(--muted); }
-.trends { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: var(--r-sm); }
-.trends-h { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
+.trends { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--taf-ink);
+  background: color-mix(in srgb, var(--taf-ink) 8%, transparent); border-radius: var(--r-sm); }
+.trends-h { font-family: var(--f-cond); font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin-bottom: 4px; }
 .trend { font-size: .86rem; margin: 2px 0; }
-details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; }
-.age { font-size: .72rem; color: var(--muted); white-space: nowrap; }
+details.trends summary { cursor: pointer; color: var(--accent); font-family: var(--f-cond); font-size: .8rem; text-transform: uppercase; letter-spacing: .1em; }
+.age { font-family: var(--f-mono); font-size: .72rem; color: var(--muted); white-space: nowrap; }
 /* Upstream did not answer - distinct from "nothing is trending", which renders
    nothing at all. */
 .trends-na { margin: 8px 0; padding: 6px 10px; font-size: .8rem; color: var(--muted);
@@ -732,7 +908,7 @@ details.trends summary { cursor: pointer; color: var(--accent); font-size: .8rem
 .fetch-fail .reasons { margin: 6px 0 0; font-size: .86rem; }
 .fetch-detail { margin-top: 6px; font-size: .8rem; }
 .fetch-detail > summary { cursor: pointer; color: var(--muted); }
-.fetch-fail-detail { color: var(--muted); font-family: ui-monospace, monospace; font-size: .8rem; }
+.fetch-fail-detail { color: var(--muted); font-family: var(--f-mono); font-size: .8rem; }
 .fetch-retry {
   margin-top: 10px; padding: 8px 14px; border-radius: var(--r-md); cursor: pointer;
   border: 1px solid var(--nogo); background: var(--nogo); color: var(--on-accent);
@@ -789,8 +965,12 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .logo { display: block; height: 44px; width: auto; overflow: visible; }
 .logo-word { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; font-size: 38px; font-weight: 700; fill: var(--ink); }
 .logo-bar { stroke: var(--muted); stroke-width: 2; fill: none; }
-.logo-climb { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; fill: none; }
-.logo-arrowhead { fill: var(--accent); }
+/* The logo keeps the blue it was drawn with, in both themes: --logo-accent is
+   pinned to #3b82f6 in each token block rather than following --accent. The
+   mark, its wordmark face, its bar and its dashed climb-out are all unchanged.
+   To make it follow the palette instead, point these two at var(--accent). */
+.logo-climb { stroke: var(--logo-accent); stroke-width: 2; stroke-dasharray: 6 4; fill: none; }
+.logo-arrowhead { fill: var(--logo-accent); }
 
 /* Secondary button */
 .secondary {
@@ -942,7 +1122,7 @@ details.taf { margin: 8px 0 0; font-size: .8rem; }
 details.taf summary { cursor: pointer; color: var(--accent); }
 .taf-p {
   display: grid; grid-template-columns: 62px 104px 1fr; gap: 8px;
-  padding: 2px 6px; font-family: ui-monospace, monospace; font-size: .76rem;
+  padding: 2px 6px; font-family: var(--f-mono); font-size: .76rem;
   border-left: 3px solid transparent; opacity: .45;
 }
 /* Anything you fly through is green - whatever kind of group it is. */
