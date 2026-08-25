@@ -3012,6 +3012,11 @@ const TOPS_TITLE =
   + "down, and to about a thousand above 10,000 ft where the levels are 2,000 ft apart. "
   + "Treat it as a planning figure and confirm it against a PIREP or the GFA.";
 
+const TOPS_PIREP_TITLE =
+  "Reported by a pilot who flew through it - an observation, not a forecast. It "
+  + "describes the deck where and when it was filed, which is not necessarily the "
+  + "deck you will meet.";
+
 const TOPS_RH_TITLE =
   " This one came from the humidity profile rather than from cloud cover, because the "
   + "model served no per-level cover here - weaker again, since air ceasing to be "
@@ -3026,9 +3031,22 @@ function topsSpan(r) {
     return `<span title="The pressure levels this app samples stop near ${lim} MSL, and the deck was still broken at the top of the scan. The tops are higher than that - which is not the same as unknown, and not the same as known-but-out-of-reach."><span class="mk">Tops</span> above ${lim} MSL</span>`;
   }
   if (r.enroute_tops_msl_ft == null) return "";
+  const pirep = r.enroute_tops_source === "PIREP";
   const where = r.enroute_tops_at ? ` <span class="hint">${escapeHtml(r.enroute_tops_at)}</span>` : "";
-  const title = TOPS_TITLE + (r.enroute_tops_from_rh ? TOPS_RH_TITLE : "");
-  return `<span title="${escapeHtml(title)}"><span class="mk">Tops</span> ~${fmtTops(r.enroute_tops_msl_ft)} MSL <span class="src-model">model estimate</span>${where}</span>`;
+  // A pilot who flew through it gets no "~" and no rounding apology: it is an
+  // observation. The model figure is an inference from a humidity profile, and no
+  // amount of interpolation makes it the same kind of thing.
+  const chip = pirep
+    ? `<span class="src-pirep">PIREP</span>${pirepAgeChip(r.enroute_tops_valid_from) || ""}`
+    : `<span class="src-model">model estimate</span>`;
+  const title = pirep ? TOPS_PIREP_TITLE
+                      : TOPS_TITLE + (r.enroute_tops_from_rh ? TOPS_RH_TITLE : "");
+  const main = `<span title="${escapeHtml(title)}"><span class="mk">Tops</span> ${pirep ? "" : "~"}${fmtTops(r.enroute_tops_msl_ft)} MSL ${chip}${where}</span>`;
+  // Both sources answered and they do not agree. Neither is hidden and they are
+  // never averaged - the mean of two heights is a third one nobody reported.
+  if (r.enroute_tops_model_ft == null) return main;
+  const gap = Math.abs(r.enroute_tops_model_ft - r.enroute_tops_msl_ft);
+  return main + `<span class="warn" title="One pilot flew it and the model derived it, and they are ${fmtTops(gap)} apart - which usually means one of them is describing a deck the other never saw. The altitude recommendation plans against the higher of the two.">model estimate ~${fmtTops(r.enroute_tops_model_ft)} - ${fmtTops(gap)} apart</span>`;
 }
 function ceilChip(w) {
   if (w.ceiling_agl_ft != null) return `<span><span class="mk">Ceiling</span> ${fmtCeil(w.ceiling_agl_ft)}</span>`;

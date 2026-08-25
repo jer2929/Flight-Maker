@@ -99,6 +99,14 @@ class AreaHazard:
     top_ft: Optional[float] = None
     valid_from: Optional[str] = None      # ISO8601 Z
     valid_to: Optional[str] = None
+    # A cloud top a PIREP actually reported, ft **MSL**, and the coverage of the
+    # layer it belongs to. Deliberately NOT folded into ``top_ft`` above: that is
+    # the top of the altitude BAND this advisory speaks for, and conflating the two
+    # would make a report of tops at 5,500 ft look like an advisory that expires at
+    # 5,500 ft.
+    cloud_top_ft: Optional[float] = None
+    cloud_top_cover: Optional[str] = None       # SCT | BKN | OVC | ...
+    cloud_base_ft: Optional[float] = None
     geometry: list[Point] = field(default_factory=list)   # 1 point = PIREP
     # Filled by ``filter_relevant``.
     relevant: bool = True
@@ -206,8 +214,67 @@ def from_cfps_item(alpha: str, item: dict, *, now: Optional[datetime] = None,
         product_id=(f"{pid.group(1)} {pid.group(2)} "
                     f"{pid.group(3).replace(' ', '')}" if pid else None),
         fir=fir, base_ft=base, top_ft=top,
+        **_cloud_layer(text if kind == "PIREP" else ""),
         valid_from=v_from, valid_to=v_to, geometry=geom,
     )
+
+
+def _awc_cloud_layer(props: dict) -> dict:
+    """The cloud layer AWC already decoded for us, in ``AreaHazard`` keywords.
+
+    Worth preferring over the raw text when it is there: it is the same reading,
+    made by the people who publish the report, and it does not depend on this
+    module's ``/SK`` regex being right about a form nobody anticipated. Returns an
+    empty dict when the keys are absent, which is the signal to fall back.
+
+    ``cloudBas``/``cloudTop`` are hundreds of feet, like the ``/SK`` groups.
+    """
+    best: Optional[tuple[float, Optional[str], Optional[float]]] = None
+    solid_seen = False
+    for cvg_k, bas_k, top_k in _PIREP_CLOUD_LAYERS:
+        top = props.get(top_k)
+        if top in (None, ""):
+            continue
+        try:
+            top_ft = float(top) * 100.0
+        except (TypeError, ValueError):
+            continue
+        cover = (str(props.get(cvg_k)).upper() or None) if props.get(cvg_k) else None
+        base = props.get(bas_k)
+        try:
+            base_ft = float(base) * 100.0 if base not in (None, "") else None
+        except (TypeError, ValueError):
+            base_ft = None
+        solid = cover in area_products.SOLID_COVER
+        # A broken/overcast layer beats any scattered one; among equals, the
+        # highest wins. Same rule as the text path, so the two agree.
+        if best is None or (solid and not solid_seen) or \
+                (solid == solid_seen and top_ft > best[0]):
+            best, solid_seen = (top_ft, cover, base_ft), solid
+    if best is None:
+        return {}
+    return {"cloud_top_ft": best[0], "cloud_top_cover": best[1],
+            "cloud_base_ft": best[2]}
+
+
+def _cloud_layer(text: str) -> dict:
+    """The cloud layer a PIREP reported, as ``AreaHazard`` keyword arguments.
+
+    The highest BROKEN or OVERCAST layer, because that is the one an aeroplane has
+    to climb above; a scattered top is a top you were never under. Falls back to
+    the highest layer of any coverage so the figure is still shown when a report
+    names only a scattered deck - the coverage travels with it, and the caller
+    decides whether it is worth planning against.
+    """
+    if not text:
+        return {}
+    layers = area_products.parse_pirep_tops(text)
+    if not layers:
+        return {}
+    solid = [lyr for lyr in layers if lyr["cover"] in area_products.SOLID_COVER]
+    best = max(solid or layers, key=lambda lyr: lyr["top_ft"])
+    return {"cloud_top_ft": best["top_ft"], "cloud_top_cover": best["cover"],
+            "cloud_base_ft": best["base_ft"]}
 
 
 def _band_for(kind: str, text: str, up: str) -> tuple[float, float]:
@@ -280,6 +347,20 @@ _AWC_KINDS = {"isigmet": "SIGMET", "airsigmet": "SIGMET", "gairmet": "G-AIRMET",
 _RAW_KEYS = ("rawAirSigmet", "rawSigmet", "rawAirep", "rawOb", "raw", "rawText")
 _BASE_KEYS = ("base", "altitudeLow1", "altitudeLow2", "lowerAltitude", "altLow")
 _TOP_KEYS = ("top", "altitudeHi1", "altitudeHi2", "upperAltitude", "altHi")
+# Decoded cloud layers, PIREP only. The AWC PIREP product carries coverage plus a
+# base and a top per layer, in HUNDREDS of feet - the same units as the ``/SK``
+# field they were decoded from, and NOT the units ``_alt`` deals with, so these
+# deliberately do not join ``_BASE_KEYS``/``_TOP_KEYS``.
+#
+# Confirmed against the PIREP product's JSON schema. This app requests
+# ``format=geojson`` and whether the same keys survive into each feature's
+# ``properties`` has not been verified against a live response - see
+# ``scripts/probe_awc_pireps.py``. If they do not, nothing breaks: the raw-text
+# fallback reads the ``/SK`` field the keys were decoded from, which is the thing
+# the pilot actually filed.
+_PIREP_CLOUD_LAYERS = (("cloudCvg1", "cloudBas1", "cloudTop1"),
+                       ("cloudCvg2", "cloudBas2", "cloudTop2"))
+
 _FROM_KEYS = ("validTimeFrom", "validTime", "issueTime", "obsTime", "receiptTime")
 _TO_KEYS = ("validTimeTo", "expireTime", "validTime")
 
@@ -380,6 +461,7 @@ def from_awc_feature(product: str, feature: dict) -> Optional[AreaHazard]:
         product_id=(f"{pid.group(1)} {pid.group(2)} "
                     f"{pid.group(3).replace(' ', '')}" if pid else None),
         fir=(str(fir).upper() if fir else None), base_ft=base, top_ft=top,
+        **(_awc_cloud_layer(props) or _cloud_layer(text if kind == "PIREP" else "")),
         valid_from=_epoch_iso(_first(props, _FROM_KEYS)),
         valid_to=_epoch_iso(_first(props, _TO_KEYS)),
         geometry=geom,
@@ -453,6 +535,16 @@ def _merge(a: AreaHazard, b: AreaHazard) -> AreaHazard:
         fir=keep.fir or other.fir,
         base_ft=keep.base_ft if keep.base_ft is not None else other.base_ft,
         top_ft=keep.top_ft if keep.top_ft is not None else other.top_ft,
+        # Whichever half actually read a cloud layer. This line matters more than
+        # it looks: CFPS wins the wording above, and the AWC half is usually the
+        # one carrying the DECODED top - so without it dedupe quietly throws the
+        # tops away and the feature looks intermittently broken.
+        cloud_top_ft=(keep.cloud_top_ft if keep.cloud_top_ft is not None
+                      else other.cloud_top_ft),
+        cloud_top_cover=(keep.cloud_top_cover if keep.cloud_top_ft is not None
+                         else other.cloud_top_cover),
+        cloud_base_ft=(keep.cloud_base_ft if keep.cloud_top_ft is not None
+                       else other.cloud_base_ft),
         valid_from=_earlier(a.valid_from, b.valid_from),
         valid_to=_later(a.valid_to, b.valid_to),
         geometry=geom,

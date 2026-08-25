@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # outside it is dropped outright rather than shown faint, because a report
     # from the far side of the country is not a near miss.
     pirep_corridor_nm: float = 50.0
+    # How long a PIREP's cloud TOPS are worth reading. Tighter than
+    # ``pirep_max_age_hr`` on purpose: a turbulence report describes an air mass
+    # that persists, but a cloud top is a height, and two hours of daytime heating
+    # can lift a stratocumulus deck a couple of thousand feet. This can only ever
+    # narrow the general PIREP gate, never widen it - a report reaching this test
+    # has already passed that one.
+    pirep_tops_max_age_hr: int = 2
 
     # Route timeline horizon (hours)
     timeline_hours: int = 48

@@ -33,6 +33,8 @@ from app.models import (
 )
 from app.services import airmass
 from app.services import area_hazards as ah
+from dataclasses import replace
+
 from app.services import area_products
 from app.services import cfs_links, geometry, hazards as hz
 from app.services import density
@@ -1819,6 +1821,13 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         + [(e, lbl) for e, lbl in zip(enroute, point_labels[1:-1])]
         + [({"ceiling_ft": dest_a.weather.ceiling_agl_ft, **_tops_at(dest_fc, eta_utc)},
             point_labels[-1])])
+    # A pilot who flew through it beats a model that inferred it. Never averaged:
+    # a top is a height, and the mean of two heights is a third one nobody
+    # reported. See ``_apply_tops_pirep`` for what happens when they disagree.
+    _apply_tops_pirep(route_tops,
+                      _tops_pirep(raw_hazards, route_pts, etd_utc, eta_utc, now,
+                                  settings),
+                      dep, dest)
     enroute_vis = min([v for v in vis_points if v is not None], default=None)
     # Lowering ceilings: from the model trend OR observed in recent METAR
     # history. Each source keeps hold of *which* field it saw it at and what the
@@ -2176,8 +2185,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         enroute_ceiling_ft=enroute_ceiling, enroute_visibility_sm=enroute_vis,
         enroute_tops_msl_ft=route_tops["tops_msl_ft"],
         enroute_tops_state=route_tops["state"],
-        enroute_tops_source="model" if route_tops["state"] == "known" else None,
+        enroute_tops_source=route_tops["source"],
         enroute_tops_at=route_tops["at"],
+        enroute_tops_valid_from=route_tops["valid_from"],
+        enroute_tops_model_ft=route_tops["model_msl_ft"],
         enroute_tops_scan_msl_ft=route_tops["scan_msl_ft"],
         enroute_tops_from_rh=route_tops["from_rh"],
         cloud_at_cruise=cloud_at_cruise,
@@ -2479,6 +2490,110 @@ async def suggest(
     return results
 
 
+# Two tops readings this far apart are not the same deck seen twice - one of them
+# is about cloud the other never saw. Inside it, both answers put the aeroplane at
+# the same cruising level, so the disagreement has no consequence and printing it
+# is noise. Past it, both are shown and the altitude gate takes the higher.
+TOPS_DISAGREE_FT = 2000.0
+
+
+def _apply_tops_pirep(route_tops: dict, pirep, dep, dest) -> None:
+    """Fold a reported top into the model's, in place. Never averages them.
+
+    Precedence, in order:
+
+    * A qualifying PIREP is the headline. It is an observation; the model figure
+      is an inference from a humidity profile, and no amount of interpolation
+      makes it the same kind of thing.
+    * Where the two disagree by more than ``TOPS_DISAGREE_FT``, BOTH are kept and
+      the card prints both. Hiding one would mean one of them saw a different deck
+      and the pilot never found out.
+    * ``planning_msl_ft`` - what the altitude pick uses - is then the HIGHER of the
+      two. Being higher than strictly necessary costs a little wind; being lower
+      means telling a pilot they are on top from inside cloud.
+    """
+    model = route_tops.get("tops_msl_ft")
+    route_tops["planning_msl_ft"] = model
+    route_tops["model_msl_ft"] = None
+    if pirep is None or pirep.cloud_top_ft is None:
+        return
+    reported = pirep.cloud_top_ft
+    route_tops.update(
+        tops_msl_ft=reported, state="known", source="PIREP",
+        at=_pirep_where(pirep, dep, dest), valid_from=pirep.valid_from,
+        from_rh=False,
+        planning_msl_ft=max(reported, model) if model is not None else reported)
+    if model is not None and abs(model - reported) > TOPS_DISAGREE_FT:
+        route_tops["model_msl_ft"] = model
+
+
+# The highest slab ``filter_relevant`` can ever be asked for: the 12,500 ft
+# candidate cap plus the 2,000 ft allowance the hazard filter adds. Filtering the
+# tops pass against a constant is what keeps it OUT of the cruise-altitude loop -
+# the altitude pick wants a tops figure, and the hazard slab wants the altitude.
+# Because this is a superset of the real slab, the two passes can never disagree
+# about a PIREP the pilot is shown.
+_TOPS_BAND_HIGH_FT = 14500.0
+
+
+def _tops_pirep(raw: list, path: list, etd, eta, now, settings):
+    """The freshest in-corridor PIREP that reported a solid cloud top, or None.
+
+    Runs the same ``filter_relevant`` the card uses rather than re-implementing the
+    corridor and the age test, so a tops PIREP is relevant on exactly the same
+    terms as every other point report on the page - just with a tighter age limit,
+    because a cloud top is a height and heights move faster than air masses.
+
+    Works on copies: ``filter_relevant`` writes ``relevant``/``drop_reason``/
+    ``distance_nm`` back into the objects it is handed, and those same objects go
+    through the real filter later. Today's call order happens to make the overwrite
+    harmless; copying removes the coupling instead of relying on it.
+
+    Freshest first, nearest as the tie-break: inside a 50 nm corridor it is the
+    same deck, but two hours of heating is a different height.
+    """
+    cands = [replace(h) for h in raw
+             if h.kind == "PIREP" and h.cloud_top_ft is not None
+             and h.cloud_top_cover in area_products.SOLID_COVER]
+    if not cands:
+        return None
+    keep, _aside = ah.filter_relevant(
+        cands, path=path, buffer_nm=settings.hazard_corridor_nm,
+        low_ft=0.0, high_ft=_TOPS_BAND_HIGH_FT, etd=etd, eta=eta, now=now,
+        pirep_max_age_hr=settings.pirep_tops_max_age_hr,
+        pirep_buffer_nm=settings.pirep_corridor_nm)
+    keep = [h for h in keep if h.kind == "PIREP"]
+    if not keep:
+        return None
+    return max(keep, key=lambda h: (h.valid_from or "",
+                                    -(h.distance_nm if h.distance_nm is not None else 1e9)))
+
+
+def _pirep_where(h, *fields) -> str | None:
+    """"PIREP 22 nm N of CYXU" - where a point report was, as a pilot reads it.
+
+    Measured from whichever of this flight's own aerodromes is nearest, because
+    that is the ident already on the page; a bearing off some third station the
+    pilot has never heard of is not a location, it is a puzzle.
+
+    The AGE is deliberately not in this string. The front end renders a PIREP's
+    freshness live, and baking "41 min ago" into a response that may be served from
+    a 30-minute cache would make it a lie.
+    """
+    if not h.geometry:
+        return "PIREP"
+    lat, lon = h.geometry[0]
+    near = min((f for f in fields if f), default=None,
+               key=lambda f: haversine_nm(lat, lon, f.lat, f.lon))
+    if near is None:
+        return "PIREP"
+    dist = haversine_nm(near.lat, near.lon, lat, lon)
+    if dist < 5:
+        return f"PIREP over {near.ident}"
+    brg = compass(initial_bearing_true(near.lat, near.lon, lat, lon))
+    return f"PIREP {dist:.0f} nm {brg} of {near.ident}"
+
+
 def _hard_imc_detail(ws, ceiling_agl_ft, tops: dict, thickness_ft,
                      field_elev_ft) -> str:
     """Which of the Hard IMC tests fired, in the pilot's own units.
@@ -2536,7 +2651,8 @@ def _route_tops(points: list[tuple[dict, str]]) -> dict:
       ``unsampled``   nothing usable came back at all. A statement about the fetch.
     """
     out = {"tops_msl_ft": None, "state": "unsampled", "at": None,
-           "from_rh": False, "scan_msl_ft": None}
+           "from_rh": False, "scan_msl_ft": None, "source": None,
+           "valid_from": None, "model_msl_ft": None, "planning_msl_ft": None}
     usable = [(pt, label) for pt, label in points if pt]
     if not usable:
         return out
@@ -2559,6 +2675,7 @@ def _route_tops(points: list[tuple[dict, str]]) -> dict:
 
     top, label = max(decks, key=lambda pl: pl[0]["tops_msl_ft"])
     out.update(tops_msl_ft=top["tops_msl_ft"], state="known", at=label,
+               source="model",
                from_rh=any(pt.get("tops_from_rh") for pt, _ in decks))
     return out
 

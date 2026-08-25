@@ -145,3 +145,74 @@ def test_pirep_time_reads_hhmm_as_the_most_recent_one():
 
 def test_pirep_time_is_none_when_the_text_does_not_say():
     assert apx.parse_pirep_time("UA /OV YYZ /FL050 /TB MOD", NOW) is None
+
+
+# --- /SK, the sky-condition field -------------------------------------------
+#
+# The only field in a PIREP that reports a cloud top, and the reason a pilot
+# files one on an IFR day.
+
+from app.services.area_products import (parse_pirep_tops, pirep_solid_top_ft,
+                                        pirep_top_ft)
+
+
+def test_the_common_form_is_hundreds_of_feet():
+    assert parse_pirep_tops("UA /OV YYZ /FL050 /SK OVC030-TOP055 /TB MOD") == [
+        {"cover": "OVC", "base_ft": 3000.0, "top_ft": 5500.0}]
+
+
+def test_the_plural_and_a_space_are_both_accepted():
+    assert pirep_top_ft("/SK BKN035-TOPS 060") == 6000.0
+
+
+def test_a_four_digit_top_is_read_as_whole_feet():
+    # "TOP 5500" is a pilot writing the altitude out. Unambiguous, because no
+    # cloud tops at 550,000 ft.
+    assert pirep_top_ft("/SK OVC-TOP 5500") == 5500.0
+    assert parse_pirep_tops("/SK OVC-TOP 5500")[0]["base_ft"] is None
+
+
+def test_the_highest_of_several_layers_wins():
+    # 11,000 ft of weather. The 6,000 in it answers a different question.
+    txt = "/SK SCT040-TOP060/OVC080-TOP110"
+    assert pirep_top_ft(txt) == 11000.0
+    assert len(parse_pirep_tops(txt)) == 2
+
+
+def test_a_layer_separator_is_not_mistaken_for_the_end_of_the_field():
+    # "/OVC080" is a slash plus THREE letters, so it must stay inside /SK. The
+    # single character in the lookahead that makes this work is the whole risk in
+    # that regex, so it is pinned from both sides.
+    assert len(parse_pirep_tops("/SK SCT040-TOP060/OVC080-TOP110 /IC LGT")) == 2
+
+
+def test_the_next_field_marker_does_end_it():
+    # ...and "/TB" is a slash plus exactly two, so it must NOT be swallowed.
+    layers = parse_pirep_tops("/SK OVC040-TOP060 /TB MOD 080")
+    assert len(layers) == 1 and layers[0]["top_ft"] == 6000.0
+
+
+def test_a_top_the_pilot_could_not_see_is_not_a_top():
+    # TOPUNKN says "I could not see it", which must read as unknown - never as 0,
+    # and never as the base.
+    assert parse_pirep_tops("/SK OVC040-TOPUNKN") == []
+    assert pirep_top_ft("/SK OVC040-TOPUNKN") is None
+
+
+def test_a_pirep_with_no_sky_field_says_nothing_about_cloud():
+    assert parse_pirep_tops("UA /OV YYZ /FL050 /TP C172 /TB MOD") == []
+    assert pirep_top_ft("") is None
+
+
+def test_an_absurd_altitude_is_rejected_rather_than_reported():
+    assert pirep_top_ft("/SK OVC030-TOP99999") is None
+
+
+def test_only_broken_or_overcast_tops_are_worth_climbing_above():
+    # Scattered cloud has a top, but climbing over it buys nothing - you were
+    # never in it. "On top" is a statement about a layer you could not otherwise
+    # get above.
+    scattered = "/SK SCT040-TOP060"
+    assert pirep_top_ft(scattered) == 6000.0
+    assert pirep_solid_top_ft(scattered) is None
+    assert pirep_solid_top_ft("/SK SCT040-TOP060/BKN080-TOP110") == 11000.0

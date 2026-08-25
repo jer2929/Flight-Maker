@@ -584,6 +584,14 @@ select, input[type=text], .route-inputs input {
   text-transform: uppercase;
 }
 
+/* A top somebody actually flew through. Same pill, but in the observation ink the
+   rest of the page uses for a real report rather than a derived one. */
+.src-pirep {
+  font-family: var(--f-cond); font-weight: 600; font-size: .66rem;
+  letter-spacing: .08em; color: var(--go-ink); margin-left: 6px; cursor: help;
+  text-transform: uppercase;
+}
+
 .src.OBSERVED { color: var(--go-ink); }
 .src.TAF { color: var(--taf-ink); }
 .src.HRDPS { color: var(--mit-ink); }

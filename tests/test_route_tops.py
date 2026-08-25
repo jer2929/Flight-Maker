@@ -78,3 +78,103 @@ def test_the_scan_limit_reported_is_the_lowest_one_any_point_reached():
     out = _run(_pt(2000, None, above_scan=True, scan=18281),
                _pt(2000, None, above_scan=True, scan=9882))
     assert out["scan_msl_ft"] == 9882
+
+
+# --- a reported top beats an inferred one -----------------------------------
+#
+# Never averaged: a top is a height, and the mean of two heights is a third one
+# that nobody reported.
+
+from types import SimpleNamespace
+
+from app.orchestrator import TOPS_DISAGREE_FT, _apply_tops_pirep, _pirep_where
+
+DEP = SimpleNamespace(ident="CYFD", lat=43.13, lon=-80.34)
+DEST = SimpleNamespace(ident="CYXU", lat=43.03, lon=-81.15)
+
+
+def _pirep(top_ft, lat=43.4, lon=-80.34, valid_from="2026-08-25T18:00:00Z"):
+    return SimpleNamespace(cloud_top_ft=top_ft, valid_from=valid_from,
+                           geometry=[(lat, lon)])
+
+
+def test_a_reported_top_becomes_the_headline():
+    tops = {"tops_msl_ft": 6000, "state": "known", "at": "midpoint",
+            "from_rh": True, "scan_msl_ft": 18281, "source": "model"}
+    _apply_tops_pirep(tops, _pirep(5500), DEP, DEST)
+    assert tops["tops_msl_ft"] == 5500
+    assert tops["source"] == "PIREP"
+    assert tops["from_rh"] is False, "an observation is not a humidity inference"
+    assert tops["valid_from"] == "2026-08-25T18:00:00Z"
+
+
+def test_no_pirep_leaves_the_model_figure_alone():
+    tops = {"tops_msl_ft": 6000, "state": "known", "at": "midpoint",
+            "from_rh": False, "scan_msl_ft": 18281, "source": "model"}
+    _apply_tops_pirep(tops, None, DEP, DEST)
+    assert tops["tops_msl_ft"] == 6000 and tops["source"] == "model"
+    assert tops["planning_msl_ft"] == 6000
+
+
+def test_a_material_disagreement_is_printed_rather_than_hidden():
+    # 6,000 ft apart means one of them saw a different deck, and the pilot has to
+    # be the one who decides that - not this function.
+    tops = {"tops_msl_ft": 12000, "state": "known", "at": "midpoint",
+            "from_rh": False, "scan_msl_ft": 18281, "source": "model"}
+    _apply_tops_pirep(tops, _pirep(6000), DEP, DEST)
+    assert tops["tops_msl_ft"] == 6000          # the PIREP is the headline
+    assert tops["model_msl_ft"] == 12000        # and the model is still shown
+
+
+def test_a_small_disagreement_is_not_worth_saying():
+    # Inside the threshold both answers put the aeroplane at the same cruising
+    # level, so printing the difference is noise.
+    tops = {"tops_msl_ft": 6000, "state": "known", "at": "midpoint",
+            "from_rh": False, "scan_msl_ft": 18281, "source": "model"}
+    _apply_tops_pirep(tops, _pirep(6000 - TOPS_DISAGREE_FT + 100), DEP, DEST)
+    assert tops["model_msl_ft"] is None
+
+
+def test_the_altitude_pick_plans_against_the_higher_of_the_two():
+    # Being higher than strictly needed costs a little wind. Being lower means
+    # telling a pilot they are on top from inside cloud.
+    tops = {"tops_msl_ft": 12000, "state": "known", "at": "midpoint",
+            "from_rh": False, "scan_msl_ft": 18281, "source": "model"}
+    _apply_tops_pirep(tops, _pirep(6000), DEP, DEST)
+    assert tops["planning_msl_ft"] == 12000
+
+
+def test_a_pirep_rescues_a_route_whose_model_tops_were_unknown():
+    tops = {"tops_msl_ft": None, "state": "unknown", "at": None,
+            "from_rh": False, "scan_msl_ft": 18281, "source": None}
+    _apply_tops_pirep(tops, _pirep(5500), DEP, DEST)
+    assert tops["state"] == "known" and tops["tops_msl_ft"] == 5500
+    assert tops["planning_msl_ft"] == 5500
+    assert tops["model_msl_ft"] is None, "there was no model figure to disagree with"
+
+
+# --- where the report was, as a pilot reads it ------------------------------
+
+
+def test_a_pirep_is_placed_off_the_nearest_aerodrome_on_the_page():
+    # A bearing off some third station the pilot has never heard of is not a
+    # location, it is a puzzle.
+    where = _pirep_where(_pirep(5500, lat=43.43, lon=-80.34), DEP, DEST)
+    assert where.startswith("PIREP ") and "CYFD" in where and "nm" in where
+
+
+def test_a_pirep_overhead_says_so_instead_of_a_bearing():
+    assert _pirep_where(_pirep(5500, lat=43.13, lon=-80.34), DEP, DEST) \
+        == "PIREP over CYFD"
+
+
+def test_an_unplaced_pirep_still_names_itself():
+    h = SimpleNamespace(cloud_top_ft=5500.0, valid_from=None, geometry=[])
+    assert _pirep_where(h, DEP, DEST) == "PIREP"
+
+
+def test_the_age_is_never_baked_into_the_location_string():
+    # It is rendered live by the page, because a response can be served from a
+    # 30-minute cache and "41 min ago" would become a lie with a timer on it.
+    where = _pirep_where(_pirep(5500), DEP, DEST)
+    assert "ago" not in where and "min" not in where

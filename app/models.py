@@ -605,7 +605,16 @@ class RouteAssessment(BaseModel):
     # known | above_scan | no_deck | unknown | unsampled. "No tops figure" has five
     # meanings and only ``no_deck`` is good news - see ``orchestrator._route_tops``.
     enroute_tops_state: str = "unsampled"
-    enroute_tops_source: Optional[str] = None        # "model" (PIREP to follow)
+    enroute_tops_source: Optional[str] = None        # "PIREP" | "model"
+    # The PIREP's filing time, so the page renders its age live. Baking "41 min
+    # ago" into a response that may be served from a 30-minute cache is a lie with
+    # a timer on it.
+    enroute_tops_valid_from: Optional[str] = None
+    # Set only when a PIREP and the model both answered and disagreed by more than
+    # ``orchestrator.TOPS_DISAGREE_FT``. The figure above is the PIREP's; this is
+    # the model's. Both are printed - neither is hidden, and they are never
+    # averaged.
+    enroute_tops_model_ft: Optional[float] = None
     enroute_tops_at: Optional[str] = None            # which point on the route
     # Top of the scan, so "above_scan" can name the height it is above instead of
     # asking the reader to know where the pressure levels run out.
