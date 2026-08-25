@@ -18,8 +18,6 @@ let PROFILE = { base: null, minimums: null, conservatism: null };
 const MIN_FIELDS = [
   { group: "wind", key: "sustained_max_kt",    id: "set-wind-sustained",    label: "Sustained wind",     unit: "kt", grp: "grp-wind",        min: 1,   max: 60,    step: 1   },
   { group: "wind", key: "gust_spread_max_kt",  id: "set-wind-gust",         label: "Gust spread",        unit: "kt", grp: "grp-wind",        min: 1,   max: 40,    step: 1   },
-  { group: "wind", key: "gust_spread_floor_kt",id: "set-wind-gust-floor",   label: "Gust spread floor",  unit: "kt", grp: "grp-wind",        min: 0,   max: 40,    step: 1,
-    hint: "Peak gust below which the gust-spread limit is reported but does not fail the flight. A forecast wind and a forecast gust are different statistics, so their difference runs larger than a METAR's G - and 10 kt of spread under a 13 kt peak is not the weather the spread limit is written for. 0 = gate on the spread alone." },
   { group: "wind", key: "crosswind_max_kt",    id: "set-wind-xwind",        label: "Crosswind",          unit: "kt", grp: "grp-wind",        min: 1,   max: 40,    step: 1   },
   { group: "ceiling_agl_ft", key: "day_circuit",          id: "set-ceil-day-circuit",  label: "Day circuit",        unit: "ft", grp: "grp-ceiling",     min: 100, max: 15000, step: 100 },
   { group: "ceiling_agl_ft", key: "day_xc",               id: "set-ceil-day-xc",       label: "Day cross-country",  unit: "ft", grp: "grp-ceiling",     min: 100, max: 15000, step: 100 },
@@ -2621,7 +2619,7 @@ window.closeWxPop = closeWxPop;
 // ---------- My Minimums & profile (settings) ----------
 const WX_LABELS = {
   convective_sigmet: "Convective SIGMET", thunderstorm: "Thunderstorm (TS)",
-  embedded_thunderstorm: "Embedded TS", freezing_rain: "Freezing rain (FZRA)",
+  embedded_thunderstorm: "Embedded convective cloud", freezing_rain: "Freezing rain (FZRA)",
   forecast_icing: "Forecast icing", moderate_turbulence_low: "Mod. turbulence < 3000 ft",
   low_level_wind_shear: "Low-level wind shear", widespread_ifr: "Widespread IMC",
 };
@@ -2651,7 +2649,13 @@ function buildWxFlags() {
   const selected = wxFlagsSelected();
   // widespread_ifr is a shared setting, but the row it controls is only built on
   // VFR flights now, so it stays on screen under both - with a note saying which.
-  const note = { widespread_ifr: "VFR flights only" };
+  const note = {
+    widespread_ifr: "VFR flights only",
+    // The tokens, because "embedded convective cloud" is the plain-English name
+    // and these are what you actually read off a METAR, TAF or SIGMET. It is the
+    // hazard the instrument rating does not answer, hence the second half.
+    embedded_thunderstorm: "EMBD TS/CB, CVCTV CLD EMBD - applies on IFR too",
+  };
   $("#wxflags").innerHTML = (CONFIG.weather_flag_options || [])
     .map((f) => `<label class="control checkbox"><input type="checkbox" class="wxflag" value="${f}"${selected.has(f) ? " checked" : ""}> ${wxLabel(f)}${note[f] ? ` <span class="hint">(${note[f]})</span>` : ""}</label>`)
     .join("");

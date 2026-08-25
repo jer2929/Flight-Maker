@@ -325,12 +325,23 @@ def test_the_same_spread_over_a_real_wind_still_gates():
     assert "strong_or_gusty_winds" in derive_threats(wx, [])
 
 
-def test_the_floor_is_the_pilots_to_set():
+def test_the_floor_is_not_the_pilots_to_set():
+    # The floor is not a personal limit - it is the correction that makes the
+    # spread limit mean the same thing against a model as against a METAR's G -
+    # so it has no slider and the API refuses it. A profile saved while the
+    # slider still existed keeps sending the old number; _validate_prefs drops
+    # it, and the packaged 15 stands.
     wx = _wx(wind_kt=2, gust_kt=13)
     with limits_override({"wind": {"gust_spread_floor_kt": 0}}):
+        assert gust_spread_floor_kt() == 15
         row = {c.key: c for c in conditions_checks(wx, None, "day")}["gust_spread"]
-        assert not row.passed, "a floor of 0 means gate on the spread alone"
-        assert "strong_or_gusty_winds" in derive_threats(wx, [])
+        assert row.passed and row.advisory, "the stale override must not gate"
+        assert "strong_or_gusty_winds" not in derive_threats(wx, [])
+
+
+def test_the_floor_is_not_an_editable_leaf():
+    merged = merge_limits(get_default_limits(), {"wind": {"gust_spread_floor_kt": 3}})
+    assert merged["hard_limits"]["wind"]["gust_spread_floor_kt"] == 15
 
 
 def test_a_profile_saved_before_the_floor_existed_still_works():

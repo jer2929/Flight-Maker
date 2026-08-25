@@ -187,8 +187,12 @@ def weather_checks(
     # the trend stays one click away. A bool rather than a flight_rules string
     # keeps this module a decider that reads no config.
     lowering_ceiling_gates: bool = True,
+    # Does the embedded-convective row stop the flight? False only when the
+    # pilot has taken it off their own auto-NO-GO list. Unlike widespread IMC
+    # this is NOT relaxed for IFR: an instrument rating is the answer to cloud,
+    # and no answer at all to convection buried inside it.
+    embedded_gates: bool = True,
 ) -> list[LimitCheck]:
-    blob = raw_text.upper()
     area = area_text.upper()
     checks: list[LimitCheck] = []
 
@@ -210,8 +214,15 @@ def weather_checks(
     where = f"{planned_low_ft:,.0f}-{planned_high_ft:,.0f} ft"
 
     def _forecast_hazard(flag: str, key: str, label: str, name: str,
-                         area_pats: tuple[str, ...]) -> bool:
+                         area_pats: tuple[str, ...], gates: bool = True) -> bool:
         """One time-scoped hazard row.
+
+        ``gates=False`` builds the row and marks it not-applicable, for a hazard
+        the pilot has taken off their own auto-NO-GO list. Same treatment as the
+        widespread-IMC row below: the row still says what the weather is doing,
+        it just doesn't stop the flight. Like that one it arrives as a bool
+        rather than a flag set, so this module stays a decider that reads no
+        config.
 
         The TAF contributes only through ``window_hazards`` - segments that
         actually overlap the flight. ``hazards`` is the merged endpoint summary,
@@ -245,7 +256,10 @@ def weather_checks(
                 srcs.append("METAR")
             if in_area:
                 srcs.append("SIGMET/AIRMET")
-            add(key, label, True, f"{name}{win} - " + " + ".join(srcs))
+            if not gates:
+                srcs.append("not on your auto-NO-GO list")
+            add(key, label, failed and gates, f"{name}{win} - " + " + ".join(srcs),
+                applicable=gates)
         elif in_prob:
             add(key, label, False,
                 f"{name} possible{win} - TAF {_prob_where(prob_labels)}, advisory only",
@@ -271,10 +285,18 @@ def weather_checks(
         add("hazard_out_of_window", "Forecast hazard (outside window)", False,
             f"{names}{where} {item['when']} - outside {win_bare}", advisory=True)
 
-    # 2. Embedded thunderstorms
-    embd = _has(blob, r"\bEMBD\b.*\b(TS|CB)\b", r"\bEMBEDDED\b")
-    add("embedded_ts", "Embedded thunderstorms", embd,
-        ("EMBD TS - SIGMET/area forecast" if embd else "none detected"))
+    # 2. Embedded convective cloud.
+    #
+    # This used to be a bespoke grep of the area products alone, which meant it
+    # could not see an EMBD TS in a TAF, a CVCTV CLD EMBD in a METAR, or the
+    # word "embedded" anywhere but a SIGMET - and, having no time scoping, it
+    # failed a flight on an area product whatever hour you were departing.
+    # Running it through ``_forecast_hazard`` like every other hazard row gives
+    # it the TAF window, the model endpoint, the observation-is-only-about-now
+    # rule and the PROB advisory, all for free.
+    _forecast_hazard("embedded_thunderstorm", "embedded_ts",
+                     "Embedded convective cloud", "embedded convective cloud",
+                     (wx.EMBD_CONVECTIVE_RE,), gates=embedded_gates)
 
     # 3. Freezing rain forecast
     _forecast_hazard("freezing_rain", "freezing_rain", "Freezing rain", "FZRA",

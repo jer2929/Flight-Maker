@@ -192,3 +192,44 @@ def test_convective_token_table(token, expected):
     # weather.py owns the single TS/CB definition; hazards.py consumes it rather
     # than keeping a second, subtly different regex.
     assert detect_hazards(token) == expected
+
+
+# ---- embedded convective cloud ---------------------------------------------
+#
+# Convection buried in a layer: you cannot see it coming and you cannot go round
+# it, so it is an automatic NO-GO on IFR as well as VFR. NAV CANADA writes it
+# three ways and all three have to read the same.
+
+
+@pytest.mark.parametrize("text, expected", [
+    # The three spellings.
+    ("EMBD TS", {"embedded_thunderstorm", "thunderstorm"}),
+    ("EMBD CB", {"embedded_thunderstorm", "thunderstorm"}),
+    ("CVCTV CLD EMBD", {"embedded_thunderstorm"}),
+    ("EMBD CVCTV CLD", {"embedded_thunderstorm"}),
+    ("EMBEDDED THUNDERSTORMS FCST", {"embedded_thunderstorm"}),
+    ("EMBEDDED CONVECTIVE CLOUD", {"embedded_thunderstorm"}),
+    # A longer token still counts: EMBD TSRA is embedded convection.
+    ("EMBD TSRA", {"embedded_thunderstorm", "thunderstorm"}),
+    # Plain convection is NOT embedded - this is the distinction the row exists
+    # to draw, and getting it wrong would make every TS an embedded TS.
+    ("TSRA", {"thunderstorm"}),
+    ("BKN030CB", {"thunderstorm"}),
+])
+def test_embedded_convective_tokens(text, expected):
+    assert set(detect_hazards(text)) == expected
+
+
+def test_embd_far_from_its_convection_does_not_match():
+    # The row this replaced matched ``EMBD .* (TS|CB)``, which in a
+    # multi-sentence area product paired an EMBD in one clause with a CB forty
+    # words later and called the flight off for it. The gap is bounded now.
+    far = "EMBD IS MENTIONED HERE AND SOMETHING ELSE ENTIRELY FOLLOWS LATER ON CB"
+    assert "embedded_thunderstorm" not in detect_hazards(far)
+
+
+def test_a_metar_remark_carries_it():
+    # The whole point of the change: this is read off an observation, not only
+    # off a SIGMET, so it reaches the card at all.
+    metar = "CYFD 251800Z 27012KT 15SM BKN040 18/12 A2992 RMK CVCTV CLD EMBD"
+    assert "embedded_thunderstorm" in parse_metar(metar)["hazards"]

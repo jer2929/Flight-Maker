@@ -151,8 +151,14 @@ _NUMERIC_LIMITS: dict[str, dict[str, tuple[float, float]]] = {
     "wind": {
         "sustained_max_kt": (1, 60),
         "gust_spread_max_kt": (1, 40),
-        # 0 is a legal setting and means "gate on the spread alone".
-        "gust_spread_floor_kt": (0, 40),
+        # gust_spread_floor_kt is deliberately absent. It is not a limit a pilot
+        # sets - it is the correction that makes the spread limit mean the same
+        # thing against a model as against a METAR's G (see limits.yaml), and a
+        # slider for it next to "Gust spread" read as a second, contradictory
+        # wind limit. Leaving it out of this whitelist is what actually pins it:
+        # the browser sends PROFILE.minimums wholesale, so a profile saved while
+        # the slider existed still carries the old number, and _validate_prefs
+        # drops it here rather than anyone having to rewrite stored JSON.
         "crosswind_max_kt": (1, 40),
     },
     "ceiling_agl_ft": {

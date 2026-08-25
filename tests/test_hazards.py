@@ -400,3 +400,47 @@ def test_an_ifr_flight_has_no_widespread_row_to_put_depth_on():
     rows = _run(ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2],
                 point_labels=LABELS, include_widespread_imc=False)
     assert "widespread_ifr" not in rows
+
+
+# ---- embedded convective cloud ---------------------------------------------
+#
+# This row used to grep the area products alone, with no time scoping at all: it
+# could not see an EMBD TS in a TAF or a CVCTV CLD EMBD in a METAR, and it
+# failed a flight on a SIGMET whatever hour you were departing. It runs through
+# _forecast_hazard now, so it answers a time window like every other hazard row.
+
+
+def test_embedded_convective_fails_on_a_taf_in_the_window():
+    row = _run(window_hazards={"embedded_thunderstorm"})["embedded_ts"]
+    assert not row.passed
+    assert "TAF" in row.actual_text
+
+
+def test_embedded_convective_in_a_metar_gates_a_departure_now():
+    row = _run(metar_hazards={"embedded_thunderstorm"}, etd_is_now=True)["embedded_ts"]
+    assert not row.passed
+    assert "METAR" in row.actual_text
+
+
+def test_embedded_convective_observed_now_is_advisory_for_a_later_etd():
+    # A METAR is an observation of this minute. For a departure two hours out it
+    # is worth reading and is not the forecast the flight is graded against.
+    row = _run(metar_hazards={"embedded_thunderstorm"}, etd_is_now=False)["embedded_ts"]
+    assert row.passed and row.advisory
+    assert "not in your 1200-1400Z window" in row.actual_text
+
+
+def test_embedded_convective_reads_the_area_products():
+    # The behaviour the old grep had, kept: a SIGMET saying EMBD TS still counts.
+    row = _run(area_text="SIGMET A1 VALID 1200/1600 EMBD TS OBS")["embedded_ts"]
+    assert not row.passed
+    assert "SIGMET/AIRMET" in row.actual_text
+
+
+def test_embedded_convective_reads_cvctv_cld_embd():
+    row = _run(area_text="GFA CMTS: CVCTV CLD EMBD IN LYR")["embedded_ts"]
+    assert not row.passed
+
+
+def test_quiet_air_leaves_the_embedded_row_alone():
+    assert _run()["embedded_ts"].passed

@@ -2034,6 +2034,13 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # Same carve-out, same reason: a lowering ceiling is a VFR problem. See
         # the parameter's own comment in ``hazards.weather_checks``.
         lowering_ceiling_gates=(flight_rules != "ifr"),
+        # No flight_rules test here, deliberately. Widespread IMC above is a VFR
+        # row because the rating is the answer to cloud; convection buried in a
+        # layer is the hazard the rating does *not* answer - you cannot see it
+        # coming and you cannot go round what you cannot see - so this one is
+        # built and votes on every flight, and the only thing that switches it
+        # off is the pilot's own auto-NO-GO list.
+        embedded_gates="embedded_thunderstorm" in gating_hazards(),
     )
 
     # What the TAF forecasts across the flight, at each end. On a future ETD the

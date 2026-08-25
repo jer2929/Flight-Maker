@@ -330,3 +330,49 @@ def test_unknown_tops_leave_the_pick_untouched(stubbed):
     r = _run("ifr")
     assert r.altitude.on_top is False
     assert r.altitude.tops_ft is None and r.altitude.wind_cost_kt is None
+
+
+# --- embedded convective cloud ----------------------------------------------
+#
+# Convection buried in a layer is the one hazard an instrument rating does not
+# answer: you cannot see it coming and you cannot go round what you cannot see.
+# So unlike widespread IMC above, this one gates an IFR card too.
+#
+# It also had to start working at all. "Embedded TS" sat on the auto-NO-GO list
+# and in the My Minimums pane, but nothing in the app ever produced that flag -
+# the tickbox changed no verdict on any card. The only embedded detection there
+# was a grep of SIGMET text, on the route card alone.
+
+EMBD_METAR = (f"METAR AAAA {_stamp(NOW - timedelta(minutes=10))} "
+              "09006KT 15SM BKN025 15/05 A2992 RMK CVCTV CLD EMBD")
+
+
+def test_cvctv_cld_embd_in_a_metar_is_a_no_go_on_an_ifr_card(stubbed):
+    # The deck and the visibility both clear the IFR minimums, so the embedded
+    # convection is the only thing that can stop this flight - and it does.
+    stubbed(IFR_OK, metars={"AAAA": EMBD_METAR})
+    r = _run("ifr")
+    assert r.verdict_now == Verdict.NOGO
+    assert any("Embedded convective cloud" in reason for reason in r.reasons_now)
+    assert "METAR" in _row(r, "embedded_ts").actual_text
+
+
+def test_the_same_metar_is_a_no_go_on_a_vfr_card(stubbed):
+    stubbed(IFR_OK, metars={"AAAA": EMBD_METAR})
+    assert _run("vfr").verdict_now == Verdict.NOGO
+
+
+def test_unticking_embedded_convective_switches_it_off(stubbed):
+    # It is on the pilot's own auto-NO-GO list like every other hazard flag, so
+    # the tickbox has to mean something. With the flag off, this card has
+    # nothing left to fail on.
+    stubbed(IFR_OK, metars={"AAAA": EMBD_METAR})
+    flags = [f for f in get_default_limits()["hard_limits"]["weather_flags"]
+             if f != "embedded_thunderstorm"]
+    with limits_override({"weather_flags": flags}):
+        r = _run("ifr")
+        row = _row(r, "embedded_ts")
+    assert row is not None, "the row must still be built, just not applied"
+    assert not row.applicable
+    assert not any("Embedded convective cloud" in reason for reason in r.reasons_now)
+    assert r.verdict_now != Verdict.NOGO

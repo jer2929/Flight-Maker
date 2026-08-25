@@ -129,6 +129,15 @@ for taxi and approach - not for a single instant:
   Settings, and otherwise shows as an advisory naming the group. Thunderstorm is
   on that list by default, so a PROB30 TSRA is still a NO-GO out of the box -
   turn it off and it becomes a caution instead.
+* **Embedded convective cloud** is the one hazard an instrument rating does not
+  answer, so it is an automatic NO-GO on an IFR card as well as a VFR one -
+  unlike *Widespread IMC*, which is a VFR row and is not built on an IFR card at
+  all. It is read off all three of the spellings NAV CANADA uses (`EMBD TS`,
+  `EMBD CB`, `CVCTV CLD EMBD`) wherever they appear - a METAR remark, a TAF
+  group, a SIGMET or an area forecast - and like every hazard it is time-scoped:
+  a TAF group gates only when it overlaps your window, and an observation gates
+  a **Now** departure and drops to an advisory for a later one. Untick it in
+  Settings and it becomes a caution instead.
 * That rule lives in **one place** and every view reads it: the route card, the
   discovery cards and the hour-by-hour strip. They used to disagree - the strip
   folded PROB groups straight into the hour it was grading, so a `PROB30 2SM`
@@ -534,6 +543,11 @@ The card (`data/limits.yaml`, fully editable) drives everything:
   gust spread > 10 kt, crosswind > 9 kt, XC ceiling < 4000 ft AGL (day) /
   cloud base < 12000 ft (night), XC visibility < 9 SM, and hazard flags. All of
   it is evaluated for your ETD→ETA window, not for "right now".
+  A gust spread is judged against the *peak*: below `gust_spread_floor_kt`
+  (15 kt) the spread is reported and does not gate, because a model's wind and
+  its gust are different statistics and 10 kt of spread under a 13 kt peak is
+  not the weather that limit was written for. That one is tuned in the YAML and
+  has no slider - it is a correction, not a personal minimum.
 - **Two-trigger threat stacking** → 0 = GO, 1 = MITIGATE, 2+ = NO-GO. Some threats
   are derived from the weather; others (night ops, fatigue, etc.) you tick in the UI.
 - **Pilot fitness / external pressure / "explain it to your instructor"** → a
