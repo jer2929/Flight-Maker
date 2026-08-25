@@ -188,3 +188,61 @@ def test_the_model_still_gates_where_nothing_reports(upstreams):
         assert a.altitude is None
         row = _cruise_row(a)
         assert row is not None and "plan below 3,000 ft AGL" in row.actual_text
+
+
+# --- What a card says when nothing looked at the sky -----------------------
+
+def test_a_candidate_with_no_report_and_no_model_is_not_a_clear_sky(upstreams, monkeypatch):
+    """The reported bug, at the card level.
+
+    No METAR, no TAF, and a forecast that did not download. Every ceiling on the
+    card is None - which is exactly what a genuinely clear sky produces - and the
+    chip used to render both as an empty space, so the pilot had no way to tell
+    "nothing up there" from "nobody looked". The state is now carried explicitly
+    and the card has to be able to say which one it is.
+    """
+    async def _no_metars(sites, *a, **k):
+        return {}
+
+    async def _dead(points, *a, **k):
+        return [{} for _ in points]
+
+    upstreams["taf_cloud"] = None
+    monkeypatch.setattr(cfps, "metars", _no_metars)
+    monkeypatch.setattr(openmeteo, "forecast_many", _dead)
+    monkeypatch.setattr(openmeteo, "ensemble_wind_many", _dead)
+
+    res = _suggest()
+    assert res, "cards should still be produced - the aerodromes exist"
+    for a in res:
+        sky = a.weather.sky
+        assert sky is not None, f"{a.airport.ident} carries no sky state at all"
+        assert sky.state == "unsampled", f"{a.airport.ident}: {sky.state}"
+        assert "clear" not in sky.text
+        assert sky.text, "an unassessed sky still has to say something"
+
+
+def test_a_model_only_candidate_reports_its_layers(upstreams):
+    """No METAR and no TAF is the case the whole change is for: HRDPS alone.
+
+    The derivation has always run here; what it could not do was say so.
+    """
+    async def _no_metars(sites, *a, **k):
+        return {}
+
+    upstreams["taf_cloud"] = None
+    upstreams["cloud_base_m"] = MODEL_DECK_M
+    from app.sources import cfps as _cfps
+    orig = _cfps.metars
+    _cfps.metars = _no_metars
+    try:
+        res = _suggest()
+    finally:
+        _cfps.metars = orig
+
+    assert res
+    skies = [a.weather.sky for a in res if a.weather.sky]
+    assert skies, "every card should carry a sky"
+    assert all(s.state != "unsampled" for s in skies), "the model did answer"
+    # No forecast model reports a cloud genus, so none of these may claim one.
+    assert all(lyr.type is None for s in skies for lyr in s.layers)

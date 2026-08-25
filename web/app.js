@@ -1450,6 +1450,7 @@ function renderRoute(r) {
       ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud. When the tops are known, an IFR pick climbs above them if a legal level clears them by 1,000 ft and costs no more than 10 kt of headwind against the fastest level. It never climbs for tops it is only guessing at."><span class="mk">Best alt</span> ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
       ${daylightSpan(r.daylight_margin)}
       ${r.enroute_ceiling_ft != null ? `<span><span class="mk">Enroute ceiling</span> ${fmtCeil(r.enroute_ceiling_ft)}</span>` : ""}
+      ${skySpan(r)}
       ${topsSpan(r)}
       ${cloudLine(r, alt)}
       ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${windDir(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
@@ -2514,7 +2515,7 @@ function modelPopBody(a) {
     return `<div class="wx-h ${h.in_window ? "in" : ""}">
       <span class="wx-h-t">${escapeHtml(h.time.slice(11, 16))}Z</span>
       <span class="wx-h-w">${wind}</span>
-      <span class="wx-h-c">${h.ceiling_agl_ft != null ? fmtCeil(h.ceiling_agl_ft) : cloudWord(h)}</span>
+      <span class="wx-h-c">${escapeHtml(h.sky ? h.sky.text : (h.ceiling_agl_ft != null ? fmtCeil(h.ceiling_agl_ft) : "-"))}</span>
       <span class="wx-h-v">${h.visibility_sm != null ? h.visibility_sm + " SM" : "-"}</span>
       <span class="wx-h-x">${escapeHtml(extra)}</span>
     </div>`;
@@ -2525,17 +2526,11 @@ function modelPopBody(a) {
       ${wxPopClose()}
     </div>
     <div class="wx-hours">
-      <div class="wx-h wx-h-hd"><span>Zulu</span><span>Wind</span><span>Ceiling</span><span>Vis</span><span></span></div>
+      <div class="wx-h wx-h-hd"><span>Zulu</span><span>Wind</span><span>Sky</span><span>Vis</span><span></span></div>
       ${rows || `<div class="empty">No model hours available.</div>`}
     </div>
     <div class="hint wx-pop-foot">Green = airborne during this hour. Model only -
       no TAF overlay, no verdict. Hours are Zulu.</div>`;
-}
-
-// No ceiling reported is not the same as no cloud, so say which the model means.
-function cloudWord(h) {
-  if (h.cloud_cover_pct == null) return "-";
-  return h.cloud_cover_pct < 55 ? "no ceiling" : "-";
 }
 
 // The span the green marks, named the same way the route cards name it.
@@ -3050,6 +3045,27 @@ function cloudLine(r, alt) {
   return `<span class="warn">Cloud below planned cruise altitude</span>`;
 }
 
+// The sky along the route, under the go/no-go rather than inside the checklist.
+//
+// The checklist's ceiling row has said this correctly for a while - "no broken
+// layer - scattered cloud near 4,000 ft AGL" - but it says it behind a collapsed
+// expander, under a heading about limits, on a row that passed. Cloud is not only
+// a limit question: what the sky is doing is the first thing you want after the
+// verdict, and it belongs in the panel the eye lands on. Same string, same
+// derivation, one place further forward.
+function skySpan(r) {
+  const sky = r.enroute_sky;
+  if (!sky) return "";
+  // Which point on the route this sky is - the deck that decides a flight is
+  // often nowhere near either end, and "BKN 1,200 ft" without a place is half a
+  // sentence.
+  const where = r.enroute_sky_at ? ` <span class="hint">${escapeHtml(r.enroute_sky_at)}</span>` : "";
+  if (sky.state === "unsampled") {
+    return `<span class="warn" title="Nothing looked at the sky along this route - the forecast did not download. Not a report of clear weather."><span class="mk">Sky</span> ${escapeHtml(sky.text)}</span>`;
+  }
+  return `<span title="${escapeHtml(skyTitle(sky))}"><span class="mk">Sky</span> ${escapeHtml(sky.text)}${where}</span>`;
+}
+
 // Cloud tops, next to the ceiling they belong with. The ceiling is AGL and the
 // tops are MSL, so both carry their datum: "1,400" and "5,500" side by side with
 // no units invites subtracting one from the other.
@@ -3076,10 +3092,46 @@ function topsSpan(r) {
   const gap = Math.abs(r.enroute_tops_model_ft - r.enroute_tops_msl_ft);
   return main + `<span class="warn" title="One pilot flew it and the model derived it, and they are ${fmtTops(gap)} apart - which usually means one of them is describing a deck the other never saw. The altitude recommendation plans against the higher of the two.">model estimate ~${fmtTops(r.enroute_tops_model_ft)} - ${fmtTops(gap)} apart</span>`;
 }
+
+// The sky, on every card, in every state - including the three that used to
+// render as an empty space.
+//
+// This function returned "" whenever no broken layer was found, which made a
+// clear sky, a scattered-only sky and a forecast that never downloaded look
+// identical: nothing at all. They are three different flights. The backend has
+// always known which one it was (`services.sky`, four states), so the chip now
+// prints what it says and the only remaining silence is a card with no weather
+// on it at all.
+//
+// The heading is "Sky", not "Ceiling": a ceiling is one number out of the stack,
+// and on most cards it is the number that does not exist.
 function ceilChip(w) {
-  if (w.ceiling_agl_ft != null) return `<span><span class="mk">Ceiling</span> ${fmtCeil(w.ceiling_agl_ft)}</span>`;
-  if (w.source === "Observed") return `<span><span class="mk">Ceiling</span> none</span>`;
-  return "";
+  const sky = w.sky;
+  if (!sky) {
+    // No stack at all - an older payload, or a card built without weather. The
+    // ceiling alone is still better than nothing; silence is not.
+    if (w.ceiling_agl_ft != null) return `<span><span class="mk">Ceiling</span> ${fmtCeil(w.ceiling_agl_ft)}</span>`;
+    return `<span class="warn" title="No cloud assessment reached this card."><span class="mk">Sky</span> not assessed</span>`;
+  }
+  if (sky.state === "unsampled") {
+    return `<span class="warn" title="The forecast for this point did not download, so nothing looked at the sky. This is NOT a report of clear weather - pull the data again."><span class="mk">Sky</span> ${escapeHtml(sky.text)}</span>`;
+  }
+  return `<span title="${escapeHtml(skyTitle(sky))}"><span class="mk">Sky</span> ${escapeHtml(sky.text)}</span>`;
+}
+
+// Where the layers came from, and how much to trust their heights. Estimated
+// layers carry the "~" and this explains it; an observed stack says who looked.
+function skyTitle(sky) {
+  const est = (sky.layers || []).some((l) => l.estimated);
+  if (est) {
+    return "Estimated. The app walks HRDPS pressure-level cloud cover and interpolates "
+      + "where it crosses broken, so heights are good to a few hundred feet low down and "
+      + "coarser above 10,000 ft where the levels are 2,000 ft apart - hence the leading ~. "
+      + "No forecast model reports cloud type, so these layers carry none.";
+  }
+  if (sky.state === "clear") return "Reported clear - an observer looked up, with no scan limit to caveat.";
+  return "As reported. Cloud type, where shown, is off the body group (CB/TCU) or the "
+    + "Canadian remarks (CU, SC, NS and so on) - observed, never inferred.";
 }
 /* What the hour holds, in the notation it is reported in. These were weather
    emoji; a METAR abbreviation is the same information in the vocabulary the

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 from app import orchestrator
 from app.config import limits_override
-from app.models import Airport, Source, WeatherSummary
+from app.models import Airport, Sky, SkyLayer, Source, WeatherSummary
 
 
 def _endpoint(ident, ceiling=8000, vis=15):
@@ -70,13 +70,15 @@ def test_an_unusable_sample_is_truthy_but_not_sampled():
 
 
 def test_genuinely_clear_route_says_so_with_its_scan_top():
-    # Sampled, nothing found. Honest - but "no ceiling" alone overclaims, because
-    # this derivation has never been able to see above the top of its scan.
-    clear = [{"ceiling_ft": None, "sampled": True, "scan_top_ft": 9882},
-             {"ceiling_ft": None, "sampled": True, "scan_top_ft": 9882}]
+    # Sampled, nothing found. Honest - but "clear" alone overclaims, because this
+    # derivation has never been able to see above the top of its scan.
+    clear = [{"ceiling_ft": None, "sampled": True, "scan_top_ft": 9882,
+              "sky": Sky(state="clear", scan_top_ft=9882, source=Source.MODEL)},
+             {"ceiling_ft": None, "sampled": True, "scan_top_ft": 9882,
+              "sky": Sky(state="clear", scan_top_ft=9882, source=Source.MODEL)}]
     row = _rows(clear, dep_ceiling=None, dest_ceiling=None)["ceiling"]
-    assert "no ceiling" in row.actual_text
-    assert "10,000 ft" in row.actual_text
+    assert "clear" in row.actual_text
+    assert "10,000 ft" in row.actual_text, "the scan limit, to the resolution it has"
     assert row.passed is True
 
 
@@ -84,11 +86,28 @@ def test_scattered_layer_is_reported_rather_than_called_clear():
     # 40% cover is not a ceiling. It is also not "clear", and the pilot deserves
     # the number rather than a word that implies there is nothing up there.
     sct = [{"ceiling_ft": None, "sampled": True, "sct_base_ft": 4500,
-            "scan_top_ft": 9882}]
+            "scan_top_ft": 9882,
+            "sky": Sky(state="no_ceiling", scan_top_ft=9882, source=Source.MODEL,
+                       layers=[SkyLayer(amount="SCT", base_ft=4500, estimated=True)])}]
     row = _rows(sct, dep_ceiling=None, dest_ceiling=None)["ceiling"]
-    assert "scattered" in row.actual_text
+    assert "SCT" in row.actual_text
+    assert "no broken layer" in row.actual_text
     assert "4,500 ft" in row.actual_text
     assert row.passed is True, "scattered cloud is not a limit failure"
+
+
+def test_a_sampled_point_with_no_stack_never_reads_as_a_failed_fetch():
+    """``sampled`` and the stack have to agree.
+
+    "Not assessed" is the one thing this row says that is about the fetch rather
+    than the sky, and it has to stay that way: a point that reports a reading but
+    carries no layers is a clear sky, not a download that failed.
+    """
+    bare = [{"ceiling_ft": None, "sampled": True,
+             "sky": Sky(state="clear", source=Source.MODEL)}]
+    row = _rows(bare, dep_ceiling=None, dest_ceiling=None)["ceiling"]
+    assert "not assessed" not in row.actual_text
+    assert row.source is not None
 
 
 # --- Provenance ------------------------------------------------------------

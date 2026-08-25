@@ -14,6 +14,8 @@ from typing import Optional
 
 from metar import Metar
 
+from app.models import Source
+
 # "P6SM" means *greater than* 6 SM - a TAF can't quantify visibility beyond
 # this, so it caps the report there. Treat the plus-prefix as unrestricted
 # visibility rather than an exact 6 SM, which would otherwise trip higher
@@ -64,6 +66,17 @@ HAZARD_PATTERNS: dict[str, str] = {
 }
 
 
+def _sky():
+    """``services.sky``, imported on use rather than at module scope.
+
+    That module reads this one's METAR and TAF parsing, so importing it up here
+    would close a cycle. The same layering note as the ``worse``/``timeline``
+    split further down, from the other side of it.
+    """
+    from app.services import sky as _mod
+    return _mod
+
+
 def _ceiling_from_sky(sky) -> Optional[float]:
     """Lowest BKN/OVC/VV layer height (ft AGL) from a metar lib sky list."""
     ceil = None
@@ -77,7 +90,30 @@ def _ceiling_from_sky(sky) -> Optional[float]:
     return ceil
 
 
-_CLOUD_GROUP = re.compile(r"\b(FEW|SCT|BKN|OVC|VV)(\d{3})(?:CB|TCU)?\b")
+_CLOUD_GROUP = re.compile(r"\b(FEW|SCT|BKN|OVC|VV)(\d{3})(CB|TCU)?\b")
+
+# Cloud genus as Canadian aerodromes report it, in the remarks: a run of
+# type+oktas pairs, lowest layer first (``RMK SC8``, ``RMK CU6CI1``). Matched as a
+# whole token rather than pair-by-pair so a run reads cleanly and nothing inside
+# an unrelated remark group can look like one - ``SLP118`` is not stratus.
+# ``TCU`` and ``CB`` lead the alternation so they win over ``CU``.
+_RMK_CLOUD_TOKEN = re.compile(
+    r"\b((?:(?:TCU|CB|CI|CC|CS|AC|AS|NS|SC|ST|SF|CF|CU)[1-8])+)\b")
+_RMK_CLOUD_PAIR = re.compile(r"(TCU|CB|CI|CC|CS|AC|AS|NS|SC|ST|SF|CF|CU)([1-8])")
+
+
+def _body_layers(text: str) -> list[dict]:
+    """Every cloud group in the report body, lowest first, with its CB/TCU suffix.
+
+    Remarks are dropped first: Canadian reports encode layer amounts there
+    (``RMK CU6CI1``), and trend groups describe a forecast, not the observation.
+    """
+    body = re.split(r"\bRMK\b", (text or "").upper(), maxsplit=1)[0]
+    body = re.split(r"\b(?:TEMPO|BECMG|NOSIG)\b", body, maxsplit=1)[0]
+    layers = [{"cover": m.group(1), "height_ft": float(int(m.group(2)) * 100),
+               "type": m.group(3)}
+              for m in _CLOUD_GROUP.finditer(body)]
+    return sorted(layers, key=lambda lyr: lyr["height_ft"])
 
 
 def cloud_layers(text: str) -> list[dict]:
@@ -87,14 +123,64 @@ def cloud_layers(text: str) -> list[dict]:
     underneath* apart from an existing deck descending, which the trend logic
     needs so it never compares the heights of two different layers.
 
-    Remarks are dropped first: Canadian reports encode layer amounts there
-    (``RMK CU6CI1``), and trend groups describe a forecast, not the observation.
+    Cover and height only, deliberately: this feeds ``services.trends``, which
+    compares one report's layers against the next one's and has no use for a
+    genus. :func:`observed_sky` is the same stack with the type attached.
     """
-    body = re.split(r"\bRMK\b", (text or "").upper(), maxsplit=1)[0]
-    body = re.split(r"\b(?:TEMPO|BECMG|NOSIG)\b", body, maxsplit=1)[0]
-    layers = [{"cover": m.group(1), "height_ft": float(int(m.group(2)) * 100)}
-              for m in _CLOUD_GROUP.finditer(body)]
-    return sorted(layers, key=lambda lyr: lyr["height_ft"])
+    return [{"cover": lyr["cover"], "height_ft": lyr["height_ft"]}
+            for lyr in _body_layers(text)]
+
+
+def remark_cloud_types(text: str) -> list[dict]:
+    """Cloud genus and oktas from a Canadian report's remarks, lowest layer first.
+
+    ``RMK SC8`` is stratocumulus filling the sky; ``RMK CU6CI1`` is six eighths of
+    cumulus with one eighth of cirrus over it. This is the only place in the app
+    where cloud *type* is available at all - no forecast model carries one - so it
+    is read where it is actually reported and never inferred anywhere else.
+
+    Returns ``[{"type": "SC", "oktas": 8}]``. Only the remarks section is
+    searched: the same ``RMK`` split :func:`cloud_layers` makes to stay out of
+    here, from the other side.
+    """
+    parts = re.split(r"\bRMK\b", (text or "").upper(), maxsplit=1)
+    if len(parts) < 2:
+        return []
+    out: list[dict] = []
+    for tok in _RMK_CLOUD_TOKEN.finditer(parts[1]):
+        for m in _RMK_CLOUD_PAIR.finditer(tok.group(1)):
+            out.append({"type": m.group(1), "oktas": int(m.group(2))})
+    return out
+
+
+def observed_sky(text: str) -> list[dict]:
+    """The reported sky as layers carrying amount, height and - where given - type.
+
+    ``[{"amount": "BKN", "base_ft": 3100.0, "type": "CU"}]``, lowest first.
+
+    Type comes from two places, both of them observations. ``CB``/``TCU`` are
+    suffixed to the body group itself; the genus of an ordinary layer is in the
+    Canadian remarks, and is matched onto the body layers **by position** - the
+    remarks list layers lowest-first, in the same order the body does.
+
+    Deliberately NOT matched by amount, though both are stated in the same report:
+    the body's FEW/SCT/BKN/OVC is *cumulative* while the remarks' oktas are
+    per-layer, so ``BKN031 BKN230 RMK CU6CI1`` is six eighths of cumulus with one
+    eighth of cirrus above it - seven in total, hence the second BKN. Pairing
+    those by amount would refuse a match that is plainly correct, and pairing a
+    mismatched list by position would name the wrong cloud, so the types are
+    attached only when the two lists are the same length and dropped otherwise.
+    """
+    layers = _body_layers(text)
+    types = remark_cloud_types(text)
+    named = [t["type"] for t in types] if len(types) == len(layers) else []
+    out = []
+    for n, lyr in enumerate(layers):
+        # The body's own CB/TCU wins: it is attached to that group by the observer,
+        # where a positional match is an inference about ordering.
+        kind = lyr.get("type") or (named[n] if named else None)
+        out.append({"amount": lyr["cover"], "base_ft": lyr["height_ft"], "type": kind})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +371,9 @@ def _parse_group(text: str) -> dict:
     cond: dict = {
         "wind_dir_true": None, "wind_kt": None, "gust_kt": None,
         "visibility_sm": None, "ceiling_agl_ft": None, "hazards": [],
+        # None means "this group says nothing about cloud", which is not the same
+        # as a clear sky - see below.
+        "sky": None,
     }
     up = text.upper()
     wm = re.search(r"\b(\d{3}|VRB)(\d{2,3})(?:G(\d{2,3}))?KT\b", up)
@@ -302,6 +391,16 @@ def _parse_group(text: str) -> dict:
         h = float(cm.group(2)) * 100
         ceil = h if ceil is None else min(ceil, h)
     cond["ceiling_agl_ft"] = ceil
+    # The group's whole sky, not only the layer that makes a ceiling - and None,
+    # not "clear", when the group says nothing about cloud at all. A BECMG that
+    # only changes the wind leaves the previous cloud standing, so reading its
+    # silence as a clear sky would erase a deck the forecaster never lifted.
+    # ``SKC``/``NSC``/``NCD``/``CLR`` are the forecaster positively stating one.
+    layers = [{"amount": m.group(1), "base_ft": float(int(m.group(2)) * 100),
+               "type": m.group(3)} for m in _CLOUD_GROUP.finditer(up)]
+    if layers or re.search(r"\b(?:SKC|NSC|NCD|CLR)\b", up):
+        cond["sky"] = _sky().from_layers(sorted(layers, key=lambda lyr: lyr["base_ft"]),
+                                         Source.TAF)
     cond["hazards"] = detect_hazards(up)
     return cond
 
@@ -499,6 +598,11 @@ def worse(a: dict, b: dict | None) -> dict:
     for k in ("visibility_sm", "ceiling_agl_ft"):
         if b.get(k) is not None and (out.get(k) is None or b[k] < out[k]):
             out[k] = b[k]
+    # The stack belongs with the ceiling. Without this the merged conditions kept
+    # ``a``'s sky next to ``b``'s ceiling, so an endpoint window could headline a
+    # deck at 1,200 ft while printing the first hour's scattered layer beside it.
+    if b.get("sky") is not None or out.get("sky") is not None:
+        out["sky"] = _sky().worse_sky(out.get("sky"), b.get("sky"))
     out["hazards"] = sorted(set(out.get("hazards", [])) | set(b.get("hazards", [])))
     # Carry the more significant precip label/heaviness (mm already max'd above).
     if _precip_rank(b) > _precip_rank(out):

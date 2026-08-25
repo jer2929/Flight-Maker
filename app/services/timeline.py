@@ -16,6 +16,7 @@ from app.models import (
     WindAloft,
 )
 from app.services import magvar
+from app.services import sky
 from app.services import weather as wx
 from app.services.evaluator import SEVERITY, evaluate, gating_hazards, prob_summary
 from app.services.runway import best_runway
@@ -69,13 +70,29 @@ def _model_conditions(fc: dict, i: int) -> dict:
     hazards = [info["hazard"]] if (info and info["hazard"]) else []
     precip_mm = _at(fc, "precipitation", i)
     ceiling = openmeteo.cloud_base_to_ceiling_ft(_at(fc, "cloud_base", i))
+    hourly, elev = fc.get("hourly", {}), openmeteo.field_elevation_ft(fc)
+    # The full stack, not just the lowest broken base. ``derive_ceiling_ft``'s own
+    # docstring warns that callers rendering text to a pilot need ``lowest_layer``
+    # instead, so they can tell "clear" from "nothing sampled" - and this is the
+    # path every endpoint card's weather goes through, so it was throwing that
+    # distinction away one hop from where it was derived.
+    stack = openmeteo.cloud_stack(hourly, i, elev)
+    stack_sky = sky.from_stack(stack)
     if ceiling is None:  # GEM has no cloud_base - infer from saturated layers
-        ceiling = openmeteo.derive_ceiling_ft(fc.get("hourly", {}), i, openmeteo.field_elevation_ft(fc))
+        ceiling = openmeteo.derive_ceiling_ft(hourly, i, elev)
+    else:
+        # ``cloud_base`` answered where the pressure levels may not have. It is
+        # the ceiling this hour is gated on, so the stack has to carry it.
+        stack_sky = sky.with_ceiling(stack_sky, ceiling)
     return {
         "wind_dir_true": _at(fc, "winddirection_10m", i),
         "wind_kt": _at(fc, "windspeed_10m", i),
         "gust_kt": _at(fc, "windgusts_10m", i),
         "ceiling_agl_ft": ceiling,
+        # One sky, reconciled: see ``sky.with_ceiling``. GEM serves no
+        # ``cloud_base``, so in practice this is the same walk that produced the
+        # ceiling above; on a model that serves both, the ceiling wins.
+        "sky": stack_sky,
         "visibility_sm": openmeteo.visibility_to_sm(_at(fc, "visibility", i)),
         "cloud_cover_pct": _at(fc, "cloudcover", i),
         "hazards": hazards,
@@ -123,6 +140,13 @@ def _merge_model_taf(model: dict, taf: dict | None) -> tuple[dict, bool]:
         merged["visibility_sm"] = taf["visibility_sm"]
     if taf.get("ceiling_agl_ft") is not None:
         merged["ceiling_agl_ft"] = taf["ceiling_agl_ft"]
+    # The stack goes with the ceiling, on the same rule. ``_parse_group`` leaves
+    # this None for a group that says nothing about cloud, so a BECMG changing
+    # only the wind cannot erase the deck the model is carrying - and where the
+    # forecaster did state a sky, the card prints theirs rather than an
+    # interpolation of pressure-level humidity.
+    if taf.get("sky") is not None:
+        merged["sky"] = taf["sky"]
     # Wind used to be worst-of model/TAF. That let a modelled 30 kt gust stand at
     # a field whose TAF forecast a steady 10 kt - and since the headline chip
     # reads TAF whenever the TAF supplied a ceiling, the card claimed a gust the

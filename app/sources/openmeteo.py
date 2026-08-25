@@ -91,6 +91,32 @@ CLOUD_RH_PCT = 95.0    # relative humidity at/above this = broken+ cloud likely
 # Cover at/above this is worth reporting as a scattered layer even though it is
 # not a ceiling. Saying "SCT at 4,500" is honest; saying "clear" is not.
 SCT_COVER_PCT = 25.0
+# The two bands that only matter for *printing* a layer, never for gating one.
+# FEW is the floor below which a level is reported as no cloud at all; OVC is
+# where broken becomes overcast.
+FEW_COVER_PCT = 12.0
+OVC_COVER_PCT = 88.0
+
+# Per-level cover -> the METAR amount that level is reported as. These are the
+# ceiling derivation's own thresholds, and they deliberately DISAGREE with
+# ``services.timeline.cloud_category``, which maps *total* sky cover from a single
+# ``cloudcover`` series and has no layer to attach to. Printing an amount off one
+# set of numbers while gating the verdict on another is how a card ends up
+# headlining "SCT" over a row that failed on a ceiling.
+_AMOUNT_FLOOR: dict[str, float] = {
+    "OVC": OVC_COVER_PCT, "BKN": BKN_COVER_PCT,
+    "SCT": SCT_COVER_PCT, "FEW": FEW_COVER_PCT,
+}
+
+
+def cover_amount(pct: float | None) -> str | None:
+    """Per-level cloud cover as a METAR amount, or None below ``FEW_COVER_PCT``."""
+    if pct is None:
+        return None
+    for amount, floor in _AMOUNT_FLOOR.items():   # OVC first: highest band wins
+        if pct >= floor:
+            return amount
+    return None
 
 # Surface variables. Requested defensively - Open-Meteo silently omits any a
 # given model doesn't carry, so downstream code treats missing series as None.
@@ -324,6 +350,46 @@ def _level_msl_ft(hourly: dict, lvl: str, i: int) -> float:
     return PRESSURE_SCAN_LEVELS_FT[lvl]
 
 
+def _profile(hourly: dict, i: int, elevation_ft: float | None) -> list[dict]:
+    """Every scan level's height and cloud amount at one hour, lowest first.
+
+    The single walk the three cloud derivations share. ``lowest_layer`` wants the
+    base of the lowest deck, ``deck_top`` its top, and ``cloud_stack`` the whole
+    stack to print - three different questions about *one* sky, and the standing
+    rule in ``PRESSURE_SCAN_LEVELS_FT`` is that they can never be derived from two
+    different pictures of it. Sampling once and letting each apply its own rules
+    to the same list is what enforces that: a level resolved here is resolved
+    identically for all three.
+
+    Each entry carries ``msl_ft``, ``agl_ft`` (None when the field elevation is
+    unknown), ``cover_pct`` and ``from_rh``. A level the model does not serve at
+    all is absent rather than zero - unserved is unknown, never clear.
+
+    ``from_rh`` marks a level whose cover came from the saturation fallback:
+    relative humidity mapped onto the cover scale so it crosses at exactly
+    ``CLOUD_RH_PCT`` == ``BKN_COVER_PCT`` and the interpolations do not have to
+    know which of the two they were handed. It is only ever good enough to say
+    *broken*: 80% humidity is not a scattered layer, and callers that report
+    thinner amounts must skip these levels rather than believe the mapped number.
+    """
+    out: list[dict] = []
+    for lvl in sorted(PRESSURE_SCAN_LEVELS_FT, key=lambda k: PRESSURE_SCAN_LEVELS_FT[k]):
+        msl_ft = _level_msl_ft(hourly, lvl, i)
+        cover = _at(hourly, f"cloud_cover_{lvl}", i)
+        from_rh = False
+        if cover is None:
+            rh = _at(hourly, f"relative_humidity_{lvl}", i)
+            if rh is None:
+                continue                 # unserved level: unknown, not clear
+            cover, from_rh = BKN_COVER_PCT + (rh - CLOUD_RH_PCT), True
+        out.append({
+            "level": lvl, "msl_ft": msl_ft,
+            "agl_ft": None if elevation_ft is None else msl_ft - elevation_ft,
+            "cover_pct": cover, "from_rh": from_rh,
+        })
+    return out
+
+
 def lowest_layer(hourly: dict, i: int, elevation_ft: float | None) -> dict:
     """The lowest significant cloud layer at one hour, with its provenance.
 
@@ -353,31 +419,24 @@ def lowest_layer(hourly: dict, i: int, elevation_ft: float | None) -> dict:
     if elevation_ft is None:
         return out
 
-    levels = sorted(PRESSURE_SCAN_LEVELS_FT, key=lambda k: PRESSURE_SCAN_LEVELS_FT[k])
     prev_agl: float | None = None      # last level below the threshold
     prev_cover: float | None = None
 
-    for lvl in levels:
-        msl_ft = _level_msl_ft(hourly, lvl, i)
-        agl = msl_ft - elevation_ft
-        cover = _at(hourly, f"cloud_cover_{lvl}", i)
+    for lyr in _profile(hourly, i, elevation_ft):
+        agl, cover = lyr["agl_ft"], lyr["cover_pct"]
+        out["sampled"] = True
+        if agl > 100:
+            out["scan_top_ft"] = round(agl)
 
-        if cover is None:
-            # No cloud-cover series for this model - fall back to saturation (RH).
-            rh = _at(hourly, f"relative_humidity_{lvl}", i)
-            if rh is None:
-                continue
-            out["sampled"] = True
-            if agl > 100:
-                out["scan_top_ft"] = round(agl)
-            if rh >= CLOUD_RH_PCT and agl > 100:
+        if lyr["from_rh"]:
+            # Saturation only ever speaks to broken+, and it does so at the
+            # level's own height: there is no thinner reading below to
+            # interpolate against, and ``prev_*`` deliberately stays where it was.
+            if cover >= BKN_COVER_PCT and agl > 100:
                 out["ceiling_ft"] = round(agl)
                 return out
             continue
 
-        out["sampled"] = True
-        if agl > 100:
-            out["scan_top_ft"] = round(agl)
         if out["max_cover_pct"] is None or cover > out["max_cover_pct"]:
             out["max_cover_pct"] = cover
 
@@ -411,7 +470,7 @@ def deck_top(hourly: dict, i: int, elevation_ft: float | None = None) -> dict:
     levels low->high looking for the first level at or above ``BKN_COVER_PCT`` and
     interpolates the *base* on the way up through the threshold; this one keeps
     walking and interpolates the *top* on the way back down through it. Same
-    levels, same ``_level_msl_ft``, same saturation fallback - so a ceiling and a
+    levels, same ``_profile``, same saturation fallback - so a ceiling and a
     top can never be derived from two different pictures of the same sky.
 
     Everything here is **MSL**, deliberately, and every field name says so. A
@@ -451,27 +510,14 @@ def deck_top(hourly: dict, i: int, elevation_ft: float | None = None) -> dict:
                  "top_agl_ft": None, "deck_count": 0, "above_scan": False,
                  "scan_top_msl_ft": None, "from_rh": False, "sampled": False}
 
-    levels = sorted(PRESSURE_SCAN_LEVELS_FT, key=lambda k: PRESSURE_SCAN_LEVELS_FT[k])
     in_deck = False
     prev_msl: float | None = None      # last level found INSIDE the deck
     prev_cover: float | None = None
     # "Below the field" the same way ``lowest_layer`` means it (its ``agl > 100``).
     floor = (elevation_ft + 100.0) if elevation_ft is not None else None
 
-    for lvl in levels:
-        msl = _level_msl_ft(hourly, lvl, i)
-        cover = _at(hourly, f"cloud_cover_{lvl}", i)
-        from_rh = False
-        if cover is None:
-            # No per-level cloud cover for this model - fall back to saturation, as
-            # ``lowest_layer`` does. Mapped onto the cover scale so it crosses at
-            # exactly RH == CLOUD_RH_PCT and the interpolation below does not have
-            # to know which of the two it was handed.
-            rh = _at(hourly, f"relative_humidity_{lvl}", i)
-            if rh is None:
-                continue                 # unserved level: unknown, not clear
-            cover = BKN_COVER_PCT + (rh - CLOUD_RH_PCT)
-            from_rh = True
+    for lyr in _profile(hourly, i, elevation_ft):
+        msl, cover, from_rh = lyr["msl_ft"], lyr["cover_pct"], lyr["from_rh"]
 
         out["sampled"] = True
         out["scan_top_msl_ft"] = round(msl)
@@ -516,6 +562,121 @@ def deck_top(hourly: dict, i: int, elevation_ft: float | None = None) -> dict:
     if out["top_msl_ft"] is not None and elevation_ft is not None:
         out["top_agl_ft"] = round(out["top_msl_ft"] - elevation_ft)
     return out
+
+
+def cloud_stack(hourly: dict, i: int, elevation_ft: float | None) -> dict:
+    """Every cloud layer at one hour, lowest first - the sky as it would be reported.
+
+    :func:`lowest_layer` answers "is there a ceiling" and :func:`deck_top` answers
+    "what is on top of it". Neither answers the question a pilot actually asks
+    first, which is *what is the sky doing* - and the difference between "clear",
+    "scattered at 4,000" and "nothing came back" is the difference between three
+    flights. Same walk (``_profile``), same thresholds, same interpolation, so the
+    stack printed on the card and the ceiling the verdict gates on are the same
+    cloud.
+
+    A layer is one contiguous run of levels carrying at least ``FEW_COVER_PCT``.
+    Its ``amount`` is the band the run's *peak* cover falls in. Its base and top
+    are interpolated where the run crosses ``BKN_COVER_PCT`` for a broken-or-worse
+    layer and its own band's floor for a thinner one - so a layer reported BKN or
+    OVC has exactly the base :func:`lowest_layer` would call the ceiling and
+    exactly the top :func:`deck_top` would resolve. Interpolating an overcast
+    layer through 88% instead would print a base hundreds of feet above the
+    ceiling the verdict was gated on, which is the one disagreement this function
+    exists to make impossible.
+
+    ``layers``       ``[{amount, base_ft, top_ft, cover_pct, from_rh}]``, AGL,
+                     lowest first. ``top_ft`` is None for a layer still going at
+                     the top of the scan - the same honest unknown ``deck_top``
+                     reports as ``above_scan``.
+    ``scan_top_ft``  AGL of the highest level examined. "Nothing found" from this
+                     derivation has only ever meant "nothing below here".
+    ``sampled``      whether any usable series existed at all. False is a
+                     statement about the fetch, never about the sky.
+    """
+    out: dict = {"layers": [], "scan_top_ft": None, "sampled": False}
+    if elevation_ft is None:
+        return out
+
+    prof = _profile(hourly, i, elevation_ft)
+    if not prof:
+        return out
+    out["sampled"] = True
+
+    above_field = [lyr["agl_ft"] for lyr in prof if lyr["agl_ft"] > 100]
+    if above_field:
+        out["scan_top_ft"] = round(max(above_field))
+
+    # Which levels count as cloud. A level at or below the field is fog or terrain
+    # obscuration - what ``lowest_layer`` and ``deck_top`` both refuse to call
+    # cloud - and the saturation fallback can only ever mean *broken*, so a
+    # ``from_rh`` level below that is a gap rather than a thin layer. Believing
+    # its mapped number would print "SCT" off 80% humidity.
+    def cloudy(lyr: dict) -> bool:
+        floor = BKN_COVER_PCT if lyr["from_rh"] else FEW_COVER_PCT
+        return lyr["agl_ft"] > 100 and lyr["cover_pct"] >= floor
+
+    start = None
+    for idx in range(len(prof) + 1):
+        if idx < len(prof) and cloudy(prof[idx]):
+            if start is None:
+                start = idx
+            continue
+        if start is not None:
+            built = _build_layer(prof, start, idx - 1)
+            if built:
+                out["layers"].append(built)
+            start = None
+    return out
+
+
+def _build_layer(prof: list[dict], lo: int, hi: int) -> dict | None:
+    """One contiguous run of cloudy levels, ``prof[lo:hi + 1]``, as a layer.
+
+    Both crossings are interpolated against the *adjacent sampled level* rather
+    than against the run's own ends, because that is what ``lowest_layer`` and
+    ``deck_top`` interpolate against - the level below a deck is by definition
+    outside it. A neighbour at or below the field is not interpolated against at
+    all, matching ``lowest_layer``'s ``prev_agl > 100`` guard.
+    """
+    run = prof[lo:hi + 1]
+    peak = max(lyr["cover_pct"] for lyr in run)
+    amount = cover_amount(peak)
+    if amount is None:
+        return None
+    # A broken or overcast layer is measured at the broken threshold: that height
+    # is the ceiling, and the ceiling is the number everything else on the page
+    # was gated on.
+    thresh = BKN_COVER_PCT if amount in ("BKN", "OVC") else _AMOUNT_FLOOR[amount]
+
+    first = next(n for n in range(lo, hi + 1) if prof[n]["cover_pct"] >= thresh)
+    base = _cross(prof, first - 1 if first > 0 else None, first, thresh)
+
+    last = max(n for n in range(lo, hi + 1) if prof[n]["cover_pct"] >= thresh)
+    nxt = last + 1 if last + 1 < len(prof) else None
+    top = _cross(prof, nxt, last, thresh) if nxt is not None else None
+
+    return {"amount": amount, "base_ft": round(base),
+            "top_ft": None if top is None else round(top),
+            "cover_pct": round(peak), "from_rh": any(lyr["from_rh"] for lyr in run)}
+
+
+def _cross(prof: list[dict], outside: int | None, inside: int, thresh: float) -> float:
+    """Where cover crosses ``thresh`` between an in-cloud level and its neighbour.
+
+    Falls back to the in-cloud level's own height when there is no neighbour to
+    interpolate against, when that neighbour sits at or below the field, or when
+    it is not actually thinner - the same three fallbacks ``lowest_layer`` takes.
+    """
+    here = prof[inside]
+    if outside is None or outside < 0:
+        return here["agl_ft"]
+    other = prof[outside]
+    if other["agl_ft"] <= 100 or other["cover_pct"] >= here["cover_pct"]:
+        return here["agl_ft"]
+    frac = (thresh - other["cover_pct"]) / (here["cover_pct"] - other["cover_pct"])
+    frac = min(max(frac, 0.0), 1.0)
+    return other["agl_ft"] + frac * (here["agl_ft"] - other["agl_ft"])
 
 
 def derive_ceiling_ft(hourly: dict, i: int, elevation_ft: float | None) -> float | None:
