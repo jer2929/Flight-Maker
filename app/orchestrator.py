@@ -2076,7 +2076,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         threat_details["hard_imc"] = _hard_imc_detail(
             route_ws, enroute_ceiling, route_tops, cloud_thickness_ft,
             dep.elevation_ft)
-    route_threats = threat_check_list(present, threat_details)
+    route_threats = threat_check_list(present, threat_details,
+                                      flight_rules=flight_rules)
     threat_count = threat_weight(present)
     # One rule for all of them: a row traceable only to a TEMPO asks for an out
     # rather than stopping the flight, and every other failing row still stops it.

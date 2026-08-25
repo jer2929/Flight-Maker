@@ -648,13 +648,24 @@ def derive_threats(
 
 
 def threat_check_list(present: set[str],
-                     details: dict[str, str] | None = None) -> list[ThreatCheck]:
+                     details: dict[str, str] | None = None,
+                     flight_rules: str = "vfr") -> list[ThreatCheck]:
     order = get_limits()["threat_stacking"]["major_threats"]
-    # These rows only make sense when actually present, so don't show them as
-    # empty rows on every flight: single-pilot IFR without autopilot is an IFR-only
-    # pilot factor, and Hard IMC is a hard NO-GO under VFR (shown only for IFR
-    # opt-in when present).
-    hide_when_absent = {"single_pilot_ifr_no_autopilot", "hard_imc"}
+    # Single-pilot IFR without autopilot is a pilot factor, not something the
+    # system can test. An "absent" row would only be reporting an unticked box
+    # back to the pilot who left it unticked, so it appears when ticked and not
+    # otherwise.
+    hide_when_absent = {"single_pilot_ifr_no_autopilot"}
+    # Hard IMC is only *tested* on an IFR flight where the pilot opted in (see
+    # derive_threats). Where it is tested, show the row either way round: a clean
+    # result from a check the pilot deliberately switched on is worth seeing, and
+    # a listed row is the only thing that tells "we looked, it's clear" apart from
+    # "we never looked". Under VFR - where IMC is a hard NO-GO on the ceiling and
+    # visibility rows rather than a stacking threat - or with the opt-in off, the
+    # test never runs, and a green tick for a check nobody made would be a lie.
+    if not (flight_rules == "ifr"
+            and get_limits().get("ifr_minimums", {}).get("hard_imc_as_threat")):
+        hide_when_absent = hide_when_absent | {"hard_imc"}
     # Opted out of night as a threat: drop the row rather than show a permanent
     # "absent" that reads as though a night flight had passed a check.
     if not get_limits()["threat_stacking"].get("night_as_threat", True):
@@ -706,7 +717,7 @@ def decision(
     rows (icing/turbulence/etc.) computed elsewhere."""
     checks = conditions_checks(weather, best_runway, mode, ceiling_mode=ceiling_mode, flight_rules=flight_rules) + (extra_checks or [])
     present = derive_threats(weather, manual_threats, flight_rules=flight_rules)
-    tchecks = threat_check_list(present)
+    tchecks = threat_check_list(present, flight_rules=flight_rules)
     weighted = threat_weight(present)
 
     verdict = _worse(checks_verdict(checks), threat_verdict(weighted))
