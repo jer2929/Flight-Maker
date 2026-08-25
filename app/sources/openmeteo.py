@@ -139,6 +139,27 @@ _SURFACE_VARS = [
 WIND_ONLY_VARS = ["windspeed_10m", "winddirection_10m", "windgusts_10m"]
 
 
+def cloud_vis_vars() -> list[str]:
+    """Enough to derive a ceiling and read a visibility, and nothing else.
+
+    For discovery's enroute midpoints. The full list is ~80 variables per point
+    and a scan can ask for sixty midpoints; an enroute sample reads the cloud
+    profile and the surface visibility, so the winds aloft, the per-level
+    temperature and the whole surface block are response nobody looks at.
+
+    Deliberately the same pressure levels ``cloud_stack`` walks - a ceiling
+    derived from a narrower profile than the one the endpoints use would be a
+    second picture of the sky, which is the thing this module keeps refusing to
+    have.
+    """
+    out = ["visibility"]
+    for lvl in PRESSURE_SCAN_LEVELS_FT:
+        out.append(f"cloud_cover_{lvl}")
+        out.append(f"relative_humidity_{lvl}")
+        out.append(f"geopotential_height_{lvl}")
+    return out
+
+
 def _hourly_vars() -> list[str]:
     vars_ = list(_SURFACE_VARS)
     for lvl in PRESSURE_LEVELS_FT:
@@ -224,6 +245,37 @@ async def forecast_many(points: list[tuple[float, float]], days: int = 2,
         return data if isinstance(data, list) else [data]
 
     return await cache.once(key, settings.openmeteo_cache_ttl, fetch)
+
+
+# One request per this many points. Open-Meteo takes them comma-separated, so the
+# whole scan in one URL is one very long request that fails as a unit - and on a
+# 300 nm scan the midpoints alone can run to a few hundred points. Chunked, a
+# failure costs one chunk's samples instead of every enroute reading on the page.
+MANY_CHUNK = 40
+
+
+async def forecast_many_chunked(points: list[tuple[float, float]], days: int = 2,
+                                hourly: list[str] | None = None,
+                                chunk: int = MANY_CHUNK) -> list[dict]:
+    """:func:`forecast_many` over an arbitrarily long point list, in chunks.
+
+    Returns one entry per point, in order, always the same length as ``points`` -
+    callers index straight into it. A chunk that fails contributes empty dicts
+    rather than shortening the list, which would silently re-align every sample
+    after it with the wrong aerodrome.
+    """
+    if not points:
+        return []
+    groups = [points[i:i + chunk] for i in range(0, len(points), chunk)]
+    results = await asyncio.gather(
+        *[forecast_many(g, days, hourly) for g in groups], return_exceptions=True)
+    out: list[dict] = []
+    for group, res in zip(groups, results):
+        if isinstance(res, list) and len(res) == len(group):
+            out.extend(res)
+        else:
+            out.extend({} for _ in group)
+    return out
 
 
 async def forecast_points(points: list[tuple[float, float]],

@@ -27,7 +27,13 @@ of a **Personal Flight Decision Card**:
 3. **Discovery** - "where can I go within X nm of my base," ranked by the card.
    It takes an ETD too: each candidate is assessed at *its own* ETA, so a 20 nm
    hop and a 200 nm leg from the same departure time are judged on the weather
-   each will actually meet.
+   each will actually meet. Legs past **50 nm** also get cloud and visibility
+   sampled **along the way** - one midpoint past 50 nm, two past 100, three past
+   150 - each read at the hour you overfly it, and each able to fail the card.
+   Every card says how many points it took, so *"clear enroute"* and *"enroute not
+   checked"* never look alike. Under 50 nm the two ends are the route, and the
+   card says that instead. The whole scan's midpoints ride one extra batched
+   request.
 
 ### Departure time (ETD)
 The picker offers **quarter hours for the first four hours**, then whole hours out
@@ -455,9 +461,21 @@ GEM does not serve a cloud base, so an en-route ceiling is *inferred* by scannin
 pressure levels for the lowest broken-or-worse layer, taking each level's real
 geopotential height for that hour and interpolating the base between levels. That
 buys roughly ±700–1,000 ft. It is structurally blind to decks thinner than the
-level spacing, and it cannot see above the top of the scan (~700 hPa, near
-10,000 ft) - so the card says *"no ceiling below 10,000 ft"* rather than "clear",
-because the latter claims more than the method supports.
+level spacing, and it cannot see above the top of the scan - so the card says
+*"clear below ~17,000 ft AGL"* rather than "clear", because the latter claims more
+than the method supports.
+
+The same walk reports the **whole stack**, not just the layer that makes a
+ceiling: `SCT ~2,400 ft · BKN ~5,300 ft`. That matters because "no ceiling" has
+four meanings and only one of them is good news, so each gets its own sentence -
+*not assessed* (the forecast did not download), *clear below ~X*, *SCT ~4,000 ft ·
+no broken layer*, and the stack itself. They are never rendered the same way, and
+none of them is ever rendered as an empty space.
+
+Cloud **type** shows where it was observed and nowhere else: `CB`/`TCU` off the
+body group, and the genus off the Canadian remarks (`RMK SC8` → `OVC 1,000 ft SC`,
+`RMK CU6CI1` → cumulus under cirrus). No forecast model carries a cloud type, so a
+model-derived layer shows none rather than guessing one.
 
 The much better answer, where one exists, is a **real report**: the nearest
 reporting station to each route midpoint rides the METAR/TAF batch the route

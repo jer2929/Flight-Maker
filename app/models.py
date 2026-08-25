@@ -466,6 +466,21 @@ class AirportAssessment(BaseModel):
     # Discovery only: raw model hours either side of the flight, for the HRDPS
     # chip's popover. Empty everywhere else.
     model_hours: list[ForecastHour] = []
+    # Discovery only: the air between here and the origin.
+    #
+    # A discovery card has always assessed two points - your departure field and
+    # this aerodrome - which is the whole route on a 20 nm hop and half the story
+    # on a 150 nm one. Legs past ``orchestrator.DISCOVERY_ENROUTE_STEPS`` now
+    # carry model samples along the way, each read at the hour it is overflown.
+    #
+    # ``enroute_points`` is how many were taken, and it is what tells "sampled,
+    # nothing there" apart from "not sampled": 0 on a short leg means the ends
+    # are the route, not that the middle came back clear. The card says which.
+    enroute_points: int = 0
+    enroute_sky: Optional[Sky] = None
+    enroute_ceiling_ft: Optional[float] = None
+    enroute_visibility_sm: Optional[float] = None
+    enroute_at: Optional[str] = None          # which sample the worst value came from
     # Circuits only: the area advisories around this aerodrome, in the same
     # shapes the route result uses. Empty on a route endpoint card and in
     # discovery, which carry them at the top level (route) or not at all.

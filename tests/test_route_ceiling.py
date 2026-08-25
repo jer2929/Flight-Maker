@@ -96,6 +96,33 @@ def test_scattered_layer_is_reported_rather_than_called_clear():
     assert row.passed is True, "scattered cloud is not a limit failure"
 
 
+def test_the_no_ceiling_row_names_the_point_it_read():
+    """The row that reports cloud has to say where, like the row that reports a deck.
+
+    "No broken layer" over a three-hundred-mile route is a claim about four
+    sampled points, and the one case where a pilot most wants to know which one
+    was looked at used to be the one case that would not say.
+    """
+    mid = Sky(state="no_ceiling", source=Source.MODEL,
+              layers=[SkyLayer(amount="SCT", base_ft=3200, estimated=True)])
+    high = Sky(state="clear", scan_top_ft=9882, source=Source.MODEL)
+    enroute = [{"ceiling_ft": None, "sampled": True, "sky": high,
+                "label": "~15 nm from CYKF"},
+               {"ceiling_ft": None, "sampled": True, "sky": mid,
+                "label": "~30 nm from CYKF near CYCK"}]
+    row = _rows(enroute, dep_ceiling=None, dest_ceiling=None)["ceiling"]
+    assert row.location == "~30 nm from CYKF near CYCK", row.location
+    assert "SCT" in row.actual_text
+
+
+def test_a_row_with_nothing_sampled_names_no_point():
+    """There is no point to name: nothing was read anywhere."""
+    dead = [{"ceiling_ft": None, "sampled": False, "label": "~30 nm from CYKF"}]
+    row = _rows(dead, dep_ceiling=None, dest_ceiling=None)["ceiling"]
+    assert row.location is None
+    assert row.source is None
+
+
 def test_a_sampled_point_with_no_stack_never_reads_as_a_failed_fetch():
     """``sampled`` and the stack have to agree.
 
