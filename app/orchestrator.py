@@ -1403,17 +1403,31 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
         # right long before anything else did, and phrasing them here a second
         # time is how the checklist ended up saying "no broken layer - scattered
         # cloud near 4,000 ft AGL" over a card chip that said nothing at all.
-        row_sky = sky_svc.worst([e.get("sky") for e in enroute])
+        # Every point on the route, ends included, each with the name this row
+        # would print for it - the same set ``pts`` above draws the worst ceiling
+        # from, so "no ceiling anywhere" is a statement about the same points a
+        # real ceiling would have been.
+        sky_pts = ([(dep_a.weather.sky, f"{dep_a.airport.ident} (departure)")]
+                   + [(e.get("sky"), e.get("label")) for e in enroute]
+                   + [(dest_a.weather.sky, f"{dest_a.airport.ident} (destination)")])
+        row_sky = sky_svc.worst([sk for sk, _ in sky_pts])
+        where = (None if row_sky is None else
+                 next((lbl for sk, lbl in sky_pts if sk is row_sky), None))
         if not sampled:
             # Not a statement about the weather. Say so, and let the banner fire.
             fetch_health.record(fetch_health.HRDPS)
-            text, src = "no data - forecast did not download", None
+            text, src, where = "no data - forecast did not download", None, None
         else:
             text = sky_svc.describe(row_sky)
             src = Source.OBSERVED.value if obs_backed else Source.MODEL.value
+        # A row that reports cloud names the point it read it at, exactly as the
+        # row above does when there IS a ceiling. Without this the one case where
+        # the pilot most wants to know where you looked - "no broken layer" - was
+        # the one case that would not say.
         checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, route)",
                                  limit_text=f"≥ {ceil_limit:,.0f} ft AGL",
-                                 actual_text=text, passed=True, source=src))
+                                 actual_text=text, passed=True, source=src,
+                                 location=where))
 
     # Departure/destination ceiling against the *circuit* minimum. The XC row above
     # already fails anything below the XC minimum; this row says whether the end in
