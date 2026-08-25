@@ -41,6 +41,12 @@ def _fc(cloud_base_m, cover=None):
     n = len(TIMES)
     levels = {f"cloud_cover_{lvl}": [pct] * n
               for lvl, pct in (cover or {}).items()}
+    # Winds aloft, so there is an altitude pick to inspect at all. A light,
+    # near-uniform westerly: the on-top preference then turns on the cloud rather
+    # than on a wind gradient that would decide the answer by itself.
+    for lvl in ("925hPa", "850hPa", "700hPa", "600hPa", "500hPa"):
+        levels[f"windspeed_{lvl}"] = [12.0] * n
+        levels[f"winddirection_{lvl}"] = [270.0] * n
     return {"utc_offset_seconds": 0, "elevation": 244, "hourly": {**levels,
         "time": TIMES,
         "windspeed_10m": [6.0] * n, "winddirection_10m": [90.0] * n,
@@ -270,3 +276,57 @@ def test_a_vfr_flight_is_not_given_a_hard_imc_threat_by_a_deep_deck(stubbed):
     stubbed(DEEP_BASE, cover=DEEP_COVER)
     with limits_override({"hard_imc_as_threat": True}):
         assert _threat(_run("vfr"), "hard_imc") is None
+
+
+# --- climbing above the deck, end to end ------------------------------------
+
+
+def test_an_ifr_pick_climbs_above_a_reachable_deck(stubbed):
+    # Tops near 12,700 ft are out of reach under the 12,500 cap, so use a deck
+    # that stops low enough to get above: solid to 850 hPa, thinning at 825.
+    cover = {"1000hPa": 5, "975hPa": 90, "950hPa": 90, "925hPa": 90,
+             "900hPa": 90, "875hPa": 90, "850hPa": 90, "825hPa": 10,
+             "800hPa": 10, "775hPa": 10, "750hPa": 10, "700hPa": 10,
+             "650hPa": 10, "600hPa": 10, "550hPa": 10, "500hPa": 10}
+    stubbed(300.0, cover=cover)
+    r = _run("ifr")
+    assert r.enroute_tops_msl_ft is not None
+    assert r.altitude.on_top is True
+    # And it actually clears them by the margin it claims.
+    assert r.altitude.altitude_ft >= r.altitude.tops_ft + 1000
+
+
+def test_the_on_top_pick_survives_the_ceiling_re_gate(stubbed):
+    # The route makes two altitude picks - one against a provisional destination,
+    # one against the finished card. Forgetting to pass the tops to the second is
+    # the easiest bug in this feature: the panel then reads "on top" off a stale
+    # object, or loses it entirely.
+    cover = {"1000hPa": 5, "975hPa": 90, "950hPa": 90, "925hPa": 90,
+             "900hPa": 90, "875hPa": 90, "850hPa": 90, "825hPa": 10,
+             "800hPa": 10, "775hPa": 10, "750hPa": 10, "700hPa": 10,
+             "650hPa": 10, "600hPa": 10, "550hPa": 10, "500hPa": 10}
+    stubbed(300.0, cover=cover)
+    r = _run("ifr")
+    # Whatever the re-gate did, the pick the card carries and the pick the header
+    # carries are the same object, and it still knows about the tops.
+    assert r.altitude.tops_ft is not None
+    assert r.destination.altitude is None or \
+        r.destination.altitude.altitude_ft == r.altitude.altitude_ft
+
+
+def test_a_vfr_flight_is_never_put_on_top(stubbed):
+    cover = {"1000hPa": 5, "975hPa": 90, "950hPa": 90, "925hPa": 90,
+             "900hPa": 90, "875hPa": 90, "850hPa": 90, "825hPa": 10,
+             "800hPa": 10, "775hPa": 10, "750hPa": 10, "700hPa": 10,
+             "650hPa": 10, "600hPa": 10, "550hPa": 10, "500hPa": 10}
+    stubbed(300.0, cover=cover)
+    r = _run("vfr")
+    assert r.altitude is None or r.altitude.on_top is False
+
+
+def test_unknown_tops_leave_the_pick_untouched(stubbed):
+    # No per-level cover: a ceiling and no tops, which is the ordinary case.
+    stubbed(IFR_OK)
+    r = _run("ifr")
+    assert r.altitude.on_top is False
+    assert r.altitude.tops_ft is None and r.altitude.wind_cost_kt is None

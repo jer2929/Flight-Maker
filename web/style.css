@@ -592,6 +592,11 @@ select, input[type=text], .route-inputs input {
   text-transform: uppercase;
 }
 
+/* A good-news note in a row of warnings. Mirrors ``.meta .warn`` (which uses the
+   no-go ink) so the two read as the same kind of statement with opposite signs -
+   being on top is not a caveat, and it should not look like one. */
+.ok-note { color: var(--go-ink); font-weight: 600; cursor: help; }
+
 .src.OBSERVED { color: var(--go-ink); }
 .src.TAF { color: var(--taf-ink); }
 .src.HRDPS { color: var(--mit-ink); }

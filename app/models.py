@@ -205,6 +205,17 @@ class AltitudeRecommendation(BaseModel):
     groundspeed_kt: float
     course_mag: Optional[float] = None
     levels: list[WindAloft] = []
+    # The tops this pick was made against, and what it did about them. All
+    # defaulted: a caller that knows nothing about tops gets exactly the
+    # recommendation it got before any of this existed.
+    tops_ft: Optional[float] = None       # MSL. None = tops UNKNOWN, not "no cloud"
+    tops_source: Optional[str] = None     # "PIREP" | "model"
+    on_top: bool = False                  # clears the tops by ON_TOP_MARGIN_FT
+    # Headwind given up against the fastest level, reported whether the climb was
+    # taken or not - so a pilot who disagrees with the budget can see the trade
+    # rather than being handed one number.
+    wind_cost_kt: Optional[float] = None
+    wind_optimal_ft: Optional[float] = None   # the level that cost was measured against
 
 
 class WindowForecast(BaseModel):
@@ -451,6 +462,10 @@ class HourCondition(BaseModel):
     # rather than on the surface wind. ``headwind_kt`` is signed the same way as
     # ``AltitudeRecommendation``: positive is a headwind.
     altitude_ft: Optional[float] = None
+    # Whether this hour's pick clears the tops. Per-hour like everything else on
+    # the strip: both the wind and the deck move, so an hour that gets you on top
+    # is worth seeing even when the hour you asked about does not.
+    on_top: bool = False
     headwind_kt: Optional[float] = None
     groundspeed_kt: Optional[float] = None
 

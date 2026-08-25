@@ -1759,17 +1759,42 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     levels = (_winds_aloft_at(dep_fc, etd_utc + timedelta(hours=t_prov / 2))
               if dep_fc else [])
 
-    def _pick_altitude(ceiling_ft: float | None) -> AltitudeRecommendation | None:
-        """The best level under ``ceiling_ft``, magnetic wind directions filled."""
+    def _pick_altitude(ceiling_ft: float | None,
+                       tops_msl_ft: float | None = None,
+                       tops_source: str | None = None) -> AltitudeRecommendation | None:
+        """The best level under ``ceiling_ft``, magnetic wind directions filled.
+
+        ``tops_msl_ft`` must be passed on EVERY call, including the ceiling re-gate
+        further down: a second pick made without it silently drops the on-top
+        choice, and the panel then reads "on top" off a stale object or loses it
+        altogether.
+        """
         rec = recommend_altitude(levels, bearing, get_cruise_kt(),
                                  course_mag=bearing_mag, ceiling_ft=ceiling_ft,
                                  flight_rules=flight_rules, distance_nm=distance,
-                                 field_elev_ft=dep.elevation_ft)
+                                 field_elev_ft=dep.elevation_ft,
+                                 tops_msl_ft=tops_msl_ft, tops_source=tops_source)
         for lv in (rec.levels if rec else []):
             lv.direction_mag = _mag(lv.direction_true, dep.lat, dep.lon)
         return rec
 
-    alt = _pick_altitude(gate_ceiling)
+    # Tops for the first pick, from the provisional destination - the same
+    # two-pass shape the ceiling gate above uses, and for the same reason: the
+    # altitude decides the ETA, and the ETA decides which forecast hour the
+    # destination is read at. The finished figure is recomputed below once the
+    # destination card exists, and the pick is re-run if it moved.
+    prov_tops = _route_tops(
+        [({"ceiling_ft": dep_a.weather.ceiling_agl_ft, **_tops_at(dep_fc, etd_utc)},
+          "departure")]
+        + [(e, "enroute") for e in enroute]
+        + [({"ceiling_ft": dest_ws_prov.ceiling_agl_ft, **_tops_at(dest_fc, eta_prov)},
+            "destination")])
+    _apply_tops_pirep(prov_tops,
+                      _tops_pirep(raw_hazards, route_pts, etd_utc, eta_prov, now,
+                                  settings),
+                      dep, dest)
+    alt = _pick_altitude(gate_ceiling, prov_tops["planning_msl_ft"],
+                         prov_tops["source"])
 
     # --- Flight window (pass 2 of 2) ------------------------------------------
     # Refine the ETA now that groundspeed is known, and stop there. A second
@@ -1883,8 +1908,14 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     gate_ceiling = lowest_ceiling([gate_ceiling, *ceiling_points,
                                    *_card_ceilings(dep_a.weather),
                                    *_card_ceilings(dest_a.weather)])
-    if alt and not clears_ceiling(alt.altitude_ft, gate_ceiling, flight_rules):
-        alt = _pick_altitude(gate_ceiling)
+    # Two reasons to ask again: the pick no longer clears a deck the page prints,
+    # or the finished tops figure is not the provisional one the pick was made
+    # against. Forgetting the second is how a card ends up claiming "on top" of a
+    # deck that turned out to be higher than the first pass thought.
+    tops_for_pick = route_tops["planning_msl_ft"]
+    if alt and (not clears_ceiling(alt.altitude_ft, gate_ceiling, flight_rules)
+                or tops_for_pick != prov_tops["planning_msl_ft"]):
+        alt = _pick_altitude(gate_ceiling, tops_for_pick, route_tops["source"])
         dest_a.altitude = alt   # the card carries the same pick as the header
 
     cruise_alt = alt.altitude_ft if alt else None
@@ -2362,6 +2393,9 @@ async def suggest(
     # let a modelled deck stand at a field whose TAF forecast none - the same
     # phantom ceiling the METAR path refuses to substitute in ``_endpoint_weather``.
     origin_ceiling = lowest_ceiling(_card_ceilings(origin_a.weather))
+    # The origin's tops, sampled once for every candidate rather than per card:
+    # it is the same field at the same departure time twenty times over.
+    origin_tops = _point_at(origin_fc, None if is_now else etd_utc) if origin_fc else {}
     results: list[AirportAssessment] = []
     for airport, dist in candidates:
         bearing = initial_bearing_true(origin.lat, origin.lon, airport.lat, airport.lon)
@@ -2380,11 +2414,17 @@ async def suggest(
         # a deck the pilot is told about has to say where it is.
         prov_ceiling, _prov_at = _lowest_deck(
             [(origin_ceiling, origin_ident), (cand_ceiling, airport.ident)])
+        # Tops across both ends, the same "highest wins" the route card uses: to
+        # be on top you have to clear the higher of them. A card whose tops are
+        # unknown at either end passes None and keeps the wind-only pick.
+        cand_pt = _point_at(cand_fc, None if is_now else cand_eta) if cand_fc else {}
+        cand_tops = _card_tops(origin_tops, cand_pt, cand_ceiling, origin_ceiling)
         alt = recommend_altitude(
             levels_now, bearing, cruise_kt,
             course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
             ceiling_ft=prov_ceiling, flight_rules=flight_rules,
-            distance_nm=dist, field_elev_ft=origin.elevation_ft)
+            distance_nm=dist, field_elev_ft=origin.elevation_ft,
+            tops_msl_ft=cand_tops, tops_source="model" if cand_tops else None)
         # The arrival the card is actually assessed at, at the altitude we would
         # fly. ``cand_eta`` above is the cruise-TAS estimate the ceiling gate
         # uses; this one carries the wind, so the two differ by a few minutes.
@@ -2433,7 +2473,8 @@ async def suggest(
                 levels_now, bearing, cruise_kt,
                 course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
                 ceiling_ft=gate_ceiling, flight_rules=flight_rules,
-                distance_nm=dist, field_elev_ft=origin.elevation_ft)
+                distance_nm=dist, field_elev_ft=origin.elevation_ft,
+                tops_msl_ft=cand_tops, tops_source="model" if cand_tops else None)
             a.altitude = alt
         # The origin's verdict, and the rows behind it, on every card. Merged
         # before the filters below so ``go_only`` and the sort read the same
@@ -2620,6 +2661,24 @@ def _hard_imc_detail(ws, ceiling_agl_ft, tops: dict, thickness_ft,
         bits.append(f"cloud {base:,.0f}-{tops['tops_msl_ft']:,.0f} ft MSL "
                     f"- {thickness_ft:,.0f} ft thick")
     return " · ".join(bits) or "present"
+
+
+def _card_tops(origin_pt: dict, cand_pt: dict, cand_ceiling, origin_ceiling):
+    """The highest known top across a discovery card's two ends, or None.
+
+    The same rule the route roll-up uses, in miniature: tops take the maximum
+    because being on top means clearing the higher of them, and an end with a deck
+    whose top could not be resolved makes the answer unknown rather than handing
+    back whichever end happened to reply.
+    """
+    ends = [(origin_ceiling, origin_pt), (cand_ceiling, cand_pt)]
+    decks = [pt for ceiling, pt in ends if ceiling is not None and pt]
+    if not decks:
+        return None
+    if any(pt.get("tops_above_scan") or pt.get("tops_msl_ft") is None
+           for pt in decks):
+        return None
+    return max(pt["tops_msl_ft"] for pt in decks)
 
 
 def _route_tops(points: list[tuple[dict, str]]) -> dict:

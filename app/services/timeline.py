@@ -298,16 +298,25 @@ def _cruise_for_hour(fc: dict, i: int, cruise: dict | None,
     levels = winds_aloft_at_index(fc, i)
     if not levels:
         return {}
+    # This hour's tops, from the same forecast the winds came out of. No new
+    # parameter is needed: ``deck_top`` takes the field elevation as optional
+    # precisely so an hour-by-hour caller can ask without carrying one. A deck
+    # still solid at the top of the scan is passed as unknown rather than as its
+    # scan limit - the strip must not claim an aeroplane is on top of something
+    # whose height nobody knows.
+    tops = openmeteo.deck_top(fc.get("hourly", {}), i)
     rec = recommend_altitude(
         levels, cruise["course_true"], cruise["cruise_kt"],
         course_mag=cruise.get("course_mag"), ceiling_ft=ceiling_ft,
         flight_rules=flight_rules,
         distance_nm=cruise.get("distance_nm"),
-        field_elev_ft=cruise.get("field_elev_ft"))
+        field_elev_ft=cruise.get("field_elev_ft"),
+        tops_msl_ft=(None if tops["above_scan"] else tops["highest_top_msl_ft"]),
+        tops_source="model")
     if rec is None:
         return {}
     return {"altitude_ft": rec.altitude_ft, "headwind_kt": rec.headwind_kt,
-            "groundspeed_kt": rec.groundspeed_kt}
+            "groundspeed_kt": rec.groundspeed_kt, "on_top": rec.on_top}
 
 
 def _start_index(times: list[str], offset: int) -> int:
@@ -410,7 +419,7 @@ def build_timeline(
         timeline.append(HourCondition(
             time=tstr, verdict=verdict,
             altitude_ft=cr.get("altitude_ft"), headwind_kt=cr.get("headwind_kt"),
-            groundspeed_kt=cr.get("groundspeed_kt"),
+            groundspeed_kt=cr.get("groundspeed_kt"), on_top=cr.get("on_top", False),
             wind_dir_true=ws.wind_dir_true, wind_dir_mag=wind_dir_mag,
             wind_kt=ws.wind_kt, gust_kt=ws.gust_kt,
             crosswind_kt=(rw.crosswind_kt if rw else None),

@@ -1449,11 +1449,11 @@ function renderRoute(r) {
       ${win ? `<span title="Conditions are assessed for this window">ETD ${zHM(win.etd_utc)} → ETA ${zEnd(win.etd_utc, win.eta_utc)}${win.eta_provisional ? " (est.)" : ""}</span>` : ""}
       <span><span class="mk">Dist</span> ${r.distance_nm} nm · course ${dirM(r.bearing_mag, r.bearing_true)}</span>
       <span><span class="mk">Time</span> ${fmtHrMin(r.flight_time_hr)}</span>
-      ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud"><span class="mk">Best alt</span> ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
+      ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud. When the tops are known, an IFR pick climbs above them if a legal level clears them by 1,000 ft and costs no more than 10 kt of headwind against the fastest level. It never climbs for tops it is only guessing at."><span class="mk">Best alt</span> ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
       ${daylightSpan(r.daylight_margin)}
       ${r.enroute_ceiling_ft != null ? `<span><span class="mk">Enroute ceiling</span> ${fmtCeil(r.enroute_ceiling_ft)}</span>` : ""}
       ${topsSpan(r)}
-      ${r.cloud_at_cruise ? `<span class="warn">Cloud below planned cruise altitude</span>` : ""}
+      ${cloudLine(r, alt)}
       ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${windDir(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
     </div>`;
 
@@ -2401,7 +2401,7 @@ function discoveryCard(a) {
       <span><span class="mk">Wind</span> ${windStr(w)}</span>
       ${ceilChip(w)}
       ${w.visibility_sm != null ? `<span><span class="mk">Vis</span> ${w.visibility_sm} SM</span>` : ""}
-      ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below every ceiling on this card (reported now and forecast for your window) and scaled to leg distance"><span class="mk">Best alt</span> ${fmtFt(a.altitude.altitude_ft)}</span><span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "tailwind" : "headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
+      ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below every ceiling on this card (reported now and forecast for your window) and scaled to leg distance"><span class="mk">Best alt</span> ${fmtFt(a.altitude.altitude_ft)}</span>${a.altitude.on_top && a.altitude.tops_ft != null ? `<span class="ok-note" title="Cruise clears the ${a.altitude.tops_source === "PIREP" ? "reported" : "estimated"} tops (${fmtTops(a.altitude.tops_ft)} MSL) by ${fmtFt(a.altitude.altitude_ft - a.altitude.tops_ft)}${a.altitude.wind_cost_kt ? `, at ${Math.round(a.altitude.wind_cost_kt)} kt of wind` : " at no cost in wind"}">on top</span>` : ""}<span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "tailwind" : "headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
     ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div><strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div>${windLegend(rw, w)}</div></div>` : `<div class="rwy-na">Runway data unavailable</div>`}
     ${runwaysBlock(a)}
@@ -3021,6 +3021,30 @@ const TOPS_RH_TITLE =
   " This one came from the humidity profile rather than from cloud cover, because the "
   + "model served no per-level cover here - weaker again, since air ceasing to be "
   + "saturated is close to, but not the same as, the cloud stopping.";
+
+// "Cloud below the cruise altitude" means two opposite things depending on where
+// the top of it is. Above the tops with a margin, the deck below is the thing you
+// were trying to get above; inside it, it is the thing you are flying in. One
+// sentence used to say the first while meaning the second - and it fired on every
+// normal IFR flight above a deck, which is exactly the flight it was least useful
+// on.
+function cloudLine(r, alt) {
+  if (!r.cloud_at_cruise) return "";
+  if (alt && alt.on_top && alt.tops_ft != null) {
+    const margin = fmtFt(alt.altitude_ft - alt.tops_ft);
+    const paid = alt.wind_cost_kt
+      ? ` · ${Math.round(alt.wind_cost_kt)} kt of wind given up for it` : "";
+    const cost = alt.wind_cost_kt
+      ? ` It is not the fastest level: it costs ${Math.round(alt.wind_cost_kt)} kt of headwind against ${fmtFt(alt.wind_optimal_ft)}, which comes straight off your groundspeed.`
+      : " It is also the fastest level, so it costs nothing.";
+    const src = alt.tops_source === "PIREP" ? "reported" : "estimated";
+    return `<span class="ok-note" title="The pick clears the ${src} tops by ${margin}.${cost} You still climb through the deck and descend back through it - check the icing row.">On top: ${margin} above the tops${paid}</span>`;
+  }
+  if (r.enroute_tops_msl_ft != null)
+    return `<span class="warn" title="Tops are ${fmtTops(r.enroute_tops_msl_ft)} MSL. No legal cruising altitude on this leg clears them by the 1,000 ft that would count as being on top - the hemispheric levels, the 12,500 ft no-oxygen cap and the climb realistic for ${r.distance_nm} nm all apply.">In cloud at cruise - tops ${fmtTops(r.enroute_tops_msl_ft)} MSL, out of reach on this leg</span>`;
+  // Tops unknown. Today's sentence, unchanged - it is still the honest one.
+  return `<span class="warn">Cloud below planned cruise altitude</span>`;
+}
 
 // Cloud tops, next to the ceiling they belong with. The ceiling is AGL and the
 // tops are MSL, so both carry their datum: "1,400" and "5,500" side by side with
