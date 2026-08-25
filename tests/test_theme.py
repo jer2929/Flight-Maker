@@ -135,3 +135,39 @@ def test_no_colour_literals_outside_the_token_blocks():
         if re.search(r"#[0-9a-fA-F]{3,8}\b|rgba?\(|:\s*(white|black)\b", line):
             offenders.append(line.strip())
     assert not offenders, f"colour literals outside the token blocks: {offenders}"
+
+
+def test_auto_resolves_by_asking_for_dark_not_light():
+    """Light is the fallback, so dark is the case that must be asked for.
+
+    Asked the other way round - "is the device light?" - every non-answer (no
+    matchMedia, a UA reporting no preference) resolves to dark, which is the one
+    theme nobody chose. The boot script and app.js each ask independently, so
+    both have to be pinned.
+    """
+    for name, src in (("index.html", INDEX), ("app.js", APP_JS)):
+        assert "(prefers-color-scheme: dark)" in src, f"{name} does not test for dark"
+        assert "(prefers-color-scheme: light)" not in src, (
+            f"{name} still resolves via a light query - that makes dark the fallback"
+        )
+
+
+def test_served_html_starts_in_the_light_theme():
+    # :root in style.css is the dark block, so an element with no data-theme
+    # paints dark. The boot script overwrites this before first paint; it is
+    # here for the shell where that script never runs at all.
+    assert re.search(r"<html[^>]*\bdata-theme=\"light\"", INDEX)
+
+
+def test_boot_theme_color_matches_the_light_background():
+    # applyTheme() rewrites this from the computed --bg on load, so the literal
+    # in the markup is only ever the pre-JS value - it has to be the fallback
+    # theme's background, or the address bar flashes the wrong colour.
+    light_bg = re.search(
+        r"--bg:\s*(#[0-9a-fA-F]{3,8})", _block(':root[data-theme="light"]')
+    ).group(1)
+    meta = re.search(r'name="theme-color"\s+content="(#[0-9a-fA-F]{3,8})"', INDEX)
+    assert meta, "no literal theme-color content in the markup"
+    assert meta.group(1).lower() == light_bg.lower(), (
+        f"boot theme-color {meta.group(1)} is not the light --bg {light_bg}"
+    )

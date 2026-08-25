@@ -1,5 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<!-- data-theme is rewritten by the boot script in <head> below, before any paint.
+     It is stamped here as well because :root in style.css is the DARK block, so a
+     shell that somehow never runs that script - scripting off, a parse error in a
+     future edit - would otherwise paint dark. Light is the fallback everywhere. -->
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,7 +11,10 @@
 
   <!-- PWA: installable on a custom domain over HTTPS. -->
   <link rel="manifest" href="/manifest.webmanifest" />
-  <meta name="theme-color" content="#0f1419" />
+  <!-- Boot value only, and the light --bg: applyTheme() rewrites this from the
+       computed --bg on every load, so this is what shows in the moment before
+       app.js runs. -->
+  <meta name="theme-color" content="#e5ddc9" />
   <meta name="description" content="A go/no-go + best-window flight planner that gates every proposed flight against your own personal minimums." />
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
@@ -29,21 +36,26 @@
   <link rel="stylesheet" href="/style.css?v=__SHELL_VERSION__" />
   <script>
     /* Theme boot. Inline, in <head>, and synchronous on purpose: app.js loads at
-       the end of <body>, so without this a light-theme user would get a full
-       dark paint and then a repaint to light on every single load.
+       the end of <body>, so without this a dark-theme user would get a full
+       light paint and then a repaint to dark on every single load.
 
        The stored preference is "auto" | "light" | "dark"; what lands on the
        element is always the RESOLVED value, so style.css needs one light block
        and no prefers-color-scheme media query (see the note at the top of it).
        The key is duplicated in app.js (loadTheme/saveTheme) because this script
-       cannot import from it - tests/test_theme.py pins the two together. */
+       cannot import from it - tests/test_theme.py pins the two together.
+
+       Note the question is "is the device dark?", not "is it light?". Dark is
+       the only answer that has to be asked for: a UA without matchMedia, or one
+       that reports no preference either way, falls through to light rather than
+       to the darker of the two. app.js resolves Auto the same way round. */
     (function () {
       var pref = "auto";
       try { pref = localStorage.getItem("minima.theme.v1") || "auto"; } catch (e) {}
       if (pref !== "light" && pref !== "dark") pref = "auto";
-      var light = pref === "light" || (pref === "auto" && window.matchMedia &&
-        matchMedia("(prefers-color-scheme: light)").matches);
-      document.documentElement.dataset.theme = light ? "light" : "dark";
+      var dark = pref === "dark" || (pref === "auto" && window.matchMedia &&
+        matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
     })();
   </script>
 </head>
