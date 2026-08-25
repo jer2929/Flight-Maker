@@ -637,7 +637,10 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
    the same thing: you are airborne during this. */
 .wx-hours { display: grid; gap: 2px; font-size: .78rem; }
 .wx-h {
-  display: grid; grid-template-columns: 46px 92px 76px 62px 1fr;
+  /* The sky column holds a whole layer stack now ("SCT ~2,400 ft \00b7 BKN ~5,300 ft"),
+     not a single ceiling height, so it flexes and the fixed columns keep their
+     width. minmax(0, ...) is what lets it shrink instead of forcing the row wide. */
+  display: grid; grid-template-columns: 46px 88px minmax(0, 1.7fr) 58px minmax(0, 1fr);
   gap: 6px; padding: 3px 5px; border-radius: var(--r-sm); align-items: baseline;
   font-variant-numeric: tabular-nums;
 }
@@ -645,8 +648,10 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .wx-h.in { background: color-mix(in srgb, var(--go) 16%, transparent); border-left: 3px solid var(--go); padding-left: 5px; }
 .wx-h.in span { color: var(--go-ink); }
 .wx-h-x { color: var(--muted); }
+/* A stack can run past its column; wrapping is better than clipping a layer. */
+.wx-h-c { overflow-wrap: anywhere; }
 @media (max-width: 560px) {
-  .wx-h { grid-template-columns: 42px 84px 68px 54px; }
+  .wx-h { grid-template-columns: 42px 80px minmax(0, 1fr) 54px; }
   .wx-h-x { grid-column: 1 / -1; padding-left: 42px; }
   /* Four columns do not fit a phone. Same tracks, re-slotted: the rule name takes
      the full width on line 1, then the value and its limit sit side by side on

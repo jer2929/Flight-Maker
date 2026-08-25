@@ -279,6 +279,55 @@ class FlightWindow(BaseModel):
     notes: list[str] = []
 
 
+class SkyLayer(BaseModel):
+    """One cloud layer, as it would be reported.
+
+    ``base_ft`` and ``top_ft`` are **AGL**, like the ceiling they belong with and
+    unlike ``RouteAssessment.enroute_tops_msl_ft``. ``top_ft`` is None for a layer
+    still going at the top of the model scan - an unknown with a floor under it,
+    never a top.
+
+    ``type`` is the cloud genus (CU, SC, NS, TCU, CB ...) and is only ever set
+    from an observation: it comes from a body group's CB/TCU suffix or from the
+    Canadian remarks, and no forecast model carries one. ``estimated`` marks a
+    layer derived from model pressure levels rather than reported, which is what
+    earns the "~" in front of its height.
+    """
+
+    amount: str                        # FEW | SCT | BKN | OVC | VV
+    base_ft: float
+    top_ft: Optional[float] = None
+    type: Optional[str] = None
+    estimated: bool = False
+
+
+class Sky(BaseModel):
+    """What the sky is doing, and how confident we are that we know.
+
+    A bare ``ceiling_agl_ft`` of None has always had four meanings that matter
+    separately, and the app used to render all four as an empty space: a clear
+    sky, a sky with scattered cloud but no ceiling, a sky nobody looked at, and a
+    forecast that failed to download. ``state`` is which one:
+
+    ``unsampled``   nothing usable came back. A statement about the fetch, never
+                    about the weather.
+    ``clear``       sampled, and nothing found below ``scan_top_ft``.
+    ``no_ceiling``  cloud, but nothing broken - the near-miss that used to print
+                    as clear.
+    ``layers``      a broken or overcast layer exists; it is the ceiling.
+
+    ``text`` is the rendered one-liner, built server-side by ``services.sky`` so
+    the checklist row, the card chip and the popover cannot phrase the same sky
+    three different ways.
+    """
+
+    layers: list[SkyLayer] = []
+    state: str = "unsampled"
+    scan_top_ft: Optional[float] = None
+    source: Source = Source.NONE
+    text: str = ""
+
+
 class WeatherSummary(BaseModel):
     raw_metar: Optional[str] = None
     raw_taf: Optional[str] = None
@@ -312,6 +361,10 @@ class WeatherSummary(BaseModel):
     taf_valid_to: Optional[str] = None
     # What the TAF says about the rest of the flight, not just this instant.
     window_forecast: Optional["WindowForecast"] = None
+    # The full layer stack behind ``ceiling_agl_ft``, and whether it was assessed
+    # at all. The ceiling is still the number every limit gates on; this is what
+    # the card prints, so "clear" and "not assessed" stop looking identical.
+    sky: Optional["Sky"] = None
     # True when the values above already *are* the window worst-case (the future-ETD
     # path). False when they describe one moment - a METAR observation, or the
     # current model hour - and the window therefore needs its own check rows.
@@ -341,6 +394,7 @@ class ForecastHour(BaseModel):
     precip: Optional[str] = None
     precip_mm: Optional[float] = None
     hazards: list[str] = []
+    sky: Optional[Sky] = None   # the hour's layer stack, same derivation as the cards
 
 
 class DensityAltitude(BaseModel):
@@ -637,6 +691,11 @@ class RouteAssessment(BaseModel):
     # The top came from the saturation fallback rather than from cloud cover -
     # weaker again, and the UI says so.
     enroute_tops_from_rh: bool = False
+    # What the sky is doing along the route, not just whether it broke a limit.
+    # The worst point wins, ordered ceiling > scattered > clear > unsampled, so a
+    # route with one unsampled point never reports as clear (see services.sky).
+    enroute_sky: Optional[Sky] = None
+    enroute_sky_at: Optional[str] = None             # which point it came from
     enroute_visibility_sm: Optional[float] = None
     cloud_at_cruise: bool = False                     # cloud base below planned cruise altitude
     sigmets: list[Advisory] = []

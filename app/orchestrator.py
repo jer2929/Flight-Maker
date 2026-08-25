@@ -42,6 +42,7 @@ from app.services import etd_options as etd_opts
 from app.services import fetch_health
 from app.services import firs
 from app.services import magvar
+from app.services import sky as sky_svc
 from app.services import solar
 from app.services import trends
 from app.services import timeline as tl
@@ -251,6 +252,11 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
     return {
         "ceiling_ft": ceiling,
         "ceiling_source": Source.MODEL.value if ceiling is not None else None,
+        # Same walk that produced ``ceiling_ft`` (see ``openmeteo.cloud_stack``),
+        # kept whole so the route can report what the sky is doing and not only
+        # whether it broke a limit.
+        "sky": sky_svc.with_ceiling(
+            sky_svc.from_stack(openmeteo.cloud_stack(hourly, i, elevation_ft)), ceiling),
         "sct_base_ft": layer["sct_base_ft"],
         "max_cover_pct": layer["max_cover_pct"],
         "scan_top_ft": layer["scan_top_ft"],
@@ -318,6 +324,12 @@ def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
     pt["sampled"] = True
     pt["obs_station"] = station.ident
     pt["obs_kind"] = kind
+    # A station that looked at the sky outranks a derivation that inferred it from
+    # pressure-level humidity, for the whole stack and not only for the ceiling
+    # promoted above. Only a METAR, though: ``conditions_at`` gives a TAF group's
+    # worst case rather than a report, so there is no observed stack to take.
+    if kind == "METAR" and text:
+        pt["sky"] = sky_svc.from_metar(text)
     # The report itself, not just its name. The checklist chip says where a
     # value came from ("CYCK METAR, 18 nm") and the pilot's next question is
     # always what that report actually said - which used to mean going and
@@ -379,7 +391,12 @@ def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None,
     # actually describe. When there's no METAR, the surface wind is blended
     # across several models (``ensemble``) for a more robust picture; ceiling/vis
     # still come from the single HRDPS run.
-    ws = WeatherSummary(raw_metar=metar, raw_taf=taf, source=Source.NONE)
+    # Starts as an explicit "nothing looked at this sky", not as an absent field.
+    # Every branch below either overwrites it or leaves a card that genuinely had
+    # no cloud assessment - and those two must not be told apart by whether a key
+    # happens to be null.
+    ws = WeatherSummary(raw_metar=metar, raw_taf=taf, source=Source.NONE,
+                        sky=sky_svc.from_stack({}))
     model_now = tl.model_conditions(fc, _current_index(fc)) if fc else None
 
     if metar:
@@ -387,6 +404,12 @@ def _endpoint_weather(metar: str | None, taf: str | None, fc: dict | None,
         ws.source = Source.OBSERVED
         ws.wind_dir_true, ws.wind_kt, ws.gust_kt = m["wind_dir_true"], m["wind_kt"], m["gust_kt"]
         ws.visibility_sm, ws.ceiling_agl_ft = m["visibility_sm"], m["ceiling_agl_ft"]
+        # The reported stack, not just the ceiling it produced. This is the only
+        # source in the app that carries cloud *type*, and the only one that can
+        # say "clear" without a "below the top of the scan" caveat: somebody
+        # looked up. It changes nothing about ``ceiling_agl_ft`` - the trusted-METAR
+        # rule below still stands - it says what that number was read off.
+        ws.sky = sky_svc.from_metar(metar)
         ws.hazards = list(m["hazards"])
         # Temperature and altimeter for density altitude. An observation is the
         # right instrument for a departure now, and the wrong one for a departure
@@ -515,6 +538,7 @@ def _model_hours(fc: dict | None, etd: datetime, eta: datetime,
             ceiling_agl_ft=c.get("ceiling_agl_ft"),
             visibility_sm=c.get("visibility_sm"),
             cloud_cover_pct=c.get("cloud_cover_pct"),
+            sky=c.get("sky"),
             precip=c.get("precip"), precip_mm=c.get("precip_mm"),
             hazards=list(c.get("hazards") or []),
         ))
@@ -583,7 +607,8 @@ def _endpoint_weather_forecast(metar: str | None, taf: str | None,
     single ``when`` instant: you are gated on the weather you actually meet, and
     a TEMPO twenty minutes after wheels-up is weather you meet.
     """
-    ws = WeatherSummary(raw_metar=metar, raw_taf=taf, source=Source.NONE)
+    ws = WeatherSummary(raw_metar=metar, raw_taf=taf, source=Source.NONE,
+                        sky=sky_svc.from_stack({}))   # unsampled until proven otherwise
     ws.valid_at = when.strftime("%Y-%m-%dT%H:%M:%SZ")
     if not fc and not taf_segs:
         return ws
@@ -669,6 +694,8 @@ def _apply(ws: WeatherSummary, c: dict) -> None:
     ws.gust_kt = c.get("gust_kt")
     ws.visibility_sm = c.get("visibility_sm")
     ws.ceiling_agl_ft = c.get("ceiling_agl_ft")
+    if c.get("sky") is not None:
+        ws.sky = c["sky"]
     ws.hazards = sorted(set(ws.hazards) | set(c.get("hazards", [])))
 
 
@@ -1372,23 +1399,17 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
         # held, not whether a dict was returned.
         sampled = any(e.get("sampled") for e in enroute)
         obs_backed = any(e.get("obs_station") for e in enroute)
-        scan_tops = [e.get("scan_top_ft") for e in enroute if e.get("scan_top_ft")]
-        scts = [e.get("sct_base_ft") for e in enroute if e.get("sct_base_ft")]
+        # The same four states, in the same words the cards use. This row got them
+        # right long before anything else did, and phrasing them here a second
+        # time is how the checklist ended up saying "no broken layer - scattered
+        # cloud near 4,000 ft AGL" over a card chip that said nothing at all.
+        row_sky = sky_svc.worst([e.get("sky") for e in enroute])
         if not sampled:
             # Not a statement about the weather. Say so, and let the banner fire.
             fetch_health.record(fetch_health.HRDPS)
             text, src = "no data - forecast did not download", None
-        elif scts:
-            # A scattered layer is not a ceiling, but "clear" is a lie about it.
-            text = (f"no broken layer - scattered cloud near "
-                    f"{round(min(scts) / 100) * 100:,} ft AGL")
-            src = Source.OBSERVED.value if obs_backed else Source.MODEL.value
         else:
-            # Genuinely nothing found. Name the top of the scan: this derivation
-            # has never been able to see above it, and "no ceiling" without that
-            # caveat claims more than the data supports.
-            top = f" below {round(min(scan_tops) / 1000) * 1000:,} ft AGL" if scan_tops else ""
-            text = f"no ceiling{top}"
+            text = sky_svc.describe(row_sky)
             src = Source.OBSERVED.value if obs_backed else Source.MODEL.value
         checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, route)",
                                  limit_text=f"≥ {ceil_limit:,.0f} ft AGL",
@@ -1836,6 +1857,20 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     route_icing = airmass.worst_icing([e.get("icing_bands") or [] for e in enroute])
     route_turb = airmass.worst_turbulence([e.get("turbulence") for e in enroute])
     enroute_ceiling = min([c for c in ceiling_points if c is not None], default=None)
+    # The sky behind that number, from the same points and the same labels the
+    # tops roll-up uses below. The endpoints contribute their cards' skies - a
+    # METAR's reported stack where one exists, the model's derivation otherwise -
+    # so the route line and the endpoint cards describe one sky.
+    sky_points = ([(dep_a.weather.sky, point_labels[0])]
+                  + [(e.get("sky"), lbl)
+                     for e, lbl in zip(enroute, point_labels[1:-1])]
+                  + [(dest_a.weather.sky, point_labels[-1])])
+    enroute_sky = sky_svc.worst([sk for sk, _ in sky_points])
+    # Identity, not equality: two points can hold equal skies and the label has to
+    # name the one that actually won. Guarded, because a None winner would
+    # otherwise match the first point that had no sky and label it.
+    enroute_sky_at = (None if enroute_sky is None else
+                      next((lbl for sk, lbl in sky_points if sk is enroute_sky), None))
     # Tops, from the same points and the same labels. The endpoints are read off
     # the model directly (``_tops_at``) rather than from their cards: a METAR or a
     # TAF never reports a cloud top, so there is nothing to merge in and
@@ -2222,6 +2257,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         limit_checks=all_checks, threat_checks=route_threats,
         altitude=alt, cruise_altitude_ft=cruise_alt,
         enroute_ceiling_ft=enroute_ceiling, enroute_visibility_sm=enroute_vis,
+        enroute_sky=enroute_sky, enroute_sky_at=enroute_sky_at,
         enroute_tops_msl_ft=route_tops["tops_msl_ft"],
         enroute_tops_state=route_tops["state"],
         enroute_tops_source=route_tops["source"],
