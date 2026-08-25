@@ -5,7 +5,7 @@ def _run(**over):
     base = dict(
         raw_text="", hazards=set(), night=False, llj_kt=None,
         ceiling_points=[8000, 8000, 8000], vis_points=[15, 15, 15],
-        lowering_ceiling=False, freezing_level_ft=None, personal_vis_sm=9,
+        lowering_ceiling=False, freezing_level_ft=None,
         gfa_region=gfa_region(43.1, -80.3),
         window_hazards=set(), metar_hazards=set(), out_of_window=[],
         etd_is_now=True, window_label="1200-1400Z",
@@ -164,9 +164,36 @@ def test_widespread_ifr_two_low_points():
     assert not c.passed
 
 
-def test_vis_below_personal_limit_flags():
-    c = _run(vis_points=[15, 7, 15], personal_vis_sm=9)["widespread_ifr"]
-    assert not c.passed  # 7 < personal 9
+def test_vis_below_a_personal_limit_but_above_imc_is_not_widespread_imc():
+    # The flight that produced this test: CYFD -> CYOW, one 7 SM CLR observation
+    # near CYTZ, a 9 SM cross-country personal limit, and no cloud anywhere on
+    # the route. The visibility row NO-GO'd it correctly; this row called legal
+    # VMC "Widespread IMC" on the same page, off the same single point.
+    c = _run(vis_points=[15, 7, 15])["widespread_ifr"]
+    assert c.passed
+    assert "VMC along route" in c.actual_text
+
+
+def test_one_point_in_imc_is_isolated_not_widespread():
+    # IMC, but at one point out of three - said, not gated. "Widespread" is the
+    # whole claim of the row.
+    c = _run(ceiling_points=[8000, 8000, 600], vis_points=[15, 15, 2],
+             point_labels=LABELS)["widespread_ifr"]
+    assert c.passed and c.applicable
+    assert "1 IMC point" in c.actual_text
+    assert "isolated, not widespread" in c.actual_text
+
+
+def test_widespread_imc_uses_the_same_condition_as_hard_imc():
+    # Ceiling below 1,000 ft AGL or visibility below 3 SM, the pair
+    # ``evaluator.derive_threats`` tests for Hard IMC. Marginal VMC at two
+    # points is not it.
+    assert _run(ceiling_points=[1200, 8000, 1100],
+                vis_points=[5, 15, 4])["widespread_ifr"].passed
+    assert not _run(ceiling_points=[900, 8000, 950],
+                    vis_points=[15, 15, 15])["widespread_ifr"].passed
+    assert not _run(ceiling_points=[8000, 8000, 8000],
+                    vis_points=[2, 15, 2.5])["widespread_ifr"].passed
 
 
 def test_lowering_ceiling_flag():
@@ -209,11 +236,13 @@ def test_widespread_ifr_falls_back_to_counting_without_labels():
     assert c.location == "point 1"
 
 
-def test_widespread_ifr_says_which_test_tripped_in_the_popover():
-    c = _run(vis_points=[15, 7, 15], personal_vis_sm=9,
+def test_widespread_ifr_says_how_many_points_tripped_in_the_popover():
+    c = _run(ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2],
              point_labels=LABELS)["widespread_ifr"]
-    assert "below your 9 SM limit" in c.source_text
-    assert "vis below personal limit" in c.actual_text
+    assert "2 IMC points" in c.actual_text
+    # Every offending point, and only the offending points.
+    assert "CYFD (departure): 500 ft / 2 SM  IMC" in c.source_text
+    assert "near CYXX" not in c.source_text
 
 
 def test_lowering_ceiling_carries_the_numbers_and_the_field():
@@ -276,7 +305,7 @@ def test_a_switched_off_widespread_imc_row_is_kept_out_of_the_verdict():
     rows = weather_checks(
         raw_text="", hazards=set(), night=False, llj_kt=None,
         ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2],
-        lowering_ceiling=False, freezing_level_ft=None, personal_vis_sm=3,
+        lowering_ceiling=False, freezing_level_ft=None,
         gfa_region=gfa_region(43.1, -80.3), window_hazards=set(),
         metar_hazards=set(), out_of_window=[], etd_is_now=True,
         widespread_imc_gates=False)
@@ -330,7 +359,7 @@ def test_a_switched_off_lowering_ceiling_row_is_kept_out_of_the_verdict():
         raw_text="", hazards=set(), night=False, llj_kt=None,
         ceiling_points=[3000, 8000, 3000], vis_points=[15, 15, 15],
         lowering_ceiling={"location": "CYOW", "text": "ceiling now 3,000 ft"},
-        freezing_level_ft=None, personal_vis_sm=3,
+        freezing_level_ft=None,
         gfa_region=gfa_region(43.1, -80.3), window_hazards=set(),
         metar_hazards=set(), out_of_window=[], etd_is_now=True,
         lowering_ceiling_gates=False)

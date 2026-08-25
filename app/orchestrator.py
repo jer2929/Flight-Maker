@@ -2065,7 +2065,6 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     cloud_at_cruise = bool(cruise_alt and enroute_ceiling is not None and enroute_ceiling < cruise_alt)
 
     # --- Route-level combined conditions check (worst of both ends + enroute) ---
-    L = get_limits()["hard_limits"]
     route_ws = WeatherSummary(
         wind_dir_true=dep_a.weather.wind_dir_true,
         wind_kt=_max(dep_a.weather.wind_kt, dest_a.weather.wind_kt),
@@ -2079,11 +2078,12 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     cond_checks = _route_conditions_checks(dep_a, dest_a, enroute, mode, flight_rules=flight_rules)
 
     # --- Weather-hazard section (the card's nine Weather items) ---
-    if flight_rules == "ifr":
-        _ifr = get_limits().get("ifr_minimums", {})
-        vis_limit = _ifr.get("visibility_sm", L["visibility_sm"]).get("night_xc" if mode == "night" else "day_xc", 9)
-    else:
-        vis_limit = L["visibility_sm"].get("night_xc" if mode == "night" else "day_xc", 9)
+    # The pilot's cross-country visibility minimum is not resolved here any more.
+    # It was passed to the hazard section for one thing, the widespread-IMC row,
+    # which fired on any single point below it - so a 7 SM CLR observation was
+    # reported as IMC on a route with no cloud on it. That limit is tested where
+    # it belongs, on the visibility row in ``_route_conditions_checks`` above,
+    # against every point on the route.
     # --- Which of the fetched advisories actually reach this flight ------------
     # Surface up to cruise plus a 2,000 ft allowance: you climb through
     # everything below the cruise level, and an icing layer just above it is one
@@ -2154,7 +2154,6 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         point_labels=point_labels,
         lowering_ceiling=lowering_detail,
         freezing_level_ft=freezing_ft,
-        personal_vis_sm=vis_limit,
         gfa_region=hz.gfa_region(dep.lat, dep.lon),
         icing_bands=route_icing,
         turbulence=route_turb,
