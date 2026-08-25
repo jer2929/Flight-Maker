@@ -37,6 +37,29 @@ from app.services import airmass, area_products
 from app.services import weather as wx
 
 
+def _deck_depth_text(route_tops: Optional[dict], ceiling_agl_ft,
+                     field_elev_ft) -> str:
+    """"6,700 ft thick", when the tops are known. Empty when they are not.
+
+    A deck's depth is what decides whether there is any VFR escape above it. It is
+    reported here and nowhere gated: this row's verdict is about how much of the
+    route is in IMC, not how tall the cloud is.
+    """
+    # No field elevation means no way to lift the AGL ceiling to MSL, and
+    # defaulting it to sea level would produce a number that is wrong by the field
+    # elevation while looking entirely reasonable. Say nothing instead.
+    if not route_tops or ceiling_agl_ft is None or field_elev_ft is None:
+        return ""
+    if route_tops.get("state") == "above_scan":
+        return "tops above the sampled levels"
+    top = route_tops.get("tops_msl_ft")
+    if top is None:
+        return ""
+    base_msl = ceiling_agl_ft + field_elev_ft
+    thick = top - base_msl
+    return f"{thick:,.0f} ft thick" if thick > 0 else ""
+
+
 def gfa_region(lat: float, lon: float) -> str:
     """The CFPS GFA region covering a point, for the checklist copy.
 
@@ -132,6 +155,26 @@ def weather_checks(
     # one click away. A bool rather than a flight_rules string keeps this module a
     # decider that reads no config, as the module docstring describes.
     widespread_imc_gates: bool = True,
+    # Is the widespread-IMC row built AT ALL? False on an IFR flight, where it can
+    # never apply: IMC is what the rating is for. It used to be built and marked
+    # not-applicable, which meant an IFR pilot still read "Widespread IMC" on a
+    # card it could not possibly decide - one more IMC-shaped row on a page that
+    # already has too many. Kept separate from ``widespread_imc_gates`` because the
+    # two questions are genuinely different: a VFR pilot who has taken the row off
+    # their own auto-NO-GO list should still SEE where the IMC is, so that case
+    # builds the row and switches off only its vote.
+    include_widespread_imc: bool = True,
+    # ``{"tops_msl_ft": ..., "state": ...}`` from ``orchestrator._route_tops``, or
+    # None. TEXT ONLY: the widespread-IMC row still gates on the same two things it
+    # always did (two or more points in IMC, or visibility below the pilot's
+    # personal limit). Depth is what removes the over-the-top escape a VFR pilot
+    # might be counting on, so it is worth saying - but no VFR verdict moves on it.
+    route_tops: Optional[dict] = None,
+    # Departure field elevation, only so the AGL ceiling above can be lifted to
+    # MSL before it is subtracted from an MSL cloud top. Optional: without it the
+    # depth text is simply omitted rather than being computed off by a field
+    # elevation, which is exactly the size of error that looks plausible.
+    field_elev_ft: Optional[float] = None,
     # Does the rapidly-lowering-ceilings row stop the flight? False on an IFR
     # flight. A deck settling at 3,000 ft is the loss of VMC and so a real VFR
     # problem; under IFR it is nearly meaningless - it sits far above any
@@ -363,6 +406,10 @@ def weather_checks(
     # in between.
     labels = list(point_labels)
     offenders: list[dict] = []
+    if not include_widespread_imc:
+        # Nothing to say and nothing to show: skip the row entirely rather than
+        # building a not-applicable one. See ``include_widespread_imc`` above.
+        return checks
     for i, (ce, vi) in enumerate(zip(ceiling_points, vis_points)):
         imc = (ce is not None and ce < 1000) or (vi is not None and vi < 3)
         personal = vi is not None and vi < personal_vis_sm
@@ -396,6 +443,10 @@ def weather_checks(
         why = " · ".join(
             ([f"{imc_pts} IMC point{'s' if imc_pts != 1 else ''}"] if imc_pts else [])
             + (["vis below personal limit"] if below_personal else []))
+        # How deep it is, where that is known. Reported, never gated.
+        depth = _deck_depth_text(route_tops, worst["ceiling_ft"], field_elev_ft)
+        if depth:
+            why += f" · {depth}"
         if not widespread_imc_gates:
             why += " · not applied on this flight"
         add("widespread_ifr", "Widespread IMC",

@@ -13,7 +13,7 @@ def test_decision_returns_structured_checks():
     # absent (the latter is a hard NO-GO under VFR, not a stacking threat).
     assert len(threats) == 7
     assert not any(t.key == "single_pilot_ifr_no_autopilot" for t in threats)
-    assert not any(t.key == "actual_imc" for t in threats)
+    assert not any(t.key == "hard_imc" for t in threats)
     assert verdict == Verdict.GO
 
 
@@ -313,8 +313,8 @@ def imc_wx():
 
 
 def test_imc_not_a_threat_under_vfr():
-    # Under VFR, actual IMC is not a stacking threat...
-    assert "actual_imc" not in derive_threats(imc_wx(), flight_rules="vfr")
+    # Under VFR, Hard IMC is not a stacking threat...
+    assert "hard_imc" not in derive_threats(imc_wx(), flight_rules="vfr")
 
 
 def test_imc_is_hard_nogo_under_vfr():
@@ -322,25 +322,25 @@ def test_imc_is_hard_nogo_under_vfr():
     verdict, checks, threats, _n = decision(imc_wx(), None, "day", flight_rules="vfr")
     assert verdict == Verdict.NOGO
     assert any(c.key == "ceiling" and not c.passed for c in checks)
-    assert not any(t.key == "actual_imc" for t in threats)
+    assert not any(t.key == "hard_imc" for t in threats)
 
 
 def test_imc_not_a_threat_under_ifr_by_default():
-    assert "actual_imc" not in derive_threats(imc_wx(), flight_rules="ifr")
+    assert "hard_imc" not in derive_threats(imc_wx(), flight_rules="ifr")
 
 
 def test_imc_is_threat_under_ifr_when_opted_in():
-    with limits_override({"imc_as_threat": True}):
-        assert "actual_imc" in derive_threats(imc_wx(), flight_rules="ifr")
+    with limits_override({"hard_imc_as_threat": True}):
+        assert "hard_imc" in derive_threats(imc_wx(), flight_rules="ifr")
 
 
 def test_imc_opt_in_plus_single_pilot_ifr_stacks_to_nogo():
     # The single-engine / no-autopilot scenario: IMC + single-pilot IFR = 2 threats.
-    with limits_override({"imc_as_threat": True}):
+    with limits_override({"hard_imc_as_threat": True}):
         present = derive_threats(imc_wx(),
                                  manual_threats=["single_pilot_ifr_no_autopilot"],
                                  flight_rules="ifr")
-        assert present == {"actual_imc", "single_pilot_ifr_no_autopilot"}
+        assert present == {"hard_imc", "single_pilot_ifr_no_autopilot"}
         assert threat_verdict(len(present)) == Verdict.NOGO
 
 
@@ -769,3 +769,88 @@ def test_a_tempo_over_a_sustained_forecast_that_clears_is_transient():
     rows = evaluator.window_checks(wx, "day")
     assert {c.key: c for c in rows}["window_ceiling"].temporary is True
     assert evaluator.checks_verdict(rows) == Verdict.MITIGATE
+
+
+# --- Hard IMC is cloud that is LOW *or* cloud that is DEEP -------------------
+#
+# The ceiling and visibility tests above describe low cloud. They say nothing
+# about an overcast from 3,000 to 12,000 ft, which leaves the ceiling test
+# untouched at 3,000 ft AGL while putting the aeroplane inside cloud for the whole
+# climb and the whole descent.
+
+
+def thick_wx():
+    """A 3,000 ft ceiling - well clear of every low-cloud test."""
+    return WeatherSummary(wind_dir_true=50, wind_kt=6, visibility_sm=10,
+                          ceiling_agl_ft=3000)
+
+
+def test_a_deep_deck_is_hard_imc_even_with_a_high_base():
+    # 3,000 ft to 12,000 ft: 9,000 ft of continuous cloud. The case the ceiling
+    # test cannot see.
+    with limits_override({"hard_imc_as_threat": True}):
+        assert "hard_imc" in derive_threats(thick_wx(), flight_rules="ifr",
+                                            cloud_thickness_ft=9000)
+
+
+def test_a_deck_you_pass_through_is_not_hard_imc():
+    # 3,000 to 6,500 ft. Something you transit, not something you are inside.
+    with limits_override({"hard_imc_as_threat": True}):
+        assert "hard_imc" not in derive_threats(thick_wx(), flight_rules="ifr",
+                                                cloud_thickness_ft=3500)
+
+
+def test_the_threshold_is_read_from_config_and_sits_at_five_thousand():
+    # Pinned on both sides so the boundary is a decision rather than an accident.
+    # Deliberately NOT a pilot-settable minimum: it is where "a deck you pass
+    # through" becomes "weather you are inside", which is a property of the cloud
+    # rather than of the pilot.
+    from app.config import get_default_limits
+    assert get_default_limits()["ifr_minimums"]["hard_imc_thickness_ft"] == 5000
+    with limits_override({"hard_imc_as_threat": True}):
+        assert "hard_imc" not in derive_threats(thick_wx(), flight_rules="ifr",
+                                                cloud_thickness_ft=4999)
+        assert "hard_imc" in derive_threats(thick_wx(), flight_rules="ifr",
+                                            cloud_thickness_ft=5000)
+
+
+def test_a_deck_that_runs_off_the_top_of_the_scan_is_hard_imc():
+    # The one case where an unknown is still decisive: the top is higher than the
+    # scan reaches, so the deck is certainly deeper than any threshold.
+    with limits_override({"hard_imc_as_threat": True}):
+        assert "hard_imc" in derive_threats(thick_wx(), flight_rules="ifr",
+                                            tops_above_scan=True)
+
+
+def test_unknown_tops_never_invent_a_thickness():
+    # THE honesty test. A fetch that returned no tops is not a thin deck, and a
+    # caller that cannot know the thickness (a card built from a METAR) must get
+    # exactly the answer it got before thickness existed.
+    with limits_override({"hard_imc_as_threat": True}):
+        assert "hard_imc" not in derive_threats(thick_wx(), flight_rules="ifr")
+        assert "hard_imc" not in derive_threats(thick_wx(), flight_rules="ifr",
+                                                cloud_thickness_ft=None)
+
+
+def test_thickness_never_fires_under_vfr():
+    # VFR cannot be in cloud at all, so depth is not a VFR question - the ceiling
+    # and visibility limits have already decided.
+    with limits_override({"hard_imc_as_threat": True}):
+        assert "hard_imc" not in derive_threats(thick_wx(), flight_rules="vfr",
+                                                cloud_thickness_ft=9000)
+
+
+def test_a_deep_deck_is_not_a_threat_when_the_pilot_has_not_opted_in():
+    # Off by default, and off means absent - not a passing row.
+    assert "hard_imc" not in derive_threats(thick_wx(), flight_rules="ifr",
+                                            cloud_thickness_ft=9000)
+
+
+def test_a_profile_saved_before_the_rename_still_works():
+    # ``imc_as_threat`` is the pre-rename spelling and lives in real pilots'
+    # localStorage. Dropping it would silently reset a saved personal minimum.
+    from app.config import get_default_limits, merge_limits
+    merged = merge_limits(get_default_limits(), {"imc_as_threat": True})
+    assert merged["ifr_minimums"]["hard_imc_as_threat"] is True
+    with limits_override({"imc_as_threat": True}):
+        assert "hard_imc" in derive_threats(imc_wx(), flight_rules="ifr")

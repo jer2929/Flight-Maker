@@ -76,8 +76,8 @@ const THREAT_MITIGATIONS = {
     label: "Night operations",
     items: ["Familiar airport and runway", "Stable VMC forecast", "Light winds expected", "Simple direct route", "Extra fuel margin"],
   },
-  actual_imc: {
-    label: "IMC / IFR",
+  hard_imc: {
+    label: "Hard IMC",
     items: ["Stable weather system (not frontal)", "Precision approaches preferred", "Higher personal minimums", "Autopilot if available"],
   },
   strong_or_gusty_winds: {
@@ -876,7 +876,12 @@ function effectiveLimits() {
     ifr_ceiling_agl_ft: { ...(difr.ceiling_agl_ft || {}), ...(m.ifr_ceiling_agl_ft || {}) },
     ifr_visibility_sm:  { ...(difr.visibility_sm   || {}), ...(m.ifr_visibility_sm  || {}) },
     weather_flags:   m.weather_flags || d.weather_flags,
-    imc_as_threat:   (m.imc_as_threat !== undefined) ? m.imc_as_threat : !!difr.imc_as_threat,
+    // ``imc_as_threat`` is the pre-rename spelling, still sitting in the profiles
+    // of anyone who set it before. Read it as a fallback rather than silently
+    // resetting a saved personal minimum to off.
+    hard_imc_as_threat: (m.hard_imc_as_threat !== undefined) ? m.hard_imc_as_threat
+                      : (m.imc_as_threat !== undefined) ? m.imc_as_threat
+                      : !!difr.hard_imc_as_threat,
     night_as_threat: (m.night_as_threat !== undefined) ? m.night_as_threat
                                                        : CONFIG.default_night_as_threat !== false,
   };
@@ -1580,7 +1585,10 @@ function rowCheck(c) {
 function rowThreat(t) {
   // Same four cells as rowCheck, so threat rows share the checklist's columns.
   // The empty limit cell is deliberate: it holds the column open.
-  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${escapeHtml(t.label)}</span><span class="val"><span class="act">${t.present ? "present" : "-"}</span></span><span class="lim"></span></div>`;
+  // A threat that can fire for more than one reason says which one did. Most
+  // carry nothing here and keep the bare "present" they always had.
+  const act = t.present ? (t.detail ? escapeHtml(t.detail) : "present") : "-";
+  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${escapeHtml(t.label)}</span><span class="val"><span class="act">${act}</span></span><span class="lim"></span></div>`;
 }
 
 // ---------- Wind-vs-runway diagram ----------
@@ -2641,9 +2649,9 @@ function wxFlagsSelected() {
 
 function buildWxFlags() {
   const selected = wxFlagsSelected();
-  // widespread_ifr is a shared setting and the backend already ignores it on
-  // IFR flights, so it stays on screen under both - with a note saying so.
-  const note = { widespread_ifr: "not applied on IFR flights" };
+  // widespread_ifr is a shared setting, but the row it controls is only built on
+  // VFR flights now, so it stays on screen under both - with a note saying which.
+  const note = { widespread_ifr: "VFR flights only" };
   $("#wxflags").innerHTML = (CONFIG.weather_flag_options || [])
     .map((f) => `<label class="control checkbox"><input type="checkbox" class="wxflag" value="${f}"${selected.has(f) ? " checked" : ""}> ${wxLabel(f)}${note[f] ? ` <span class="hint">(${note[f]})</span>` : ""}</label>`)
     .join("");
@@ -2785,7 +2793,7 @@ function fillProfileForm() {
   WX_FLAGS_SELECTED = new Set(eff.weather_flags);
   $$(".wxflag").forEach((c) => (c.checked = WX_FLAGS_SELECTED.has(c.value)));
   const imc = $("#set-imc-threat");
-  if (imc) imc.checked = !!eff.imc_as_threat;
+  if (imc) imc.checked = !!eff.hard_imc_as_threat;
   const night = $("#set-night-threat");
   if (night) night.checked = !!eff.night_as_threat;
 }
@@ -2817,7 +2825,7 @@ function readProfileForm() {
 
   // IMC-as-threat: only persist when it differs from the default (off).
   const imcEl = $("#set-imc-threat");
-  if (imcEl && imcEl.checked !== !!difr.imc_as_threat) mins.imc_as_threat = imcEl.checked;
+  if (imcEl && imcEl.checked !== !!difr.hard_imc_as_threat) mins.hard_imc_as_threat = imcEl.checked;
 
   // Night-as-threat: same, against a default of on.
   const nightDefault = CONFIG.default_night_as_threat !== false;
@@ -2885,7 +2893,7 @@ function renderMinimums() {
   const curPreset = PROFILE.conservatism || CONFIG.default_conservatism;
   const presetLabel = (CONFIG.conservatism_presets.find((p) => p.key === curPreset) || {}).label || curPreset;
   const consRow = row("Conservatism", presetLabel, "Standard", "", curPreset !== CONFIG.default_conservatism);
-  const imcRow = row("IMC as threat (IFR)", eff.imc_as_threat ? "on" : "off", "off", "", !!eff.imc_as_threat);
+  const imcRow = row("Hard IMC as a threat (IFR)", eff.hard_imc_as_threat ? "on" : "off", "off", "", !!eff.hard_imc_as_threat);
   const nightDefault = CONFIG.default_night_as_threat !== false;
   const nightRow = row("Night as threat", eff.night_as_threat ? "on" : "off",
     nightDefault ? "on" : "off", "", !!eff.night_as_threat !== nightDefault);

@@ -130,6 +130,11 @@ class ThreatCheck(BaseModel):
     key: str
     label: str
     present: bool
+    # Why this one fired, when saying so changes what the pilot does about it.
+    # "Hard IMC" against a 3,000 ft ceiling reads as a bug until the row adds
+    # "OVC 3,000-12,000 ft - 9,000 ft thick". Most threats need nothing here and
+    # the row falls back to a bare "present".
+    detail: Optional[str] = None
 
 
 class Notam(BaseModel):

@@ -1976,13 +1976,18 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # turbulence rows grade exactly the products the card is showing.
         planned_low_ft=haz_low_ft,
         planned_high_ft=haz_high_ft,
-        # Widespread IMC gates a VFR flight that has it on its auto-NO-GO list,
-        # and nothing else. On IFR the route ceiling and visibility rows above
-        # already test these same points against the pilot's IFR minimums, so
-        # letting this row fail too turned one bust into two - on a card whose
-        # own My Minimums pane says it is "not applied on IFR flights".
-        widespread_imc_gates=(flight_rules != "ifr"
-                              and "widespread_ifr" in gating_hazards()),
+        # Widespread IMC is a VFR row. It is not built at all on an IFR flight:
+        # the route ceiling and visibility rows above already test these same
+        # points against the pilot's IFR minimums, and a second IMC-shaped row
+        # that can never decide anything is just noise on a crowded card.
+        include_widespread_imc=(flight_rules != "ifr"),
+        # Text only - see the parameter's own comment. A VFR pilot reading
+        # "widespread IMC" wants to know whether there is anything above it.
+        route_tops=route_tops,
+        field_elev_ft=dep.elevation_ft,
+        # On VFR it still builds but stops voting when the pilot has taken it off
+        # their own auto-NO-GO list - the row keeps saying where the IMC is.
+        widespread_imc_gates=("widespread_ifr" in gating_hazards()),
         # Same carve-out, same reason: a lowering ceiling is a VFR problem. See
         # the parameter's own comment in ``hazards.weather_checks``.
         lowering_ceiling_gates=(flight_rules != "ifr"),
@@ -1998,8 +2003,30 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
                                          ceiling_mode="endpoint", flight_rules=flight_rules)]
 
     all_checks = cond_checks + win_checks + weather_checks
-    present = derive_threats(route_ws, manual_threats, flight_rules=flight_rules)
-    route_threats = threat_check_list(present)
+    # How deep the cloud is, for the Hard IMC test. Tops are MSL and the route
+    # ceiling is AGL, so the ceiling is lifted to MSL against the departure field
+    # before the two are subtracted - the one place on this path where mixing the
+    # datums would produce a plausible-looking wrong number instead of a crash.
+    cloud_thickness_ft = None
+    if route_tops["tops_msl_ft"] is not None and enroute_ceiling is not None:
+        ceiling_msl_ft = enroute_ceiling + (dep.elevation_ft or 0.0)
+        cloud_thickness_ft = max(0.0, route_tops["tops_msl_ft"] - ceiling_msl_ft)
+    present = derive_threats(
+        route_ws, manual_threats, flight_rules=flight_rules,
+        cloud_thickness_ft=cloud_thickness_ft,
+        # A deck still solid at the top of the scan is deeper than any threshold,
+        # so it is decisive even though its top is unknown. Only when there is
+        # actually a deck to be inside.
+        tops_above_scan=(route_tops["state"] == "above_scan"
+                         and enroute_ceiling is not None))
+    # Say WHY Hard IMC fired. "Hard IMC" against a 3,000 ft ceiling reads as a bug
+    # until the row adds the depth that actually triggered it.
+    threat_details: dict[str, str] = {}
+    if "hard_imc" in present:
+        threat_details["hard_imc"] = _hard_imc_detail(
+            route_ws, enroute_ceiling, route_tops, cloud_thickness_ft,
+            dep.elevation_ft)
+    route_threats = threat_check_list(present, threat_details)
     threat_count = threat_weight(present)
     # One rule for all of them: a row traceable only to a TEMPO asks for an out
     # rather than stopping the flight, and every other failing row still stops it.
@@ -2438,6 +2465,34 @@ async def suggest(
         results.append(a)
     results.sort(key=_sort_key(sort))
     return results
+
+
+def _hard_imc_detail(ws, ceiling_agl_ft, tops: dict, thickness_ft,
+                     field_elev_ft) -> str:
+    """Which of the Hard IMC tests fired, in the pilot's own units.
+
+    Hard IMC is cloud that is LOW or cloud that is DEEP, and the two read very
+    differently on a card. "Hard IMC" beside a 3,000 ft ceiling looks like a bug
+    until the row says "9,000 ft thick" - so the row says it.
+
+    All three parts can be true at once; the ones that fired are listed together
+    rather than the first one winning, because a 600 ft ceiling under a deck that
+    tops at 12,000 ft is worse than either fact alone.
+    """
+    bits: list[str] = []
+    if ceiling_agl_ft is not None and ceiling_agl_ft < 1000:
+        bits.append(f"ceiling {ceiling_agl_ft:,.0f} ft AGL")
+    if ws.visibility_sm is not None and ws.visibility_sm < 3:
+        bits.append(f"visibility {ws.visibility_sm:g} SM")
+    if tops.get("state") == "above_scan":
+        scan = tops.get("scan_msl_ft")
+        bits.append(f"deck still solid above {scan:,.0f} ft MSL"
+                    if scan else "deck deeper than the model was sampled")
+    elif thickness_ft:
+        base = (ceiling_agl_ft or 0) + (field_elev_ft or 0.0)
+        bits.append(f"cloud {base:,.0f}-{tops['tops_msl_ft']:,.0f} ft MSL "
+                    f"- {thickness_ft:,.0f} ft thick")
+    return " · ".join(bits) or "present"
 
 
 def _route_tops(points: list[tuple[dict, str]]) -> dict:
