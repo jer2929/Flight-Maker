@@ -132,6 +132,18 @@ def weather_checks(
     # one click away. A bool rather than a flight_rules string keeps this module a
     # decider that reads no config, as the module docstring describes.
     widespread_imc_gates: bool = True,
+    # Does the rapidly-lowering-ceilings row stop the flight? False on an IFR
+    # flight. A deck settling at 3,000 ft is the loss of VMC and so a real VFR
+    # problem; under IFR it is nearly meaningless - it sits far above any
+    # approach minimum, and the route ceiling and visibility rows have already
+    # tested every point against the pilot's IFR minimums. Letting this row fail
+    # too produced cards whose seven conditions checks all passed while a
+    # SCT->BKN fill at 3,000 ft NO-GO'd the flight on its own. As with
+    # ``widespread_imc_gates`` the row is still built and still carries its
+    # METAR-trend popover; it is marked not-applicable rather than removed, so
+    # the trend stays one click away. A bool rather than a flight_rules string
+    # keeps this module a decider that reads no config.
+    lowering_ceiling_gates: bool = True,
 ) -> list[LimitCheck]:
     blob = raw_text.upper()
     area = area_text.upper()
@@ -329,9 +341,14 @@ def weather_checks(
     low = lowering_ceiling or None
     if low is not None and not isinstance(low, dict):
         low = {}
-    add("lowering_ceiling", "Rapidly lowering ceilings", low is not None,
-        low.get("text", "ceilings dropping along route") if low is not None
-        else "ceilings steady",
+    lowering_text = (low.get("text", "ceilings dropping along route")
+                     if low is not None else "ceilings steady")
+    if low is not None and not lowering_ceiling_gates:
+        lowering_text += " · not applied on this flight"
+    add("lowering_ceiling", "Rapidly lowering ceilings",
+        low is not None and lowering_ceiling_gates,
+        lowering_text,
+        applicable=lowering_ceiling_gates,
         location=(low or {}).get("location"),
         source=(low or {}).get("source"),
         source_detail=(low or {}).get("detail"),

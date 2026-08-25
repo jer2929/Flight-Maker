@@ -591,6 +591,23 @@ class RouteAssessment(BaseModel):
     altitude: Optional[AltitudeRecommendation] = None
     cruise_altitude_ft: Optional[float] = None
     enroute_ceiling_ft: Optional[float] = None        # lowest ceiling sampled along route
+    # Cloud tops - the HIGHEST top anywhere on the route, ft **MSL**.
+    #
+    # MSL where the ceiling above is AGL, and the field name says so, because the
+    # two are printed side by side: a ceiling is compared against a minimum
+    # measured from the runway, a top against a cruising altitude.
+    enroute_tops_msl_ft: Optional[float] = None
+    # known | above_scan | no_deck | unknown | unsampled. "No tops figure" has five
+    # meanings and only ``no_deck`` is good news - see ``orchestrator._route_tops``.
+    enroute_tops_state: str = "unsampled"
+    enroute_tops_source: Optional[str] = None        # "model" (PIREP to follow)
+    enroute_tops_at: Optional[str] = None            # which point on the route
+    # Top of the scan, so "above_scan" can name the height it is above instead of
+    # asking the reader to know where the pressure levels run out.
+    enroute_tops_scan_msl_ft: Optional[float] = None
+    # The top came from the saturation fallback rather than from cloud cover -
+    # weaker again, and the UI says so.
+    enroute_tops_from_rh: bool = False
     enroute_visibility_sm: Optional[float] = None
     cloud_at_cruise: bool = False                     # cloud base below planned cruise altitude
     sigmets: list[Advisory] = []

@@ -289,3 +289,56 @@ def test_widespread_imc_still_gates_by_default():
              point_labels=LABELS)["widespread_ifr"]
     assert not c.passed and c.applicable
     assert "not applied" not in c.actual_text
+
+
+# --- when the lowering-ceiling row does not apply --------------------------
+#
+# Same carve-out as widespread IMC, for the same reason: a deck settling at
+# 3,000 ft is the loss of VMC and so a real VFR problem, but it sits far above
+# any approach minimum and the route ceiling/visibility rows have already tested
+# every point against the pilot's IFR minimums.
+
+
+def test_lowering_ceiling_does_not_gate_when_switched_off():
+    c = _run(lowering_ceiling={"location": "CYOW", "source": "METAR trend",
+                               "text": "2,700 ft layer thickened SCT → BKN: "
+                                       "ceiling now 3,000 ft"},
+             lowering_ceiling_gates=False)["lowering_ceiling"]
+    assert c.passed              # the row no longer fails …
+    assert not c.applicable      # … and is excluded from the verdict entirely
+    assert "not applied on this flight" in c.actual_text
+
+
+def test_a_switched_off_lowering_ceiling_row_still_shows_the_trend():
+    # Not-applicable is not the same as not-worth-reading: the pilot can still
+    # open "N checks passed" and see which field is going down and by how much.
+    c = _run(lowering_ceiling={"location": "CYOW", "source": "METAR trend",
+                               "text": "2,700 ft layer thickened SCT → BKN: "
+                                       "ceiling now 3,000 ft",
+                               "full": "CYOW recent METARs\nCYOW 011800Z ..."},
+             lowering_ceiling_gates=False)["lowering_ceiling"]
+    assert c.location == "CYOW"
+    assert "3,000 ft" in c.actual_text
+    assert c.source == "METAR trend"
+    assert "CYOW recent METARs" in c.source_text
+
+
+def test_a_switched_off_lowering_ceiling_row_is_kept_out_of_the_verdict():
+    from app.models import Verdict
+    from app.services.evaluator import checks_verdict
+    rows = weather_checks(
+        raw_text="", hazards=set(), night=False, llj_kt=None,
+        ceiling_points=[3000, 8000, 3000], vis_points=[15, 15, 15],
+        lowering_ceiling={"location": "CYOW", "text": "ceiling now 3,000 ft"},
+        freezing_level_ft=None, personal_vis_sm=3,
+        gfa_region=gfa_region(43.1, -80.3), window_hazards=set(),
+        metar_hazards=set(), out_of_window=[], etd_is_now=True,
+        lowering_ceiling_gates=False)
+    assert checks_verdict(rows) == Verdict.GO
+
+
+def test_lowering_ceiling_still_gates_by_default():
+    # The VFR default is unchanged - this is the row's whole reason to exist.
+    c = _run(lowering_ceiling={"location": "CYOW", "text": "ceiling now 3,000 ft"})["lowering_ceiling"]
+    assert not c.passed and c.applicable
+    assert "not applied" not in c.actual_text

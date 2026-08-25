@@ -199,6 +199,28 @@ def _winds_aloft_at(forecast: dict, when: datetime | None = None) -> list[WindAl
     return out
 
 
+def _tops_at(fc: dict, when: datetime | None = None) -> dict:
+    """Cloud tops at one point, at ``when``, from a forecast already in hand.
+
+    The endpoints do not go through :func:`_point_at` - their weather comes from a
+    METAR or a TAF, and neither of those ever reports a cloud top - so the tops for
+    a departure or a destination have to be read off the model directly. Pure
+    arithmetic on a response already fetched: no request, no second index of
+    anything.
+    """
+    if not fc:
+        return {}
+    i = _current_index(fc) if when is None else _index_for_utc(fc, when)[0]
+    t = openmeteo.deck_top(fc.get("hourly", {}), i,
+                           openmeteo.field_elevation_ft(fc))
+    # The same key names ``_point_at`` uses, so an endpoint and an enroute sample
+    # are the same shape by the time ``_route_tops`` reads them.
+    return {"tops_msl_ft": t["highest_top_msl_ft"],
+            "tops_above_scan": t["above_scan"],
+            "tops_scan_msl_ft": t["scan_top_msl_ft"],
+            "tops_from_rh": t["from_rh"]}
+
+
 def _point_at(fc: dict, when: datetime | None = None) -> dict:
     """Ceiling/vis/LLJ/freezing-level at one point, at ``when`` (default now)."""
     if not fc:
@@ -213,6 +235,7 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
     elevation_ft = openmeteo.field_elevation_ft(fc)
     ceiling = openmeteo.cloud_base_to_ceiling_ft(at("cloud_base"))
     layer = openmeteo.lowest_layer(hourly, i, elevation_ft)
+    tops = openmeteo.deck_top(hourly, i, elevation_ft)
     if ceiling is None:  # GEM lacks cloud_base -> infer from the pressure levels
         ceiling = layer["ceiling_ft"]
     # Whether this point produced a usable reading at all. A failed fetch and a
@@ -228,6 +251,12 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
         "sct_base_ft": layer["sct_base_ft"],
         "max_cover_pct": layer["max_cover_pct"],
         "scan_top_ft": layer["scan_top_ft"],
+        # Cloud tops, MSL. Under names that carry the datum: every other height in
+        # this dict is AGL, and mixing the two is a field-elevation-sized error.
+        "tops_msl_ft": tops.get("highest_top_msl_ft"),
+        "tops_above_scan": tops.get("above_scan", False),
+        "tops_scan_msl_ft": tops.get("scan_top_msl_ft"),
+        "tops_from_rh": tops.get("from_rh", False),
         "sampled": sampled,
         "vis_sm": openmeteo.visibility_to_sm(at("visibility")),
         "wind_kt": at("windspeed_10m"),
@@ -1777,6 +1806,16 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     route_icing = airmass.worst_icing([e.get("icing_bands") or [] for e in enroute])
     route_turb = airmass.worst_turbulence([e.get("turbulence") for e in enroute])
     enroute_ceiling = min([c for c in ceiling_points if c is not None], default=None)
+    # Tops, from the same points and the same labels. The endpoints are read off
+    # the model directly (``_tops_at``) rather than from their cards: a METAR or a
+    # TAF never reports a cloud top, so there is nothing to merge in and
+    # ``_merge_enroute_report`` deliberately says nothing about tops either.
+    route_tops = _route_tops(
+        [({"ceiling_ft": dep_a.weather.ceiling_agl_ft, **_tops_at(dep_fc, etd_utc)},
+          point_labels[0])]
+        + [(e, lbl) for e, lbl in zip(enroute, point_labels[1:-1])]
+        + [({"ceiling_ft": dest_a.weather.ceiling_agl_ft, **_tops_at(dest_fc, eta_utc)},
+            point_labels[-1])])
     enroute_vis = min([v for v in vis_points if v is not None], default=None)
     # Lowering ceilings: from the model trend OR observed in recent METAR
     # history. Each source keeps hold of *which* field it saw it at and what the
@@ -1944,6 +1983,9 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # own My Minimums pane says it is "not applied on IFR flights".
         widespread_imc_gates=(flight_rules != "ifr"
                               and "widespread_ifr" in gating_hazards()),
+        # Same carve-out, same reason: a lowering ceiling is a VFR problem. See
+        # the parameter's own comment in ``hazards.weather_checks``.
+        lowering_ceiling_gates=(flight_rules != "ifr"),
     )
 
     # What the TAF forecasts across the flight, at each end. On a future ETD the
@@ -2102,6 +2144,12 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         limit_checks=all_checks, threat_checks=route_threats,
         altitude=alt, cruise_altitude_ft=cruise_alt,
         enroute_ceiling_ft=enroute_ceiling, enroute_visibility_sm=enroute_vis,
+        enroute_tops_msl_ft=route_tops["tops_msl_ft"],
+        enroute_tops_state=route_tops["state"],
+        enroute_tops_source="model" if route_tops["state"] == "known" else None,
+        enroute_tops_at=route_tops["at"],
+        enroute_tops_scan_msl_ft=route_tops["scan_msl_ft"],
+        enroute_tops_from_rh=route_tops["from_rh"],
         cloud_at_cruise=cloud_at_cruise,
         sigmets=[ah.to_advisory(h) for h in sigmets[:8]],
         airmets=[ah.to_advisory(h) for h in airmets[:8]],
@@ -2390,6 +2438,62 @@ async def suggest(
         results.append(a)
     results.sort(key=_sort_key(sort))
     return results
+
+
+def _route_tops(points: list[tuple[dict, str]]) -> dict:
+    """The highest cloud top anywhere on the route, or an honest unknown.
+
+    The ceiling takes the **minimum** across the route, because a flight is flown
+    under the lowest deck on it. Tops take the **maximum**, for the mirror-image
+    reason: to be on top, you have to be above the highest of them.
+
+    And one point that could not resolve its top makes the whole route's tops
+    unknown - not "the maximum of the ones that answered". A maximum over the
+    points that happened to reply is exactly the quiet optimism that puts an
+    aeroplane in cloud at cruise: three resolved samples and one unknown is not a
+    route with a known top.
+
+    Only points that actually carry a deck are counted. A clear point has no top,
+    which is not the same as an unknown one, and must not veto the answer.
+
+    ``state`` is one of:
+      ``known``       a top was resolved everywhere a deck was found.
+      ``above_scan``  at least one deck was still solid at the top of the scan, so
+                      its top is higher than the scan reaches and this derivation
+                      cannot say how much higher.
+      ``no_deck``     sampled, and no deck anywhere. Nothing to be on top of -
+                      which is good news, and different from the two above.
+      ``unknown``     a deck exists whose top could not be resolved (commonly a
+                      ceiling that came from a report while the model showed
+                      nothing).
+      ``unsampled``   nothing usable came back at all. A statement about the fetch.
+    """
+    out = {"tops_msl_ft": None, "state": "unsampled", "at": None,
+           "from_rh": False, "scan_msl_ft": None}
+    usable = [(pt, label) for pt, label in points if pt]
+    if not usable:
+        return out
+
+    scans = [pt.get("tops_scan_msl_ft") for pt, _ in usable
+             if pt.get("tops_scan_msl_ft") is not None]
+    out["scan_msl_ft"] = min(scans) if scans else None
+
+    decks = [(pt, label) for pt, label in usable if pt.get("ceiling_ft") is not None]
+    if not decks:
+        out["state"] = "no_deck"
+        return out
+
+    if any(pt.get("tops_above_scan") for pt, _ in decks):
+        out["state"] = "above_scan"
+        return out
+    if any(pt.get("tops_msl_ft") is None for pt, _ in decks):
+        out["state"] = "unknown"
+        return out
+
+    top, label = max(decks, key=lambda pl: pl[0]["tops_msl_ft"])
+    out.update(tops_msl_ft=top["tops_msl_ft"], state="known", at=label,
+               from_rh=any(pt.get("tops_from_rh") for pt, _ in decks))
+    return out
 
 
 def _lowest_deck(pairs: list[tuple[float | None, str | None]]) -> tuple[float | None, str | None]:

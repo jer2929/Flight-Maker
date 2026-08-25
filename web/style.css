@@ -575,6 +575,15 @@ select, input[type=text], .route-inputs input {
   font-family: var(--f-cond); font-weight: 600; font-size: .66rem;
   letter-spacing: .08em; color: var(--taf-ink); margin-left: 6px; cursor: help;
 }
+/* Provenance chip on the cloud-tops figure. Same pill as ``.blend`` - it carries
+   the same kind of "here is where this number came from" caveat - but in the muted
+   ink, because a model estimate is a caveat rather than a source to trust. */
+.src-model {
+  font-family: var(--f-cond); font-weight: 600; font-size: .66rem;
+  letter-spacing: .08em; color: var(--muted); margin-left: 6px; cursor: help;
+  text-transform: uppercase;
+}
+
 .src.OBSERVED { color: var(--go-ink); }
 .src.TAF { color: var(--taf-ink); }
 .src.HRDPS { color: var(--mit-ink); }
