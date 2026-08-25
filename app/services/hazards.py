@@ -117,7 +117,11 @@ def weather_checks(
     # "ceilings dropping along route".
     lowering_ceiling: Optional[dict] = None,
     freezing_level_ft: Optional[float],
-    personal_vis_sm: float,
+    # No ``personal_vis_sm``: it used to reach this module for one purpose, to
+    # fire the widespread-IMC row off a single point below the pilot's own
+    # visibility limit. That is the visibility hard-limit row's test, it is
+    # applied there against every point on the route, and applying it twice is
+    # how a 7 SM CLR observation came back as IMC. See section 9 below.
     gfa_region: str,
     area_text: str = "",           # forecast area products only (no PIREPs)
     # PIREPs are kept apart from the forecast products on purpose. A SIGMET or
@@ -165,10 +169,10 @@ def weather_checks(
     # builds the row and switches off only its vote.
     include_widespread_imc: bool = True,
     # ``{"tops_msl_ft": ..., "state": ...}`` from ``orchestrator._route_tops``, or
-    # None. TEXT ONLY: the widespread-IMC row still gates on the same two things it
-    # always did (two or more points in IMC, or visibility below the pilot's
-    # personal limit). Depth is what removes the over-the-top escape a VFR pilot
-    # might be counting on, so it is worth saying - but no VFR verdict moves on it.
+    # None. TEXT ONLY: the widespread-IMC row gates on one thing, two or more
+    # sampled points in IMC. Depth is what removes the over-the-top escape a VFR
+    # pilot might be counting on, so it is worth saying - but no VFR verdict moves
+    # on it.
     route_tops: Optional[dict] = None,
     # Departure field elevation, only so the AGL ceiling above can be lifted to
     # MSL before it is subtracted from an MSL cloud top. Optional: without it the
@@ -419,34 +423,57 @@ def weather_checks(
         source_detail=(low or {}).get("detail"),
         source_text=(low or {}).get("full"))
 
-    # 9. Widespread IMC / visibility below personal limit.
+    # 9. Widespread IMC along the route.
+    #
+    # IMC is the same condition Hard IMC tests in ``evaluator.derive_threats``:
+    # a ceiling below 1,000 ft AGL, or visibility below 3 SM - cloud you would
+    # be *in*, not weather you would rather not fly in. "Widespread" is then two
+    # or more sampled points meeting it; a single point is isolated IMC, which
+    # the row says without stopping the flight over it.
+    #
+    # Visibility below the pilot's own personal limit used to fire this row by
+    # itself, off one point, and that is not IMC by any reading. A 7 SM CLR
+    # observation on a route with no cloud anywhere on it reported "Widespread
+    # IMC" against a 9 SM cross-country limit - legal VMC, described to the
+    # pilot as instrument conditions. The personal limit is the visibility
+    # hard-limit row's job: it tests every point against it, names the worst
+    # one, and had already NO-GO'd that flight on its own. This row is about
+    # IMC, and fires only on IMC.
+    #
+    # Depth is deliberately not part of the test, though Hard IMC counts a deep
+    # deck as IMC in its own right. That case is an IFR one - cloud from 3,000
+    # to 12,000 ft is a whole flight spent inside it on an instrument flight
+    # plan, while a VFR pilot flies underneath in the VMC this row is measuring.
+    # It is still worth reading, so it is reported below and never gated.
     #
     # The points are counted *and* kept, so the row can say where they are. It
     # used to report "1 IMC point(s) on route" and nothing else, which told a
     # pilot a NO-GO existed somewhere along a 120 nm route and left them to
     # guess whether it was over the departure, the destination, or open country
     # in between.
-    labels = list(point_labels)
-    offenders: list[dict] = []
     if not include_widespread_imc:
         # Nothing to say and nothing to show: skip the row entirely rather than
         # building a not-applicable one. See ``include_widespread_imc`` above.
         return checks
+    labels = list(point_labels)
+    offenders: list[dict] = []
     for i, (ce, vi) in enumerate(zip(ceiling_points, vis_points)):
-        imc = (ce is not None and ce < 1000) or (vi is not None and vi < 3)
-        personal = vi is not None and vi < personal_vis_sm
-        if not (imc or personal):
+        if not ((ce is not None and ce < 1000) or (vi is not None and vi < 3)):
             continue
         offenders.append({
             "label": labels[i] if i < len(labels) else f"point {i + 1}",
-            "ceiling_ft": ce, "vis_sm": vi, "imc": imc, "personal": personal,
+            "ceiling_ft": ce, "vis_sm": vi,
         })
-    imc_pts = sum(1 for o in offenders if o["imc"])
-    below_personal = any(o["personal"] for o in offenders)
-    widespread = imc_pts >= 2 or below_personal
+    imc_pts = len(offenders)
+    widespread = imc_pts >= 2
+    # What the row is actually measured against, in the limit column. It read
+    # "none on route" while a single IMC point passed, which is the one thing
+    # the row does not require.
+    imc_limit = "fewer than 2 points in IMC"
 
     if not offenders:
-        add("widespread_ifr", "Widespread IMC", False, "VMC along route")
+        add("widespread_ifr", "Widespread IMC", False, "VMC along route",
+            limit=imc_limit)
     else:
         def _values(o: dict) -> str:
             bits = []
@@ -462,24 +489,24 @@ def weather_checks(
                                               o["vis_sm"] if o["vis_sm"] is not None else 1e9))
         tail = (f" (+{len(offenders) - 1} more point"
                 f"{'s' if len(offenders) > 2 else ''})" if len(offenders) > 1 else "")
-        why = " · ".join(
-            ([f"{imc_pts} IMC point{'s' if imc_pts != 1 else ''}"] if imc_pts else [])
-            + (["vis below personal limit"] if below_personal else []))
+        why = f"{imc_pts} IMC point{'s' if imc_pts != 1 else ''}"
+        if not widespread:
+            # Said, not gated - and said in the words of the test, so a passing
+            # row carrying a 500 ft ceiling does not read as a missed NO-GO.
+            why += " · isolated, not widespread"
         # How deep it is, where that is known. Reported, never gated.
         depth = _deck_depth_text(route_tops, worst["ceiling_ft"], field_elev_ft)
         if depth:
             why += f" · {depth}"
-        if not widespread_imc_gates:
+        if widespread and not widespread_imc_gates:
             why += " · not applied on this flight"
         add("widespread_ifr", "Widespread IMC",
             widespread and widespread_imc_gates,
             f"{_values(worst)}{tail} - {why}",
+            limit=imc_limit,
             applicable=widespread_imc_gates,
             location=worst["label"], source="route sample",
-            source_text="\n".join(
-                f"{o['label']}: {_values(o)}"
-                + ("  IMC" if o["imc"] else "")
-                + (f"  below your {personal_vis_sm:g} SM limit" if o["personal"] else "")
-                for o in offenders))
+            source_text="\n".join(f"{o['label']}: {_values(o)}  IMC"
+                                  for o in offenders))
 
     return checks
