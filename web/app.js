@@ -216,11 +216,15 @@ function saveTheme(v) {
     else localStorage.setItem(THEME_KEY, v);
   } catch (_) {}
 }
-const prefersLight = () =>
-  !!(window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches);
+// Asked as "is the device dark?" rather than "is it light?" so that every way
+// of not getting an answer - no matchMedia, a UA that reports neither - lands
+// on light. Light is the fallback everywhere in the shell; see the boot script
+// in index.html, which asks the same question the same way round.
+const prefersDark = () =>
+  !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches);
 
 function applyTheme(pref) {
-  const resolved = pref === "auto" ? (prefersLight() ? "light" : "dark") : pref;
+  const resolved = pref === "auto" ? (prefersDark() ? "dark" : "light") : pref;
   document.documentElement.dataset.theme = resolved;
   // The address bar / task-switcher colour. Read back off --bg rather than kept
   // as a second copy of the hex, so the meta can never disagree with the
@@ -273,7 +277,7 @@ function wireTheme() {
   // too: on Auto the icon means "whatever the device says", and the device just
   // said something different.
   if (window.matchMedia) {
-    matchMedia("(prefers-color-scheme: light)")
+    matchMedia("(prefers-color-scheme: dark)")
       .addEventListener("change", () => { if (pref === "auto") { applyTheme(pref); paint(); } });
   }
 }

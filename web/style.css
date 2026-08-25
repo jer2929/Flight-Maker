@@ -55,6 +55,12 @@
    DOM. That is why there is one light block here and no prefers-color-scheme
    media query: the script has already answered that question.
 
+   :root being the dark block is a token-authoring choice, NOT the app default -
+   the app falls back to light. The served <html> carries data-theme="light" so
+   that a shell whose boot script never runs still gets the light block rather
+   than inheriting this one. Nothing should ever be reachable only by having no
+   data-theme at all.
+
    Two rules keep a second theme cheap, and breaking either is what makes
    themes drift apart:
      1. Never write a colour literal outside these two blocks. A tint of a
