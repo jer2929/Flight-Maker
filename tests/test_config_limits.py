@@ -100,7 +100,7 @@ def test_conservatism_confident_relaxes_rule():
 def test_conservatism_cautious_weights_serious_threats():
     merged = merge_limits(get_default_limits(), {"conservatism": "cautious"})
     weights = merged["threat_stacking"]["weights"]
-    assert weights.get("actual_imc") == 2
+    assert weights.get("hard_imc") == 2
     assert weights.get("convective_nearby") == 2
     assert "night_operations" not in weights
 
@@ -185,9 +185,9 @@ def test_night_and_imc_threat_toggles_are_respected():
     with limits_override({"night_as_threat": False}):
         assert "night_operations" not in derive_threats(_wx(), ["night_operations"])
     low = _wx(visibility_sm=1)
-    assert "actual_imc" not in derive_threats(low, [], flight_rules="ifr")
+    assert "hard_imc" not in derive_threats(low, [], flight_rules="ifr")
     with limits_override({"imc_as_threat": True}):
-        assert "actual_imc" in derive_threats(low, [], flight_rules="ifr")
+        assert "hard_imc" in derive_threats(low, [], flight_rules="ifr")
 
 
 # ---- wind threat triggers scale with the pilot's own wind limits ------------

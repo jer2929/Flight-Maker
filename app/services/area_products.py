@@ -316,6 +316,90 @@ def parse_pirep_level(text: str) -> Optional[tuple[float, float]]:
     return max(0.0, level - PIREP_LEVEL_SPREAD_FT), level + PIREP_LEVEL_SPREAD_FT
 
 
+# --- /SK, the sky-condition field -------------------------------------------
+#
+# The only field in a PIREP that reports a cloud TOP, and the reason a pilot files
+# one at all on an IFR day. Real forms, all of which occur:
+#
+#   /SK OVC030-TOP055                  base and top, hundreds of feet
+#   /SK BKN035-TOPS 060                the plural, and a space
+#   /SK OVC-TOP 5500                   no base, and a top in whole feet
+#   /SK SCT040-TOP060/OVC080-TOP110    two layers, separated by a slash
+#   /SK OVC040-TOPUNKN                 the pilot could not see the top
+#
+# The field runs to the next PIREP field marker, which is always a slash followed
+# by exactly two letters ("/TB", "/IC", "/TA"). The lookahead's word boundary is
+# what lets the LAYER separator through: "/OVC080" is a slash followed by three
+# letters, so it fails ``/[A-Z]{2}\b`` and stays inside the field. That single
+# character is the whole risk in this regex, and it is pinned by a test both ways.
+_SK_FIELD = re.compile(r"/SK\s+(.*?)(?=\s*/[A-Z]{2}\b|$)", re.S)
+
+# One layer within the field. The base is optional (a pilot who broke out on top
+# often never saw it) and either number can be UNKN.
+_SK_LAYER = re.compile(
+    r"(SCT|BKN|OVC|FEW|CLR|SKC)?\s*(\d{3,5}|UNKN)?\s*-\s*TOPS?\s*(\d{3,5}|UNKN)")
+
+# A three-digit group is hundreds of feet - the same convention "/FL050" uses. Four
+# or five digits is a pilot writing the altitude out ("TOP 5500"), which is
+# unambiguous because no cloud tops at 550,000 ft. Anything that survives both
+# readings and still lands outside the atmosphere is not a reading.
+_SK_MAX_FT = 60000.0
+
+
+def _sk_alt_ft(token: Optional[str]) -> Optional[float]:
+    if not token or token == "UNKN":
+        return None
+    ft = float(token) * (100.0 if len(token) <= 3 else 1.0)
+    return ft if 0 < ft <= _SK_MAX_FT else None
+
+
+def parse_pirep_tops(text: str) -> list[dict]:
+    """Every layer a PIREP's ``/SK`` field reports, as ``{cover, base_ft, top_ft}``.
+
+    Feet are **MSL**: that is the convention a pilot files a sky-condition report
+    in, and it is the datum a cruising altitude is in. Nothing here is ever
+    compared against this app's AGL ceilings without being converted first.
+
+    ``[]`` means the report carried no readable ``/SK`` - which, like every other
+    unparsed field in this module, reads as "the report does not say" and never as
+    "there is no cloud".
+    """
+    m = _SK_FIELD.search(text.upper())
+    if not m:
+        return []
+    out: list[dict] = []
+    for cover, base, top in _SK_LAYER.findall(m.group(1)):
+        top_ft = _sk_alt_ft(top)
+        if top_ft is None:
+            continue        # "TOPUNKN" - the pilot said they could not see it
+        out.append({"cover": cover or None, "base_ft": _sk_alt_ft(base),
+                    "top_ft": top_ft})
+    return out
+
+
+def pirep_top_ft(text: str) -> Optional[float]:
+    """The HIGHEST cloud top a PIREP reported, or ``None``.
+
+    The highest, because that is the one an aeroplane has to be above. A report of
+    "SCT040-TOP060/OVC080-TOP110" describes 11,000 ft of weather, and the 6,000 ft
+    number in it is the answer to a different question.
+    """
+    layers = parse_pirep_tops(text)
+    return max((lyr["top_ft"] for lyr in layers), default=None)
+
+
+# Coverage that makes a top worth planning against. Scattered cloud has a top, but
+# climbing above it buys nothing: you were never in it. "On top" is a statement
+# about a layer you could not otherwise get above.
+SOLID_COVER = ("BKN", "OVC")
+
+
+def pirep_solid_top_ft(text: str) -> Optional[float]:
+    """The highest top a PIREP reported for a BROKEN or OVERCAST layer."""
+    return max((lyr["top_ft"] for lyr in parse_pirep_tops(text)
+                if lyr["cover"] in SOLID_COVER), default=None)
+
+
 # "VALID 141200/141600" - DDHHMM pairs, no month, no year.
 _VALID_PAIR = re.compile(r"\bVALID\s+(\d{6})\s?/\s?(\d{6})\b")
 

@@ -131,13 +131,13 @@ for taxi and approach - not for a single instant:
   turn it off and it becomes a caution instead.
 * **Embedded convective cloud** is the one hazard an instrument rating does not
   answer, so it is an automatic NO-GO on an IFR card as well as a VFR one -
-  unlike *Widespread IMC*, which an IFR flight is never penalised for. It is read
-  off all three of the spellings NAV CANADA uses (`EMBD TS`, `EMBD CB`,
-  `CVCTV CLD EMBD`) wherever they appear - a METAR remark, a TAF group, a SIGMET
-  or an area forecast - and like every hazard it is time-scoped: a TAF group
-  gates only when it overlaps your window, and an observation gates a **Now**
-  departure and drops to an advisory for a later one. Untick it in Settings and
-  it becomes a caution instead.
+  unlike *Widespread IMC*, which is a VFR row and is not built on an IFR card at
+  all. It is read off all three of the spellings NAV CANADA uses (`EMBD TS`,
+  `EMBD CB`, `CVCTV CLD EMBD`) wherever they appear - a METAR remark, a TAF
+  group, a SIGMET or an area forecast - and like every hazard it is time-scoped:
+  a TAF group gates only when it overlaps your window, and an observation gates
+  a **Now** departure and drops to an advisory for a later one. Untick it in
+  Settings and it becomes a caution instead.
 * That rule lives in **one place** and every view reads it: the route card, the
   discovery cards and the hour-by-hour strip. They used to disagree - the strip
   folded PROB groups straight into the hour it was grading, so a `PROB30 2SM`

@@ -46,6 +46,44 @@ PRESSURE_CLOUD_LEVELS_FT: dict[str, float] = {
     "900hPa": 3243, "875hPa": 4001, "850hPa": 4781, "825hPa": 5576,
     "800hPa": 6394, "775hPa": 7230, "750hPa": 8089, "700hPa": 9882,
 }
+
+# Levels above the ceiling-derivation range. A ceiling is by definition the
+# *lowest* deck, so the list above is all the ceiling ever needed; a cloud TOP can
+# be anywhere, and a deck topping between 10,000 and 18,000 ft used to be
+# invisible - not "no top", but "the scan ended and the cloud had not".
+#
+# These are every level Open-Meteo serves between 700 and 500 hPa: there is no 675
+# or 625, so the gaps up here are ~2,000 ft and cannot be closed. That is the
+# honest accuracy of a tops figure above 10,000 ft, and it is why the UI rounds
+# tops to 500 ft, prefixes them with "~", and why the on-top margin is a whole
+# 1,000 ft.
+#
+# Heights follow the same standard atmosphere as the dict above -
+# 145366.45 * (1 - (P/1013.25)^0.190284) - and NOT the rounded values in
+# ``PRESSURE_LEVELS_FT``, which is a separate list serving a separate purpose. That
+# one labels cruising winds at heights a pilot recognises (850 hPa as "5,000 ft"
+# rather than 4,779); this one places a cloud layer, where 200 ft of rounding is
+# 200 ft of error in a tops figure. The two dicts overlap at 700, 600 and 500 hPa
+# and deliberately disagree there - nothing subtracts one from the other, because a
+# top is compared against real cruising altitudes, never against a wind level.
+#
+# Like the levels above, these are only a fallback: ``_level_msl_ft`` prefers the
+# hour's actual geopotential height, which moves ~600 ft with airmass temperature.
+PRESSURE_TOPS_LEVELS_FT: dict[str, float] = {
+    "650hPa": 11776, "600hPa": 13795, "550hPa": 15955, "500hPa": 18281,
+}
+
+# Every level the cloud scan walks. ``lowest_layer`` and ``deck_top`` both use this
+# so a ceiling and a top can never be derived from two different pictures of the
+# same sky.
+#
+# NOTE: ``services.airmass`` deliberately does NOT use this - it keeps to
+# ``PRESSURE_CLOUD_LEVELS_FT``, so widening the tops scan cannot silently start
+# advertising icing bands at FL180 that were never reported before.
+PRESSURE_SCAN_LEVELS_FT: dict[str, float] = {
+    **PRESSURE_CLOUD_LEVELS_FT, **PRESSURE_TOPS_LEVELS_FT,
+}
+
 HPA_TO_INHG = 0.02952998    # Open-Meteo serves pressure in hPa; altimeters read inHg
 
 BKN_COVER_PCT = 55.0   # per-level cloud cover at/above this ≈ broken (5/8) ceiling
@@ -80,7 +118,7 @@ def _hourly_vars() -> list[str]:
     for lvl in PRESSURE_LEVELS_FT:
         vars_.append(f"windspeed_{lvl}")
         vars_.append(f"winddirection_{lvl}")
-    for lvl in PRESSURE_CLOUD_LEVELS_FT:
+    for lvl in PRESSURE_SCAN_LEVELS_FT:
         vars_.append(f"cloud_cover_{lvl}")
         vars_.append(f"relative_humidity_{lvl}")
         # Temperature at the same levels: cloud plus a sub-zero temperature is
@@ -283,7 +321,7 @@ def _level_msl_ft(hourly: dict, lvl: str, i: int) -> float:
     gh_m = _at(hourly, f"geopotential_height_{lvl}", i)
     if gh_m is not None:
         return gh_m * 3.28084
-    return PRESSURE_CLOUD_LEVELS_FT[lvl]
+    return PRESSURE_SCAN_LEVELS_FT[lvl]
 
 
 def lowest_layer(hourly: dict, i: int, elevation_ft: float | None) -> dict:
@@ -315,7 +353,7 @@ def lowest_layer(hourly: dict, i: int, elevation_ft: float | None) -> dict:
     if elevation_ft is None:
         return out
 
-    levels = sorted(PRESSURE_CLOUD_LEVELS_FT, key=lambda k: PRESSURE_CLOUD_LEVELS_FT[k])
+    levels = sorted(PRESSURE_SCAN_LEVELS_FT, key=lambda k: PRESSURE_SCAN_LEVELS_FT[k])
     prev_agl: float | None = None      # last level below the threshold
     prev_cover: float | None = None
 
@@ -363,6 +401,120 @@ def lowest_layer(hourly: dict, i: int, elevation_ft: float | None) -> dict:
 
         prev_agl, prev_cover = agl, cover
 
+    return out
+
+
+def deck_top(hourly: dict, i: int, elevation_ft: float | None = None) -> dict:
+    """The TOP of the cloud at one hour, with its provenance.
+
+    The structural mirror of :func:`lowest_layer`. That function walks the pressure
+    levels low->high looking for the first level at or above ``BKN_COVER_PCT`` and
+    interpolates the *base* on the way up through the threshold; this one keeps
+    walking and interpolates the *top* on the way back down through it. Same
+    levels, same ``_level_msl_ft``, same saturation fallback - so a ceiling and a
+    top can never be derived from two different pictures of the same sky.
+
+    Everything here is **MSL**, deliberately, and every field name says so. A
+    ceiling is AGL because it is compared against a minimum measured from the
+    runway; a top is compared against a cruising altitude. The two numbers sit next
+    to each other on the route panel and the only thing stopping them being
+    subtracted is that they are labelled.
+
+    ``top_msl_ft``          top of the LOWEST broken+ deck, or None.
+    ``highest_top_msl_ft``  top of the HIGHEST broken+ deck resolved. This, not the
+                            one above, is what "on top" has to clear: being above
+                            the lowest deck with a second one over you is not being
+                            on top of anything.
+    ``top_agl_ft``          ``top_msl_ft`` above the field, when ``elevation_ft`` is
+                            known. Convenience only - nothing gates on it.
+    ``deck_count``          how many broken+ decks the scan resolved.
+    ``above_scan``          True when a deck was still broken+ at the highest level
+                            sampled. The top is then **not** the scan limit: it is
+                            higher than that, and this derivation cannot say how
+                            much higher. Reporting the scan limit as a top is
+                            precisely how a pilot ends up planning to cruise inside
+                            a deck, so it gets its own state and ``top_msl_ft``
+                            stays None.
+    ``scan_top_msl_ft``     highest level examined, ft MSL.
+    ``from_rh``             the top came from the saturation fallback rather than
+                            from cloud cover. Much weaker: RH falling back through
+                            95% says the air stopped being saturated, which is close
+                            to - but not the same as - the cloud stopping.
+    ``sampled``             whether any usable series existed at all. False is a
+                            statement about the fetch, never about the sky.
+
+    ``elevation_ft`` is optional here where ``lowest_layer`` requires it: MSL tops
+    need only the geopotential heights, which is what lets the hour-by-hour
+    timeline call this with nothing it does not already have.
+    """
+    out: dict = {"top_msl_ft": None, "highest_top_msl_ft": None,
+                 "top_agl_ft": None, "deck_count": 0, "above_scan": False,
+                 "scan_top_msl_ft": None, "from_rh": False, "sampled": False}
+
+    levels = sorted(PRESSURE_SCAN_LEVELS_FT, key=lambda k: PRESSURE_SCAN_LEVELS_FT[k])
+    in_deck = False
+    prev_msl: float | None = None      # last level found INSIDE the deck
+    prev_cover: float | None = None
+    # "Below the field" the same way ``lowest_layer`` means it (its ``agl > 100``).
+    floor = (elevation_ft + 100.0) if elevation_ft is not None else None
+
+    for lvl in levels:
+        msl = _level_msl_ft(hourly, lvl, i)
+        cover = _at(hourly, f"cloud_cover_{lvl}", i)
+        from_rh = False
+        if cover is None:
+            # No per-level cloud cover for this model - fall back to saturation, as
+            # ``lowest_layer`` does. Mapped onto the cover scale so it crosses at
+            # exactly RH == CLOUD_RH_PCT and the interpolation below does not have
+            # to know which of the two it was handed.
+            rh = _at(hourly, f"relative_humidity_{lvl}", i)
+            if rh is None:
+                continue                 # unserved level: unknown, not clear
+            cover = BKN_COVER_PCT + (rh - CLOUD_RH_PCT)
+            from_rh = True
+
+        out["sampled"] = True
+        out["scan_top_msl_ft"] = round(msl)
+
+        # A "deck" beneath the aerodrome is fog or terrain obscuration.
+        # ``lowest_layer`` refuses to call that a ceiling; refusing to call it a
+        # deck here keeps the two functions answering about the same cloud.
+        below_field = floor is not None and msl <= floor
+
+        if cover >= BKN_COVER_PCT and not below_field:
+            in_deck = True
+            prev_msl, prev_cover = msl, cover
+            out["from_rh"] = out["from_rh"] or from_rh
+            continue
+
+        if in_deck:
+            # Out the top of a deck. Interpolate back down through the threshold
+            # between the last level inside it and this one - the exact mirror of
+            # the base interpolation in ``lowest_layer``. Without it the answer can
+            # only ever be one of sixteen fixed heights, and above 700 hPa those are
+            # 2,000 ft apart.
+            top = msl
+            if (prev_msl is not None and prev_cover is not None
+                    and prev_cover > cover):
+                frac = (prev_cover - BKN_COVER_PCT) / (prev_cover - cover)
+                frac = min(max(frac, 0.0), 1.0)
+                top = prev_msl + frac * (msl - prev_msl)
+            top = round(top)
+            out["deck_count"] += 1
+            if out["top_msl_ft"] is None:
+                out["top_msl_ft"] = top          # the lowest deck's top
+            out["highest_top_msl_ft"] = top      # ... and the running highest
+            in_deck = False
+            prev_msl = prev_cover = None
+
+    if in_deck:
+        # Still in cloud at the top of the scan. Not a top: an unknown with a floor
+        # under it. ``top_msl_ft`` stays None on purpose.
+        out["above_scan"] = True
+        out["deck_count"] += 1
+
+    if out["top_msl_ft"] is not None and elevation_ft is not None:
+        out["top_agl_ft"] = round(out["top_msl_ft"] - elevation_ft)
     return out
 
 

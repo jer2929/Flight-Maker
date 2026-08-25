@@ -130,6 +130,11 @@ class ThreatCheck(BaseModel):
     key: str
     label: str
     present: bool
+    # Why this one fired, when saying so changes what the pilot does about it.
+    # "Hard IMC" against a 3,000 ft ceiling reads as a bug until the row adds
+    # "OVC 3,000-12,000 ft - 9,000 ft thick". Most threats need nothing here and
+    # the row falls back to a bare "present".
+    detail: Optional[str] = None
 
 
 class Notam(BaseModel):
@@ -200,6 +205,17 @@ class AltitudeRecommendation(BaseModel):
     groundspeed_kt: float
     course_mag: Optional[float] = None
     levels: list[WindAloft] = []
+    # The tops this pick was made against, and what it did about them. All
+    # defaulted: a caller that knows nothing about tops gets exactly the
+    # recommendation it got before any of this existed.
+    tops_ft: Optional[float] = None       # MSL. None = tops UNKNOWN, not "no cloud"
+    tops_source: Optional[str] = None     # "PIREP" | "model"
+    on_top: bool = False                  # clears the tops by ON_TOP_MARGIN_FT
+    # Headwind given up against the fastest level, reported whether the climb was
+    # taken or not - so a pilot who disagrees with the budget can see the trade
+    # rather than being handed one number.
+    wind_cost_kt: Optional[float] = None
+    wind_optimal_ft: Optional[float] = None   # the level that cost was measured against
 
 
 class WindowForecast(BaseModel):
@@ -446,6 +462,10 @@ class HourCondition(BaseModel):
     # rather than on the surface wind. ``headwind_kt`` is signed the same way as
     # ``AltitudeRecommendation``: positive is a headwind.
     altitude_ft: Optional[float] = None
+    # Whether this hour's pick clears the tops. Per-hour like everything else on
+    # the strip: both the wind and the deck move, so an hour that gets you on top
+    # is worth seeing even when the hour you asked about does not.
+    on_top: bool = False
     headwind_kt: Optional[float] = None
     groundspeed_kt: Optional[float] = None
 
@@ -591,6 +611,32 @@ class RouteAssessment(BaseModel):
     altitude: Optional[AltitudeRecommendation] = None
     cruise_altitude_ft: Optional[float] = None
     enroute_ceiling_ft: Optional[float] = None        # lowest ceiling sampled along route
+    # Cloud tops - the HIGHEST top anywhere on the route, ft **MSL**.
+    #
+    # MSL where the ceiling above is AGL, and the field name says so, because the
+    # two are printed side by side: a ceiling is compared against a minimum
+    # measured from the runway, a top against a cruising altitude.
+    enroute_tops_msl_ft: Optional[float] = None
+    # known | above_scan | no_deck | unknown | unsampled. "No tops figure" has five
+    # meanings and only ``no_deck`` is good news - see ``orchestrator._route_tops``.
+    enroute_tops_state: str = "unsampled"
+    enroute_tops_source: Optional[str] = None        # "PIREP" | "model"
+    # The PIREP's filing time, so the page renders its age live. Baking "41 min
+    # ago" into a response that may be served from a 30-minute cache is a lie with
+    # a timer on it.
+    enroute_tops_valid_from: Optional[str] = None
+    # Set only when a PIREP and the model both answered and disagreed by more than
+    # ``orchestrator.TOPS_DISAGREE_FT``. The figure above is the PIREP's; this is
+    # the model's. Both are printed - neither is hidden, and they are never
+    # averaged.
+    enroute_tops_model_ft: Optional[float] = None
+    enroute_tops_at: Optional[str] = None            # which point on the route
+    # Top of the scan, so "above_scan" can name the height it is above instead of
+    # asking the reader to know where the pressure levels run out.
+    enroute_tops_scan_msl_ft: Optional[float] = None
+    # The top came from the saturation fallback rather than from cloud cover -
+    # weaker again, and the UI says so.
+    enroute_tops_from_rh: bool = False
     enroute_visibility_sm: Optional[float] = None
     cloud_at_cruise: bool = False                     # cloud base below planned cruise altitude
     sigmets: list[Advisory] = []

@@ -291,6 +291,117 @@ def test_widespread_imc_still_gates_by_default():
     assert "not applied" not in c.actual_text
 
 
+# --- when the lowering-ceiling row does not apply --------------------------
+#
+# Same carve-out as widespread IMC, for the same reason: a deck settling at
+# 3,000 ft is the loss of VMC and so a real VFR problem, but it sits far above
+# any approach minimum and the route ceiling/visibility rows have already tested
+# every point against the pilot's IFR minimums.
+
+
+def test_lowering_ceiling_does_not_gate_when_switched_off():
+    c = _run(lowering_ceiling={"location": "CYOW", "source": "METAR trend",
+                               "text": "2,700 ft layer thickened SCT → BKN: "
+                                       "ceiling now 3,000 ft"},
+             lowering_ceiling_gates=False)["lowering_ceiling"]
+    assert c.passed              # the row no longer fails …
+    assert not c.applicable      # … and is excluded from the verdict entirely
+    assert "not applied on this flight" in c.actual_text
+
+
+def test_a_switched_off_lowering_ceiling_row_still_shows_the_trend():
+    # Not-applicable is not the same as not-worth-reading: the pilot can still
+    # open "N checks passed" and see which field is going down and by how much.
+    c = _run(lowering_ceiling={"location": "CYOW", "source": "METAR trend",
+                               "text": "2,700 ft layer thickened SCT → BKN: "
+                                       "ceiling now 3,000 ft",
+                               "full": "CYOW recent METARs\nCYOW 011800Z ..."},
+             lowering_ceiling_gates=False)["lowering_ceiling"]
+    assert c.location == "CYOW"
+    assert "3,000 ft" in c.actual_text
+    assert c.source == "METAR trend"
+    assert "CYOW recent METARs" in c.source_text
+
+
+def test_a_switched_off_lowering_ceiling_row_is_kept_out_of_the_verdict():
+    from app.models import Verdict
+    from app.services.evaluator import checks_verdict
+    rows = weather_checks(
+        raw_text="", hazards=set(), night=False, llj_kt=None,
+        ceiling_points=[3000, 8000, 3000], vis_points=[15, 15, 15],
+        lowering_ceiling={"location": "CYOW", "text": "ceiling now 3,000 ft"},
+        freezing_level_ft=None, personal_vis_sm=3,
+        gfa_region=gfa_region(43.1, -80.3), window_hazards=set(),
+        metar_hazards=set(), out_of_window=[], etd_is_now=True,
+        lowering_ceiling_gates=False)
+    assert checks_verdict(rows) == Verdict.GO
+
+
+def test_lowering_ceiling_still_gates_by_default():
+    # The VFR default is unchanged - this is the row's whole reason to exist.
+    c = _run(lowering_ceiling={"location": "CYOW", "text": "ceiling now 3,000 ft"})["lowering_ceiling"]
+    assert not c.passed and c.applicable
+    assert "not applied" not in c.actual_text
+
+
+# --- how deep the deck is, on the VFR widespread-IMC row -------------------
+#
+# Text only. A VFR pilot reading "widespread IMC" wants to know whether there is
+# anything above it, but the row's verdict is about how much of the route is in
+# IMC - not how tall the cloud is - and that has not changed.
+
+
+def _wide(**over):
+    base = dict(ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2],
+                point_labels=LABELS)
+    base.update(over)
+    return _run(**base)["widespread_ifr"]
+
+
+def test_the_widespread_row_says_how_deep_the_deck_is():
+    c = _wide(route_tops={"state": "known", "tops_msl_ft": 9400},
+              field_elev_ft=1000.0)
+    # Ceiling 500 ft AGL over a 1,000 ft field is 1,500 ft MSL; 9,400 - 1,500.
+    assert "7,900 ft thick" in c.actual_text
+
+
+def test_depth_is_omitted_rather_than_guessed_without_a_field_elevation():
+    # Subtracting an MSL top from an AGL ceiling is exactly the size of error
+    # that looks plausible on the page, so it is not attempted.
+    c = _wide(route_tops={"state": "known", "tops_msl_ft": 9400})
+    assert "thick" not in c.actual_text
+
+
+def test_a_deck_running_off_the_scan_says_so_instead_of_a_number():
+    c = _wide(route_tops={"state": "above_scan", "tops_msl_ft": None},
+              field_elev_ft=1000.0)
+    assert "tops above the sampled levels" in c.actual_text
+
+
+def test_unknown_tops_leave_the_row_exactly_as_it_was():
+    plain = _wide()
+    unknown = _wide(route_tops={"state": "unknown", "tops_msl_ft": None},
+                    field_elev_ft=1000.0)
+    assert unknown.actual_text == plain.actual_text
+
+
+def test_depth_does_not_change_the_verdict():
+    # The whole point of "text only": a thick deck reads differently, it does not
+    # decide differently.
+    thin = _wide(route_tops={"state": "known", "tops_msl_ft": 2000},
+                 field_elev_ft=1000.0)
+    thick = _wide(route_tops={"state": "known", "tops_msl_ft": 18000},
+                  field_elev_ft=1000.0)
+    assert thin.passed == thick.passed
+    assert thin.applicable == thick.applicable
+
+
+def test_an_ifr_flight_has_no_widespread_row_to_put_depth_on():
+    rows = _run(ceiling_points=[500, 8000, 600], vis_points=[2, 15, 2],
+                point_labels=LABELS, include_widespread_imc=False)
+    assert "widespread_ifr" not in rows
+
+
 # ---- embedded convective cloud ---------------------------------------------
 #
 # This row used to grep the area products alone, with no time scoping at all: it

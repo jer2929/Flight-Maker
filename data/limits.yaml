@@ -77,10 +77,19 @@ ifr_minimums:
   visibility_sm:
     day_xc: 3            # flat personal visibility floor (confirm it meets published minimum)
     night_xc: 3
-  # When true, widespread/hard IMC counts as a two-trigger threat even on IFR
-  # flights (for pilots who'd rather not be in sustained IMC - e.g. single-engine
-  # or no autopilot). When false (default) IFR flights aren't penalised for IMC.
-  imc_as_threat: false
+  # When true, Hard IMC counts as a stacking threat on IFR flights (for pilots
+  # who'd rather not be in sustained IMC - e.g. single-engine or no autopilot).
+  # When false (default) IFR flights aren't penalised for it and the row is not
+  # shown at all.
+  #
+  # Hard IMC means cloud that is LOW or cloud that is DEEP: a ceiling under
+  # 1,000 ft AGL, visibility under 3 SM, or a deck at least
+  # ``hard_imc_thickness_ft`` thick whatever height its base sits at.
+  hard_imc_as_threat: false
+  # How deep a deck has to be to count as Hard IMC on its own. An overcast from
+  # 3,000 to 12,000 ft leaves the ceiling test untouched at 3,000 ft while putting
+  # the aeroplane inside cloud for the whole climb and the whole descent.
+  hard_imc_thickness_ft: 5000
 
 # TWO-TRIGGER THREAT STACKING
 # A weighted count of major threats present -> rule. The active conservatism
@@ -107,7 +116,7 @@ threat_stacking:
     gust_spread: 0.8     # 8 kt against the default 10 kt gust-spread limit
   major_threats:
     - night_operations
-    - actual_imc
+    - hard_imc
     - icing_potential
     - convective_nearby
     - strong_or_gusty_winds
@@ -127,7 +136,7 @@ threat_stacking:
   #   per_flight - toggled per flight (pilot-relative)
   threat_kinds:
     night_operations: mode
-    actual_imc: auto
+    hard_imc: auto
     icing_potential: auto
     convective_nearby: auto
     strong_or_gusty_winds: auto
@@ -146,7 +155,7 @@ conservatism_presets:
     cautious:
       label: Cautious
       description: Stops you sooner - one serious threat can be a no-go.
-      serious_weight: 2          # actual_imc / convective / icing count double
+      serious_weight: 2          # hard_imc / convective / icing count double
       rule: {"0": GO, "1": MITIGATE, "2": NO-GO, "3": NO-GO}
     standard:
       label: Standard
@@ -158,7 +167,7 @@ conservatism_presets:
       rule: {"0": GO, "1": GO, "2": MITIGATE, "3": NO-GO}
   # Threats treated as "serious" (double-weighted under the cautious preset).
   serious_threats:
-    - actual_imc
+    - hard_imc
     - convective_nearby
     - icing_potential
 

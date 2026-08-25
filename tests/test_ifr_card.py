@@ -31,10 +31,23 @@ NOW = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 TIMES = [(NOW + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M") for i in range(48)]
 
 
-def _fc(cloud_base_m):
-    """A calm, clear-of-hazards forecast under a deck of the caller's choosing."""
+def _fc(cloud_base_m, cover=None):
+    """A calm, clear-of-hazards forecast under a deck of the caller's choosing.
+
+    ``cover`` optionally adds per-level cloud cover, which is what the tops scan
+    reads. Without it the model carries a ceiling and no tops - the ordinary case,
+    and the one that must leave every pre-tops answer untouched.
+    """
     n = len(TIMES)
-    return {"utc_offset_seconds": 0, "elevation": 244, "hourly": {
+    levels = {f"cloud_cover_{lvl}": [pct] * n
+              for lvl, pct in (cover or {}).items()}
+    # Winds aloft, so there is an altitude pick to inspect at all. A light,
+    # near-uniform westerly: the on-top preference then turns on the cloud rather
+    # than on a wind gradient that would decide the answer by itself.
+    for lvl in ("925hPa", "850hPa", "700hPa", "600hPa", "500hPa"):
+        levels[f"windspeed_{lvl}"] = [12.0] * n
+        levels[f"winddirection_{lvl}"] = [270.0] * n
+    return {"utc_offset_seconds": 0, "elevation": 244, "hourly": {**levels,
         "time": TIMES,
         "windspeed_10m": [6.0] * n, "winddirection_10m": [90.0] * n,
         "windgusts_10m": [8.0] * n, "cloud_base": [cloud_base_m] * n,
@@ -54,7 +67,7 @@ IFR_OK = 700.0
 @pytest.fixture
 def stubbed(monkeypatch):
     """Every upstream stubbed; the caller chooses the deck and the observations."""
-    def install(cloud_base_m, metars=None, awc_history=None):
+    def install(cloud_base_m, metars=None, awc_history=None, cover=None):
         async def _d(*a, **k):
             return {}
 
@@ -69,10 +82,10 @@ def stubbed(monkeypatch):
                     if (awc_history or {}).get(i)}
 
         async def _one(*a, **k):
-            return _fc(cloud_base_m)
+            return _fc(cloud_base_m, cover)
 
         async def _many(points, days=2, hourly=None):
-            return [_fc(cloud_base_m) for _ in points]
+            return [_fc(cloud_base_m, cover) for _ in points]
 
         monkeypatch.setattr(cfps, "metars", _metars)
         for name in ("tafs", "metar_history", "notams"):
@@ -113,12 +126,19 @@ def test_widespread_imc_gates_a_vfr_flight(stubbed):
     assert row is not None and row.applicable and not row.passed
 
 
-def test_widespread_imc_does_not_gate_an_ifr_flight(stubbed):
+def test_an_ifr_card_has_no_widespread_imc_row_at_all(stubbed):
+    # Not "built and marked not-applicable" - absent. IMC is what the rating is
+    # for, so the row can never decide an IFR flight, and a second IMC-shaped row
+    # on a card that already carries "Hard IMC" and the ceiling/visibility rows is
+    # noise the pilot has to read past.
     stubbed(IMC)
-    row = _row(_run("ifr"), "widespread_ifr")
-    assert row is not None, "the row must still be built, just not applied"
-    assert not row.applicable
-    assert row.passed
+    assert _row(_run("ifr"), "widespread_ifr") is None
+
+
+def test_the_vfr_card_still_has_it(stubbed):
+    # The guard is on flight rules, not on the row - VFR is untouched.
+    stubbed(IMC)
+    assert _row(_run("vfr"), "widespread_ifr") is not None
 
 
 def test_an_ifr_card_does_not_list_widespread_imc_as_a_reason(stubbed):
@@ -196,6 +216,120 @@ def test_a_stale_history_never_pulls_the_card_backwards(stubbed):
     stubbed(IFR_OK, metars={"AAAA": SPECI}, awc_history={"AAAA": [HOURLY]})
     r = _run("ifr")
     assert r.departure.weather.raw_metar == SPECI
+
+
+# --- Hard IMC, end to end ---------------------------------------------------
+#
+# The case the ceiling test cannot see: a deck whose base is comfortably above
+# every low-cloud minimum, and which the flight is nonetheless inside for the
+# whole climb and the whole descent.
+
+# ~3,000 ft AGL over an 800 ft field, so 3,800 ft MSL - clear of the 1,500 ft IFR
+# ceiling minimum, clear of the 1,000 ft Hard IMC test, clear of everything.
+DEEP_BASE = 914.0
+# Solid from 900 hPa (3,242 ft) to 650 hPa (11,776 ft), thinning at 600 hPa. The
+# top interpolates to ~12,700 ft MSL, so the deck is ~8,900 ft deep.
+DEEP_COVER = {"1000hPa": 5, "975hPa": 5, "950hPa": 5, "925hPa": 5,
+              "900hPa": 90, "875hPa": 90, "850hPa": 90, "825hPa": 90,
+              "800hPa": 90, "775hPa": 90, "750hPa": 90, "700hPa": 90,
+              "650hPa": 90, "600hPa": 10, "550hPa": 10, "500hPa": 10}
+
+
+def _threat(result, key):
+    return next((t for t in result.threat_checks if t.key == key), None)
+
+
+def test_a_deep_deck_reports_its_tops(stubbed):
+    stubbed(DEEP_BASE, cover=DEEP_COVER)
+    r = _run("ifr")
+    assert r.enroute_tops_state == "known"
+    assert 12000 < r.enroute_tops_msl_ft < 13500
+    assert r.enroute_tops_source == "model"
+
+
+def test_a_deep_deck_is_hard_imc_when_the_pilot_opted_in(stubbed):
+    stubbed(DEEP_BASE, cover=DEEP_COVER)
+    with limits_override({"hard_imc_as_threat": True}):
+        t = _threat(_run("ifr"), "hard_imc")
+    assert t is not None and t.present
+    # And it says WHY, because "Hard IMC" beside a 3,000 ft ceiling reads as a bug.
+    assert "thick" in t.detail
+
+
+def test_the_same_deck_is_not_a_threat_without_the_opt_in(stubbed):
+    # Off by default, and off means the row is absent - not a passing row.
+    stubbed(DEEP_BASE, cover=DEEP_COVER)
+    assert _threat(_run("ifr"), "hard_imc") is None
+
+
+def test_a_deck_with_no_tops_data_leaves_the_card_as_it_was(stubbed):
+    # The ordinary case: a ceiling and no per-level cover. Thickness contributes
+    # nothing, and nothing is invented from the missing number.
+    stubbed(DEEP_BASE)
+    with limits_override({"hard_imc_as_threat": True}):
+        r = _run("ifr")
+    assert r.enroute_tops_msl_ft is None
+    assert _threat(r, "hard_imc") is None
+
+
+def test_a_vfr_flight_is_not_given_a_hard_imc_threat_by_a_deep_deck(stubbed):
+    stubbed(DEEP_BASE, cover=DEEP_COVER)
+    with limits_override({"hard_imc_as_threat": True}):
+        assert _threat(_run("vfr"), "hard_imc") is None
+
+
+# --- climbing above the deck, end to end ------------------------------------
+
+
+def test_an_ifr_pick_climbs_above_a_reachable_deck(stubbed):
+    # Tops near 12,700 ft are out of reach under the 12,500 cap, so use a deck
+    # that stops low enough to get above: solid to 850 hPa, thinning at 825.
+    cover = {"1000hPa": 5, "975hPa": 90, "950hPa": 90, "925hPa": 90,
+             "900hPa": 90, "875hPa": 90, "850hPa": 90, "825hPa": 10,
+             "800hPa": 10, "775hPa": 10, "750hPa": 10, "700hPa": 10,
+             "650hPa": 10, "600hPa": 10, "550hPa": 10, "500hPa": 10}
+    stubbed(300.0, cover=cover)
+    r = _run("ifr")
+    assert r.enroute_tops_msl_ft is not None
+    assert r.altitude.on_top is True
+    # And it actually clears them by the margin it claims.
+    assert r.altitude.altitude_ft >= r.altitude.tops_ft + 1000
+
+
+def test_the_on_top_pick_survives_the_ceiling_re_gate(stubbed):
+    # The route makes two altitude picks - one against a provisional destination,
+    # one against the finished card. Forgetting to pass the tops to the second is
+    # the easiest bug in this feature: the panel then reads "on top" off a stale
+    # object, or loses it entirely.
+    cover = {"1000hPa": 5, "975hPa": 90, "950hPa": 90, "925hPa": 90,
+             "900hPa": 90, "875hPa": 90, "850hPa": 90, "825hPa": 10,
+             "800hPa": 10, "775hPa": 10, "750hPa": 10, "700hPa": 10,
+             "650hPa": 10, "600hPa": 10, "550hPa": 10, "500hPa": 10}
+    stubbed(300.0, cover=cover)
+    r = _run("ifr")
+    # Whatever the re-gate did, the pick the card carries and the pick the header
+    # carries are the same object, and it still knows about the tops.
+    assert r.altitude.tops_ft is not None
+    assert r.destination.altitude is None or \
+        r.destination.altitude.altitude_ft == r.altitude.altitude_ft
+
+
+def test_a_vfr_flight_is_never_put_on_top(stubbed):
+    cover = {"1000hPa": 5, "975hPa": 90, "950hPa": 90, "925hPa": 90,
+             "900hPa": 90, "875hPa": 90, "850hPa": 90, "825hPa": 10,
+             "800hPa": 10, "775hPa": 10, "750hPa": 10, "700hPa": 10,
+             "650hPa": 10, "600hPa": 10, "550hPa": 10, "500hPa": 10}
+    stubbed(300.0, cover=cover)
+    r = _run("vfr")
+    assert r.altitude is None or r.altitude.on_top is False
+
+
+def test_unknown_tops_leave_the_pick_untouched(stubbed):
+    # No per-level cover: a ceiling and no tops, which is the ordinary case.
+    stubbed(IFR_OK)
+    r = _run("ifr")
+    assert r.altitude.on_top is False
+    assert r.altitude.tops_ft is None and r.altitude.wind_cost_kt is None
 
 
 # --- embedded convective cloud ----------------------------------------------

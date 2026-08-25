@@ -25,7 +25,7 @@ SEVERITY = {Verdict.GO: 0, Verdict.MITIGATE: 1, Verdict.NOGO: 2}
 
 THREAT_LABELS = {
     "night_operations": "Night operations",
-    "actual_imc": "Actual IMC",
+    "hard_imc": "Hard IMC",
     "icing_potential": "Icing potential",
     "convective_nearby": "Convective weather nearby",
     "strong_or_gusty_winds": "Strong or gusty winds",
@@ -248,7 +248,11 @@ def conditions_checks(
     ), weather, "visibility_sm",
         sustained_ok=_clears(vis_limit,
                              wf.sustained_visibility_sm if wf else None)))
-    # Hazardous weather flags - for IFR, widespread_ifr is expected and not a no-go.
+    # Hazardous weather flags - for IFR, widespread_ifr is expected and not a
+    # no-go. Belt and braces since ``hazards.weather_checks`` stopped building the
+    # row on IFR at all (``include_widespread_imc``): this path is reached by
+    # callers that never go through that function, and the flag list is a pilot
+    # setting that could name it either way.
     flags = set(L.get("weather_flags", []))
     if flight_rules == "ifr":
         flags.discard("widespread_ifr")
@@ -561,17 +565,25 @@ def derive_threats(
     weather: WeatherSummary,
     manual_threats: list[str] | None = None,
     flight_rules: str = "vfr",
+    *,
+    cloud_thickness_ft: float | None = None,
+    tops_above_scan: bool = False,
 ) -> set[str]:
     """Derive present 'major threats' for two-trigger stacking.
 
     Manual threats (per-flight toggles) are accepted only if they're known
     threat keys, so a malformed query string can't inflate the stack.
 
-    IMC handling depends on the flight rules: under VFR, being in cloud / low vis
-    is NOT a stacking threat - it is already an automatic NO-GO via the ceiling and
-    visibility hard limits, so counting it again would be redundant and misleading.
-    Under IFR, IMC is *expected*, so it only counts when the pilot has opted in
-    (``ifr_minimums.imc_as_threat``).
+    Hard IMC handling depends on the flight rules: under VFR, being in cloud / low
+    vis is NOT a stacking threat - it is already an automatic NO-GO via the ceiling
+    and visibility hard limits, so counting it again would be redundant and
+    misleading. Under IFR, IMC is *expected*, so it only counts when the pilot has
+    opted in (``ifr_minimums.hard_imc_as_threat``).
+
+    ``cloud_thickness_ft`` and ``tops_above_scan`` describe the DEPTH of the deck,
+    and are optional because most callers cannot know it - a card built from a
+    METAR has a ceiling and no tops. Passing neither leaves the low-cloud tests
+    exactly as they were.
 
     Night operations are the mirror image: counted by default, droppable via
     ``threat_stacking.night_as_threat``."""
@@ -596,13 +608,32 @@ def derive_threats(
         threats.add("icing_potential")
     if "low_level_wind_shear" in weather.hazards:
         threats.add("moderate_turbulence_or_shear")
-    imc = (weather.ceiling_agl_ft is not None and weather.ceiling_agl_ft < 1000) or (
+    # Hard IMC is cloud that is LOW **or** cloud that is DEEP. The first two tests
+    # are the classic ones; the third is the case they miss.
+    #
+    # An overcast from 3,000 to 12,000 ft leaves the ceiling test untouched at
+    # 3,000 ft AGL while putting the aeroplane inside cloud for the whole climb and
+    # the whole descent - no horizon, the full depth of any icing layer, and a
+    # missed approach back into all of it. That is not a deck you transit; it is
+    # weather you are inside. Below the threshold a deck is something you pass
+    # through, so the number is where "through" becomes "in".
+    ifr_min = get_limits().get("ifr_minimums", {})
+    thick_limit = ifr_min.get("hard_imc_thickness_ft", 5000)
+    low = (weather.ceiling_agl_ft is not None and weather.ceiling_agl_ft < 1000) or (
         weather.visibility_sm is not None and weather.visibility_sm < 3
     )
+    # A deck still solid at the top of the scan is the one case where an unknown is
+    # still decisive: its top is higher than the scan reaches, so it is certainly
+    # deeper than the threshold. Every other unknown - no tops resolved, nothing
+    # sampled - arrives as None and contributes nothing. A missing number is never
+    # read as a thin deck.
+    deep = tops_above_scan or (cloud_thickness_ft is not None
+                               and cloud_thickness_ft >= thick_limit)
     # VFR IMC is a hard NO-GO (ceiling/visibility limits), not a stacking threat;
     # only IFR flights count it, and only when the pilot has opted in.
-    if imc and flight_rules == "ifr" and get_limits().get("ifr_minimums", {}).get("imc_as_threat"):
-        threats.add("actual_imc")
+    if ((low or deep) and flight_rules == "ifr"
+            and ifr_min.get("hard_imc_as_threat")):
+        threats.add("hard_imc")
     # Unfamiliar / complex airspace is NOT derived from the aerodrome. It used to be
     # added here for a hardcoded list of busy fields, which flagged every pilot alike -
     # including the ones who fly into them weekly, for whom it is the opposite of
@@ -616,20 +647,22 @@ def derive_threats(
     return threats
 
 
-def threat_check_list(present: set[str]) -> list[ThreatCheck]:
+def threat_check_list(present: set[str],
+                     details: dict[str, str] | None = None) -> list[ThreatCheck]:
     order = get_limits()["threat_stacking"]["major_threats"]
     # These rows only make sense when actually present, so don't show them as
     # empty rows on every flight: single-pilot IFR without autopilot is an IFR-only
-    # pilot factor, and actual IMC is a hard NO-GO under VFR (shown only for IFR
+    # pilot factor, and Hard IMC is a hard NO-GO under VFR (shown only for IFR
     # opt-in when present).
-    hide_when_absent = {"single_pilot_ifr_no_autopilot", "actual_imc"}
+    hide_when_absent = {"single_pilot_ifr_no_autopilot", "hard_imc"}
     # Opted out of night as a threat: drop the row rather than show a permanent
     # "absent" that reads as though a night flight had passed a check.
     if not get_limits()["threat_stacking"].get("night_as_threat", True):
         hide_when_absent = hide_when_absent | {"night_operations"}
     rows = [
         ThreatCheck(key=k, label=THREAT_LABELS.get(k, k.replace("_", " ").title()),
-                    present=k in present)
+                    present=k in present,
+                    detail=(details or {}).get(k) if k in present else None)
         for k in order
         if k not in hide_when_absent or k in present
     ]
@@ -641,7 +674,7 @@ def threat_check_list(present: set[str]) -> list[ThreatCheck]:
     listed = {r.key for r in rows}
     rows.extend(
         ThreatCheck(key=k, label=THREAT_LABELS.get(k, k.replace("_", " ").title()),
-                    present=True)
+                    present=True, detail=(details or {}).get(k))
         for k in sorted(present - listed)
     )
     return rows
