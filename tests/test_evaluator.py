@@ -334,6 +334,30 @@ def test_imc_is_threat_under_ifr_when_opted_in():
         assert "hard_imc" in derive_threats(imc_wx(), flight_rules="ifr")
 
 
+def test_imc_row_is_listed_when_the_pilot_opted_in_even_though_it_is_clear():
+    # The pilot ticked "Hard IMC as a threat", so the check runs on every IFR
+    # assessment. A clear result has to be visible as a row, or the card cannot
+    # say whether it looked at all.
+    clear = WeatherSummary(wind_dir_true=50, wind_kt=6, visibility_sm=15,
+                           ceiling_agl_ft=8000)
+    with limits_override({"hard_imc_as_threat": True}):
+        _v, _c, threats, _n = decision(clear, None, "day", flight_rules="ifr")
+        row = next((t for t in threats if t.key == "hard_imc"), None)
+        assert row is not None and not row.present
+        assert len(threats) == 8
+
+
+def test_imc_row_absent_when_the_check_never_runs():
+    # Opt-in off, or VFR: nothing tested it, so there is no tick to show.
+    clear = WeatherSummary(wind_dir_true=50, wind_kt=6, visibility_sm=15,
+                           ceiling_agl_ft=8000)
+    _v, _c, ifr_off, _n = decision(clear, None, "day", flight_rules="ifr")
+    assert not any(t.key == "hard_imc" for t in ifr_off)
+    with limits_override({"hard_imc_as_threat": True}):
+        _v, _c, vfr_on, _n = decision(clear, None, "day", flight_rules="vfr")
+    assert not any(t.key == "hard_imc" for t in vfr_on)
+
+
 def test_imc_opt_in_plus_single_pilot_ifr_stacks_to_nogo():
     # The single-engine / no-autopilot scenario: IMC + single-pilot IFR = 2 threats.
     with limits_override({"hard_imc_as_threat": True}):

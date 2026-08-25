@@ -269,7 +269,10 @@ def test_a_deck_with_no_tops_data_leaves_the_card_as_it_was(stubbed):
     with limits_override({"hard_imc_as_threat": True}):
         r = _run("ifr")
     assert r.enroute_tops_msl_ft is None
-    assert _threat(r, "hard_imc") is None
+    # The opt-in is on, so the test ran and the row is listed - reporting that it
+    # came back clear, not that it was skipped.
+    t = _threat(r, "hard_imc")
+    assert t is not None and not t.present
 
 
 def test_a_vfr_flight_is_not_given_a_hard_imc_threat_by_a_deep_deck(stubbed):
