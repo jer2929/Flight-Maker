@@ -1947,6 +1947,12 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # own My Minimums pane says it is "not applied on IFR flights".
         widespread_imc_gates=(flight_rules != "ifr"
                               and "widespread_ifr" in gating_hazards()),
+        # No flight_rules test here, deliberately. Widespread IMC above is
+        # relaxed on IFR because the rating is the answer to it; convection
+        # buried in a layer is the hazard the rating does *not* answer - you
+        # cannot see it coming and you cannot go round what you cannot see - so
+        # the only thing that switches this row off is the pilot's own list.
+        embedded_gates="embedded_thunderstorm" in gating_hazards(),
     )
 
     # What the TAF forecasts across the flight, at each end. On a future ETD the

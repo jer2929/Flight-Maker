@@ -16,6 +16,11 @@ hard_limits:
     # not the same flight: a 10 kt spread on a 2 kt wind is a 12 kt peak, which
     # is nothing; the same spread on an 18 kt wind is a 28 kt peak, which is the
     # day the limit exists for. Set to 0 to gate on spread alone.
+    #
+    # Tuned HERE and nowhere else. There is deliberately no slider for it and
+    # the API will not accept it from a saved profile (see config._NUMERIC_LIMITS):
+    # it is not a personal limit, it is the correction that makes the spread
+    # limit above mean the same thing against a model as against a METAR's G.
     gust_spread_floor_kt: 15    # peak gust below which spread is advisory only
     crosswind_max_kt: 9
   ceiling_agl_ft:               # VFR personal minimums
@@ -31,7 +36,7 @@ hard_limits:
   weather_flags:                # any present in METAR/TAF -> NO-GO
     - convective_sigmet
     - thunderstorm            # TS
-    - embedded_thunderstorm   # embedded TS
+    - embedded_thunderstorm   # EMBD TS/CB, CVCTV CLD EMBD - gates IFR too
     - freezing_rain           # FZRA
     - forecast_icing
     - moderate_turbulence_low # below 3000 ft

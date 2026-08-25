@@ -31,6 +31,22 @@ UNRESTRICTED_VIS_SM = 10.0
 TS_TOKEN_RE = r"(?<![A-Z])[+-]?(?:VC)?TS[A-Z]{0,4}\b"
 CB_RE = r"\b(?:[A-Z]{3}\d{3})?CB\b"
 
+# Embedded convective cloud - convection you cannot see coming and cannot
+# circumnavigate, because it is buried in a layer. NAV CANADA writes it three
+# ways and this reads all of them: "EMBD TS"/"EMBD CB" in a SIGMET or AIRMET,
+# "CVCTV CLD EMBD" in GFA comment text and aerodrome remarks, and the spelt-out
+# "EMBEDDED TS/CB/CONVECTIVE".
+#
+# The gaps are bounded and same-line on purpose. The row this replaced matched
+# ``EMBD .* (TS|CB)``, which in a multi-sentence area product could pair an EMBD
+# in one clause with a CB forty words later and call the flight off for it.
+EMBD_CONVECTIVE_RE = (
+    r"\bEMBD\b[^\n]{0,30}?(?:" + TS_TOKEN_RE + r"|" + CB_RE + r")"
+    r"|\bCVCTV\s+CLD\b[^\n]{0,30}?\bEMBD\b"
+    r"|\bEMBD\b[^\n]{0,30}?\bCVCTV\s+CLD\b"
+    r"|\bEMBEDDED\s+(?:TS|CB|THUNDERSTORM|CONVECTIV\w*)"
+)
+
 # Map raw-text weather tokens to the decision-card hazard flags.
 HAZARD_PATTERNS: dict[str, str] = {
     r"\bFZRA\b": "freezing_rain",
@@ -41,6 +57,10 @@ HAZARD_PATTERNS: dict[str, str] = {
     # "WS RWY 12" (METAR), "WS020/27045KT" (TAF shear group), "LLWS".
     r"\bWS\b|\bWS\d{3}|LLWS": "low_level_wind_shear",
     r"\bFC\b": "thunderstorm",  # funnel cloud
+    # Embedded convection sets BOTH this and ``thunderstorm`` (an EMBD CB
+    # matches CB_RE too), which is right: the general row still says there is
+    # convection, and the specific one says you will not see it coming.
+    EMBD_CONVECTIVE_RE: "embedded_thunderstorm",
 }
 
 
