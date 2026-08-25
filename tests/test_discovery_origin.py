@@ -37,15 +37,17 @@ def _metar(ident: str, body: str) -> str:
     return f"{ident} {BASE:%d%H}00Z {body}"
 
 
-def _fc(n=60, cloud_base_m=4500.0):
+def _fc(n=60, cloud_base_m=4500.0, wind_kt=6.0, gust_kt=8.0):
     """Model hours with benign winds aloft. ``cloud_base_m`` is metres, as
-    Open-Meteo reports it: the default is ~14,800 ft, i.e. no deck at all."""
+    Open-Meteo reports it: the default is ~14,800 ft, i.e. no deck at all.
+    ``wind_kt`` / ``gust_kt`` are the single-model surface wind - what a field
+    reads when the multi-model blend never reaches it."""
     start = BASE - timedelta(hours=2)
     times = [(start + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M") for i in range(n)]
     hourly = {
         "time": times,
-        "windspeed_10m": [6.0] * n, "winddirection_10m": [290.0] * n,
-        "windgusts_10m": [8.0] * n, "cloud_base": [cloud_base_m] * n,
+        "windspeed_10m": [wind_kt] * n, "winddirection_10m": [290.0] * n,
+        "windgusts_10m": [gust_kt] * n, "cloud_base": [cloud_base_m] * n,
         "visibility": [24140.0] * n, "cloudcover": [40.0] * n,
         "weathercode": [1] * n, "precipitation": [0.0] * n, "is_day": [1] * n,
         "temperature_2m": [15.0] * n, "freezing_level_height": [9000.0] * n,
@@ -63,9 +65,22 @@ def upstreams(monkeypatch):
     field reports), ``cfg["cloud_base_m"]`` (the model deck everywhere) and
     ``cfg["origin_cloud_base_m"]`` (the model deck at base alone)."""
     cfg = {"origin_metar": CLEAR, "cloud_base_m": 4500.0,
-           "origin_cloud_base_m": None}
+           "origin_cloud_base_m": None,
+           # No METAR anywhere: the shape of a scan from a field that does not
+           # report, where the wind on every card is modelled.
+           "no_metars": False,
+           # The single-model surface wind at base, as ``_fc`` kwargs.
+           "origin_model_wind": None,
+           # The multi-model wind blend, per point. ``ens_points`` puts the
+           # origin first and the candidates after it, so a test can give base
+           # one wind and every destination another.
+           "origin_ens": None, "cand_ens": None,
+           # Every set of points the blend was asked about, in order.
+           "ens_calls": []}
 
     async def _metars(sites, *a, **k):
+        if cfg["no_metars"]:
+            return {}
         return {s: _metar(s, cfg["origin_metar"] if s == DEP else CLEAR) for s in sites}
 
     async def _empty_d(*a, **k):
@@ -77,10 +92,18 @@ def upstreams(monkeypatch):
     async def _one(*a, **k):
         # The origin's own forecast, so a test can put a deck at base and
         # nowhere else - the shape a future-ETD scan reads.
-        return _fc(cloud_base_m=cfg["origin_cloud_base_m"] or cfg["cloud_base_m"])
+        return _fc(cloud_base_m=cfg["origin_cloud_base_m"] or cfg["cloud_base_m"],
+                   **(cfg["origin_model_wind"] or {}))
 
     async def _many(points, *a, **k):
         return [_fc(cloud_base_m=cfg["cloud_base_m"]) for _ in points]
+
+    async def _ens_many(points, *a, **k):
+        cfg["ens_calls"].append(list(points))
+        if cfg["origin_ens"] is None and cfg["cand_ens"] is None:
+            return [_fc(cloud_base_m=cfg["cloud_base_m"]) for _ in points]
+        return [cfg["origin_ens"] if i == 0 else cfg["cand_ens"]
+                for i, _ in enumerate(points)]
 
     monkeypatch.setattr(cfps, "metars", _metars)
     monkeypatch.setattr(cfps, "tafs", _empty_d)
@@ -93,7 +116,7 @@ def upstreams(monkeypatch):
     monkeypatch.setattr(awc, "isigmets", _empty_l)
     monkeypatch.setattr(openmeteo, "forecast", _one)
     monkeypatch.setattr(openmeteo, "forecast_many", _many)
-    monkeypatch.setattr(openmeteo, "ensemble_wind_many", _many)
+    monkeypatch.setattr(openmeteo, "ensemble_wind_many", _ens_many)
     return cfg
 
 
@@ -205,3 +228,69 @@ def test_future_etd_reads_the_origin_forecast_too(upstreams):
         assert a.verdict == Verdict.NOGO
         assert any(c.key == "ceiling" and c.location == f"{DEP} (departure)"
                    for c in _failing(a))
+
+
+# --- The origin reads the same wind the route page reads --------------------
+#
+# The blend that fixed the gust-spread statistics mismatch ("Read each aerodrome
+# at the hour you are actually there") is applied wherever a field *consumes*
+# the blend. Discovery consumed it for its candidates and never for the origin,
+# which did not matter while the origin was read for its ceiling alone - and
+# started mattering the moment its wind gated every card on the page. Base then
+# reported a spread the route page, on the same aerodrome at the same minute,
+# did not: a single model's hourly-maximum gust against its own instantaneous
+# wind, which is exactly the pairing the blend exists to avoid.
+
+BLEND_CALM = {"wind_kt": 10.4, "wind_dir_true": 290.0, "gust_kt": 12.0,
+              "wind_ensemble_n": 5, "wind_models": ["hrdps", "gfs", "ecmwf", "icon", "hrrr"]}
+BLEND_GUSTY = {"wind_kt": 5.0, "wind_dir_true": 290.0, "gust_kt": 25.0,
+               "wind_ensemble_n": 5, "wind_models": ["hrdps", "gfs", "ecmwf", "icon", "hrrr"]}
+
+
+def _spread_rows(a):
+    return [c for c in _failing(a) if c.key == "gust_spread"]
+
+
+def test_the_origin_is_in_the_blend_request(upstreams):
+    """One request, origin first, then the candidates in order."""
+    upstreams["no_metars"] = True
+    _suggest()
+    origin = orchestrator.ap.get_airport(DEP)
+    assert upstreams["ens_calls"], "the blend was never asked for"
+    points = upstreams["ens_calls"][0]
+    assert points[0] == (origin.lat, origin.lon)
+    assert len(points) > 1, "the candidates still ride in the same request"
+
+
+def test_the_origin_wind_comes_from_the_blend_not_one_model(upstreams):
+    """Base reports no METAR, so its wind is modelled. The single HRDPS run has
+    it 8G20 - a 12 kt spread, over the limit - while the blend has it 10G12.
+    The blend is what the route page reads for the same field, so it is what
+    every discovery card has to read."""
+    upstreams["no_metars"] = True
+    upstreams["origin_model_wind"] = {"wind_kt": 8.0, "gust_kt": 20.0}
+    upstreams["origin_ens"] = BLEND_CALM
+    upstreams["cand_ens"] = BLEND_CALM
+    res = _suggest()
+    assert res
+    for a in res:
+        assert not _spread_rows(a), (
+            f"{a.airport.ident} carries a gust-spread bust from the single model")
+        assert a.verdict == Verdict.GO
+
+
+def test_each_candidate_still_gets_its_own_blend(upstreams):
+    """The origin rides in front of the candidates in the same request, so the
+    candidates' own blends have to stay aligned with them - a card must never
+    read the wind of the field before it."""
+    upstreams["no_metars"] = True
+    upstreams["origin_ens"] = BLEND_CALM
+    upstreams["cand_ens"] = BLEND_GUSTY          # 5G25: a 20 kt spread
+    res = _suggest()
+    assert res
+    for a in res:
+        rows = _spread_rows(a)
+        assert rows, f"{a.airport.ident} lost its own blended wind"
+        # The bust is the candidate's, not the departure's.
+        assert all(c.location == a.airport.ident for c in rows)
+        assert all("20 kt" in c.actual_text for c in rows)

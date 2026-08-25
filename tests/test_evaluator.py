@@ -854,3 +854,64 @@ def test_a_profile_saved_before_the_rename_still_works():
     assert merged["ifr_minimums"]["hard_imc_as_threat"] is True
     with limits_override({"imc_as_threat": True}):
         assert "hard_imc" in derive_threats(imc_wx(), flight_rules="ifr")
+# --- The gust spread is the difference of the printed knots -----------------
+#
+# The multi-model blend answers in tenths and every rendering of a wind rounds
+# its two components independently, so 10.4G19.6 reaches the pilot as "10G20".
+# Differencing the tenths instead let two cards showing the same wind get
+# opposite verdicts - 10G20 passing a 10 kt limit on a 9.2 kt spread while 9G19
+# failed it on 10.8 - and printed the failing one as "Gust spread 10 kt exceeds
+# your limit (≤ 10 kt)", a row whose own number cleared the limit it busted.
+
+
+def _spread_row(wind_kt, gust_kt):
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=wind_kt, gust_kt=gust_kt,
+                        visibility_sm=15, ceiling_agl_ft=8000)
+    return {c.key: c for c in conditions_checks(wx, good_runway(), "day")}["gust_spread"]
+
+
+def test_spread_is_read_off_the_printed_wind():
+    # 8.6G19.4 prints as 9G19: a 10 kt spread, exactly on the limit, so it passes.
+    row = _spread_row(8.6, 19.4)
+    assert row.actual_text.startswith("10 kt")
+    assert row.passed is True
+
+
+def test_the_same_printed_wind_gets_the_same_verdict():
+    """Two fields whose cards read 10G20 cannot disagree about the flight."""
+    assert _spread_row(10.4, 19.6).passed is _spread_row(9.8, 20.4).passed
+
+
+def test_a_failing_row_names_a_number_that_is_over_the_limit():
+    # 10.4G21.6 prints as 10G22 - a 12 kt spread, and the row says 12.
+    row = _spread_row(10.4, 21.6)
+    assert row.passed is False
+    assert row.actual_text.startswith("12 kt")
+
+
+def test_a_half_knot_rounds_the_way_the_browser_rounds_it():
+    """``Math.round(10.5)`` is 11; Python's ``round`` is banker's and says 10.
+    The printed wind decides, so the tie has to break upwards here too."""
+    assert evaluator.printed_kt(10.5) == 11
+    assert evaluator.gust_spread_kt(10.5, 20.4) == 9   # prints 11G20
+
+
+def test_the_floor_reads_the_printed_peak_too():
+    """A card showing G15 against a 15 kt floor gates, whatever the tenths said.
+    2.4G14.6 prints as 2G15: a 13 kt spread under a peak that has just reached
+    the floor, so the row fails rather than dropping to an advisory."""
+    row = _spread_row(2.4, 14.6)
+    assert row.passed is False
+    assert row.advisory is False
+    # A knot lower and the same spread is advisory only - the floor still works.
+    below = _spread_row(2.4, 14.4)
+    assert below.passed is True and below.advisory is True
+
+
+def test_the_threat_trip_reads_the_printed_spread():
+    """The automatic "strong or gusty winds" threat trips at 8 kt of spread
+    (0.8 x the 10 kt limit). 12.4G20.0 prints as 12G20 - 8 kt - so it trips,
+    though the tenths behind it are only 7.6."""
+    wx = WeatherSummary(wind_dir_true=50, wind_kt=12.4, gust_kt=20.0,
+                        visibility_sm=15, ceiling_agl_ft=8000)
+    assert "strong_or_gusty_winds" in derive_threats(wx)
