@@ -1061,6 +1061,92 @@ def _route_midpoints(dep: Airport, dest: Airport, n: int = 3) -> list[tuple[floa
              dep.lon + (dest.lon - dep.lon) * k / (n + 1)) for k in range(1, n + 1)]
 
 
+# How many enroute samples a discovery leg gets, by distance. Checked longest
+# first; a leg under the shortest threshold gets none.
+#
+# Discovery has only ever assessed the two ends. That is right for a 20 nm hop,
+# where the ends *are* the route, and wrong for a 150 nm one, which can cross a
+# deck neither end sees - the exact blind spot the route card's midpoints exist
+# to cover. The thresholds are distance, not a flat count, because the cost is
+# per point: sampling three midpoints on every 15 nm candidate would triple the
+# scan's fetch to say the same thing three times.
+DISCOVERY_ENROUTE_STEPS: tuple[tuple[float, int], ...] = ((150.0, 3), (100.0, 2), (50.0, 1))
+
+
+def _enroute_checks(a: AirportAssessment, origin_ident: str, dist_nm: float,
+                    fcs: list[dict], etd: datetime, eta: datetime,
+                    mode: str, flight_rules: str) -> None:
+    """Sample the air along a discovery leg and gate the card on it, in place.
+
+    A card that says GO on the strength of its two ends is making a claim about
+    the whole leg, so the samples are rows and not decoration: a deck below the
+    pilot's cross-country minimum at the midpoint of a 120 nm flight fails the
+    card, exactly as it would on the route page.
+
+    ``a.enroute_points`` records how many were taken *whatever the answer*, so
+    the card can tell "we looked and it was clear" from "we did not look". A leg
+    under the shortest threshold gets none and says so rather than implying the
+    middle was checked.
+    """
+    a.enroute_points = len(fcs)
+    if not fcs:
+        return
+    span_hr = max((eta - etd).total_seconds() / 3600.0, 0.0)
+    pts: list[dict] = []
+    for k, fc in enumerate(fcs, 1):
+        frac = k / (len(fcs) + 1)
+        pt = _point_at(fc, etd + timedelta(hours=span_hr * frac)) if fc else {}
+        if not pt.get("sampled"):
+            continue
+        pt["label"] = f"~{round(dist_nm * frac)} nm from {origin_ident}"
+        pts.append(pt)
+    if not pts:
+        # Every sample failed to download. Left at zero so the card reports the
+        # leg as unsampled rather than as a clear stretch of air.
+        a.enroute_points = 0
+        return
+
+    a.enroute_sky = sky_svc.worst([p.get("sky") for p in pts])
+    a.enroute_at = next((p["label"] for p in pts if p.get("sky") is a.enroute_sky), None)
+
+    ceilings = [(p["ceiling_ft"], p["label"]) for p in pts if p.get("ceiling_ft") is not None]
+    if ceilings:
+        val, where = min(ceilings)
+        a.enroute_ceiling_ft = val
+        limit = _xc_ceiling_minimum(mode, flight_rules)
+        a.limit_checks.append(LimitCheck(
+            key="ceiling_enroute", label="Ceiling (enroute)",
+            limit_text=f"≥ {limit:,.0f} ft AGL",
+            actual_text=f"{round(val / 100) * 100:,} ft AGL",
+            passed=val >= limit, group="conditions",
+            location=where, source=Source.MODEL.value))
+
+    viss = [(p["vis_sm"], p["label"]) for p in pts if p.get("vis_sm") is not None]
+    if viss:
+        val, where = min(viss)
+        a.enroute_visibility_sm = val
+        limit = _xc_visibility_minimum(mode, flight_rules)
+        a.limit_checks.append(LimitCheck(
+            key="visibility_enroute", label="Visibility (enroute)",
+            limit_text=f"≥ {limit:g} SM", actual_text=f"{val:g} SM",
+            passed=val >= limit, group="conditions",
+            location=where, source=Source.MODEL.value))
+
+    # These are limit rows, so they move the verdict. Appended after
+    # ``_assess_endpoint`` has run, so the worsening is explicit rather than
+    # relying on ``decision`` having seen them - the same shape the origin's own
+    # rows use a few lines further down.
+    a.verdict = _worse_verdict(a.verdict, checks_verdict(a.limit_checks))
+
+
+def _discovery_enroute_n(dist_nm: float) -> int:
+    """How many midpoints to sample on a discovery leg of this length."""
+    for threshold, n in DISCOVERY_ENROUTE_STEPS:
+        if dist_nm > threshold:
+            return n
+    return 0
+
+
 # ICAO idents that typically publish a METAR/TAF (certified CY/CZ, US K).
 _REPORTING_RE = re.compile(r"^(C[YZ]|K)[A-Z0-9]{2}$")
 
@@ -1293,6 +1379,20 @@ def _xc_ceiling_minimum(mode: str, flight_rules: str = "vfr") -> float:
     return c_block.get("day_xc", 4000)
 
 
+def _xc_visibility_minimum(mode: str, flight_rules: str) -> float:
+    """The cross-country visibility minimum in force, IFR or VFR.
+
+    The mirror of :func:`_xc_ceiling_minimum`, and extracted for the same reason:
+    the route rows and discovery's enroute rows both gate on it, and two copies
+    of a personal-minimum lookup is one copy too many.
+    """
+    full = get_limits()
+    v_block = full["hard_limits"]["visibility_sm"]
+    if flight_rules == "ifr":
+        v_block = full.get("ifr_minimums", {}).get("visibility_sm", v_block)
+    return v_block.get("night_xc", 9) if mode == "night" else v_block.get("day_xc", 9)
+
+
 def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flight_rules: str = "vfr") -> list[LimitCheck]:
     """Wind/ceiling/vis hard limits evaluated across departure, enroute samples,
     and destination - each row says WHERE the worst value is."""
@@ -1360,7 +1460,6 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                                  passed=val <= w["crosswind_max_kt"], location=xw.runway_ident))
 
     # Ceiling - IFR uses ifr_minimums section; VFR uses hard_limits.
-    full_limits = get_limits()
     ceil_limit = _xc_ceiling_minimum(mode, flight_rules)
     # ``None`` = no circuit minimum in force. IFR has one flat floor and flies
     # published approaches, so there is no circuit number to be below; the IFR
@@ -1461,12 +1560,7 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                                      source_text=txt))
 
     # Visibility - IFR uses ifr_minimums section; VFR uses hard_limits.
-    if flight_rules == "ifr":
-        ifr = full_limits.get("ifr_minimums", {})
-        v_block = ifr.get("visibility_sm", L["visibility_sm"])
-    else:
-        v_block = L["visibility_sm"]
-    vis_limit = v_block.get("night_xc", 9) if mode == "night" else v_block.get("day_xc", 9)
+    vis_limit = _xc_visibility_minimum(mode, flight_rules)
     vis_pts = [(lbl, vi, src, txt)
                for lbl, _w, _g, _c2, vi, src, txt in pts if vi is not None]
     if vis_pts:
@@ -2365,6 +2459,18 @@ async def suggest(
     cfps_sites = [s for s in [origin_ident] + [a.ident for a, _ in candidates]
                   if _REPORTING_RE.match(s)]
     cand_points = [(a.lat, a.lon) for a, _ in candidates]
+    # Enroute midpoints, for the legs long enough to have air the ends do not
+    # speak for (``_discovery_enroute_n``). Flattened into one list with a span
+    # per candidate: Open-Meteo answers many points in one request, so the whole
+    # scan's midpoints cost chunks of a request rather than one fetch each.
+    leg_spans: list[tuple[int, int]] = []
+    leg_points: list[tuple[float, float]] = []
+    for _a, _d in candidates:
+        start = len(leg_points)
+        n = _discovery_enroute_n(_d)
+        if n:
+            leg_points.extend(_route_midpoints(origin, _a, n))
+        leg_spans.append((start, len(leg_points)))
     # The origin rides along in the candidates' blend request rather than going
     # without: it is one request either way, and since discovery started
     # assessing the departure aerodrome its wind gates every card on the page -
@@ -2380,12 +2486,18 @@ async def suggest(
     max_leg_hr = flight_time_hr(max([d for _a, d in candidates], default=0.0),
                                 get_cruise_kt()) if candidates else 0.0
     days = days_for(int((etd_utc - now).total_seconds() // 3600) + int(max_leg_hr) + 25)
-    metars, tafs, notams, origin_fc, fcs, ens = await asyncio.gather(
+    metars, tafs, notams, origin_fc, fcs, leg_fcs, ens = await asyncio.gather(
         _safe(cfps.metars(cfps_sites), {}, fetch_health.METAR),
         _safe(cfps.tafs(cfps_sites), {}, fetch_health.TAF),
         _safe(cfps.notams(cfps_sites), {}, fetch_health.NOTAM),
         _safe(openmeteo.forecast(origin.lat, origin.lon, days), {}, fetch_health.HRDPS),
         _safe(openmeteo.forecast_many(cand_points, days), [], fetch_health.HRDPS),
+        # Cloud and visibility only, and chunked: a 300 nm scan can ask for a few
+        # hundred midpoints, and asking each of them for winds aloft and
+        # per-level temperature would be a large response nobody reads.
+        _safe(openmeteo.forecast_many_chunked(leg_points, days,
+                                              openmeteo.cloud_vis_vars()),
+              [], fetch_health.HRDPS),
         # The multi-model wind blend is a current-hour product - it has nothing
         # to say about a future ETD. Unlabelled: it is a refinement over the
         # single-model wind, which is still there when the blend does not answer.
@@ -2455,7 +2567,7 @@ async def suggest(
     # it is the same field at the same departure time twenty times over.
     origin_tops = _point_at(origin_fc, None if is_now else etd_utc) if origin_fc else {}
     results: list[AirportAssessment] = []
-    for airport, dist in candidates:
+    for ci, (airport, dist) in enumerate(candidates):
         bearing = initial_bearing_true(origin.lat, origin.lon, airport.lat, airport.lon)
         cand_fc = fc_by_ident.get(airport.ident)
         # Each candidate is read at its own ETA: a 20 nm hop and a 200 nm leg
@@ -2505,6 +2617,12 @@ async def suggest(
             span=arrival_span(etd_utc, eta),
             is_now=is_now, show_obs=show_obs,
         )
+        # The air between the two ends, on legs long enough for it to be its own
+        # question. Each sample is read at the hour it is actually overflown -
+        # a 150 nm leg's far midpoint is nearly an hour past its near one - which
+        # is the same rule the route card's midpoints follow.
+        _enroute_checks(a, origin_ident, dist, leg_fcs[slice(*leg_spans[ci])],
+                        etd_utc, eta, mode, flight_rules)
         # The gate the pilot is actually shown, rebuilt from the two finished
         # cards - the origin's above and this candidate's, now that it has been
         # assessed. Both carry the model with the TAF laid over it, so the deck

@@ -2400,6 +2400,7 @@ function discoveryCard(a) {
       <span><span class="mk">Wind</span> ${windStr(w)}</span>
       ${ceilChip(w)}
       ${w.visibility_sm != null ? `<span><span class="mk">Vis</span> ${w.visibility_sm} SM</span>` : ""}
+      ${enrouteChip(a)}
       ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below every ceiling on this card (reported now and forecast for your window) and scaled to leg distance"><span class="mk">Best alt</span> ${fmtFt(a.altitude.altitude_ft)}</span>${a.altitude.on_top && a.altitude.tops_ft != null ? `<span class="ok-note" title="Cruise clears the ${a.altitude.tops_source === "PIREP" ? "reported" : "estimated"} tops (${fmtTops(a.altitude.tops_ft)} MSL) by ${fmtFt(a.altitude.altitude_ft - a.altitude.tops_ft)}${a.altitude.wind_cost_kt ? `, at ${Math.round(a.altitude.wind_cost_kt)} kt of wind` : " at no cost in wind"}">on top</span>` : ""}<span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "tailwind" : "headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
     ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div><strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div>${windLegend(rw, w)}</div></div>` : `<div class="rwy-na">Runway data unavailable</div>`}
@@ -3091,6 +3092,33 @@ function topsSpan(r) {
   if (r.enroute_tops_model_ft == null) return main;
   const gap = Math.abs(r.enroute_tops_model_ft - r.enroute_tops_msl_ft);
   return main + `<span class="warn" title="One pilot flew it and the model derived it, and they are ${fmtTops(gap)} apart - which usually means one of them is describing a deck the other never saw. The altitude recommendation plans against the higher of the two.">model estimate ~${fmtTops(r.enroute_tops_model_ft)} - ${fmtTops(gap)} apart</span>`;
+}
+
+// The air between here and your departure field - and, just as importantly,
+// whether anyone looked at it.
+//
+// A discovery card assesses two points: where you leave from and where you land.
+// On a 20 nm hop those two ARE the route. On a 150 nm one they are the two ends
+// of a leg that can cross a deck neither of them sees, and the card used to read
+// exactly the same in both cases - a GO badge over a stretch of air nobody had
+// sampled. Legs past the distance ladder now carry midpoints, and this says how
+// many, so "clear enroute" and "enroute not checked" stop looking alike.
+function enrouteChip(a) {
+  if (!a.enroute_points) {
+    // Short legs are not a gap in coverage, so this is a plain note rather than
+    // a warning: the ends genuinely are the route.
+    return `<span class="hint" title="Under 50 nm - your departure field and this aerodrome cover the whole leg, so no midpoints were sampled."><span class="mk">Enroute</span> ends only (short leg)</span>`;
+  }
+  const n = a.enroute_points;
+  const pts = `${n} point${n > 1 ? "s" : ""}`;
+  const bits = [];
+  if (a.enroute_sky) bits.push(a.enroute_sky.text);
+  if (a.enroute_visibility_sm != null) bits.push(`${a.enroute_visibility_sm} SM`);
+  const where = a.enroute_at ? ` <span class="hint">${escapeHtml(a.enroute_at)}</span>` : "";
+  const title = `HRDPS sampled at ${pts} along the leg, each read at the hour you overfly it. `
+    + "Cloud and visibility only - the wind that matters is at the two ends, where you take off and land.";
+  return `<span title="${escapeHtml(title)}"><span class="mk">Enroute</span> `
+    + `${escapeHtml(bits.join(" · ") || "sampled")} <span class="hint">(${pts})</span>${where}</span>`;
 }
 
 // The sky, on every card, in every state - including the three that used to
