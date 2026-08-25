@@ -76,8 +76,8 @@ const THREAT_MITIGATIONS = {
     label: "Night operations",
     items: ["Familiar airport and runway", "Stable VMC forecast", "Light winds expected", "Simple direct route", "Extra fuel margin"],
   },
-  actual_imc: {
-    label: "IMC / IFR",
+  hard_imc: {
+    label: "Hard IMC",
     items: ["Stable weather system (not frontal)", "Precision approaches preferred", "Higher personal minimums", "Autopilot if available"],
   },
   strong_or_gusty_winds: {
@@ -876,7 +876,12 @@ function effectiveLimits() {
     ifr_ceiling_agl_ft: { ...(difr.ceiling_agl_ft || {}), ...(m.ifr_ceiling_agl_ft || {}) },
     ifr_visibility_sm:  { ...(difr.visibility_sm   || {}), ...(m.ifr_visibility_sm  || {}) },
     weather_flags:   m.weather_flags || d.weather_flags,
-    imc_as_threat:   (m.imc_as_threat !== undefined) ? m.imc_as_threat : !!difr.imc_as_threat,
+    // ``imc_as_threat`` is the pre-rename spelling, still sitting in the profiles
+    // of anyone who set it before. Read it as a fallback rather than silently
+    // resetting a saved personal minimum to off.
+    hard_imc_as_threat: (m.hard_imc_as_threat !== undefined) ? m.hard_imc_as_threat
+                      : (m.imc_as_threat !== undefined) ? m.imc_as_threat
+                      : !!difr.hard_imc_as_threat,
     night_as_threat: (m.night_as_threat !== undefined) ? m.night_as_threat
                                                        : CONFIG.default_night_as_threat !== false,
   };
@@ -1444,10 +1449,11 @@ function renderRoute(r) {
       ${win ? `<span title="Conditions are assessed for this window">ETD ${zHM(win.etd_utc)} → ETA ${zEnd(win.etd_utc, win.eta_utc)}${win.eta_provisional ? " (est.)" : ""}</span>` : ""}
       <span><span class="mk">Dist</span> ${r.distance_nm} nm · course ${dirM(r.bearing_mag, r.bearing_true)}</span>
       <span><span class="mk">Time</span> ${fmtHrMin(r.flight_time_hr)}</span>
-      ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud"><span class="mk">Best alt</span> ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
+      ${alt ? `<span title="best cruising altitude for the winds aloft - VFR is kept ≥500 ft below every ceiling on this page (both ends, enroute, and what the TAF forecasts for your window); IFR is not gated on cloud. When the tops are known, an IFR pick climbs above them if a legal level clears them by 1,000 ft and costs no more than 10 kt of headwind against the fastest level. It never climbs for tops it is only guessing at."><span class="mk">Best alt</span> ${fmtFt(alt.altitude_ft)} · GS ${Math.round(alt.groundspeed_kt)} kt (${alt.headwind_kt >= 0 ? "head" : "tail"}wind ${Math.abs(alt.headwind_kt)} kt)</span>` : ""}
       ${daylightSpan(r.daylight_margin)}
       ${r.enroute_ceiling_ft != null ? `<span><span class="mk">Enroute ceiling</span> ${fmtCeil(r.enroute_ceiling_ft)}</span>` : ""}
-      ${r.cloud_at_cruise ? `<span class="warn">Cloud below planned cruise altitude</span>` : ""}
+      ${topsSpan(r)}
+      ${cloudLine(r, alt)}
       ${alt && alt.levels.length ? `<span>Winds aloft: ${alt.levels.map((l) => `${fmtFt(l.altitude_ft)} ${windDir(l.direction_mag, l.direction_true)}/${Math.round(l.speed_kt)}`).join(" · ")}</span>` : ""}
     </div>`;
 
@@ -1579,7 +1585,10 @@ function rowCheck(c) {
 function rowThreat(t) {
   // Same four cells as rowCheck, so threat rows share the checklist's columns.
   // The empty limit cell is deliberate: it holds the column open.
-  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${escapeHtml(t.label)}</span><span class="val"><span class="act">${t.present ? "present" : "-"}</span></span><span class="lim"></span></div>`;
+  // A threat that can fire for more than one reason says which one did. Most
+  // carry nothing here and keep the bare "present" they always had.
+  const act = t.present ? (t.detail ? escapeHtml(t.detail) : "present") : "-";
+  return `<div class="chk ${t.present ? "fail" : "pass"}"><span class="mark">${t.present ? "✗" : "✓"}</span><span class="lbl">${escapeHtml(t.label)}</span><span class="val"><span class="act">${act}</span></span><span class="lim"></span></div>`;
 }
 
 // ---------- Wind-vs-runway diagram ----------
@@ -2392,7 +2401,7 @@ function discoveryCard(a) {
       <span><span class="mk">Wind</span> ${windStr(w)}</span>
       ${ceilChip(w)}
       ${w.visibility_sm != null ? `<span><span class="mk">Vis</span> ${w.visibility_sm} SM</span>` : ""}
-      ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below every ceiling on this card (reported now and forecast for your window) and scaled to leg distance"><span class="mk">Best alt</span> ${fmtFt(a.altitude.altitude_ft)}</span><span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "tailwind" : "headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
+      ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below every ceiling on this card (reported now and forecast for your window) and scaled to leg distance"><span class="mk">Best alt</span> ${fmtFt(a.altitude.altitude_ft)}</span>${a.altitude.on_top && a.altitude.tops_ft != null ? `<span class="ok-note" title="Cruise clears the ${a.altitude.tops_source === "PIREP" ? "reported" : "estimated"} tops (${fmtTops(a.altitude.tops_ft)} MSL) by ${fmtFt(a.altitude.altitude_ft - a.altitude.tops_ft)}${a.altitude.wind_cost_kt ? `, at ${Math.round(a.altitude.wind_cost_kt)} kt of wind` : " at no cost in wind"}">on top</span>` : ""}<span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "tailwind" : "headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
     ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div><strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div>${windLegend(rw, w)}</div></div>` : `<div class="rwy-na">Runway data unavailable</div>`}
     ${runwaysBlock(a)}
@@ -2640,9 +2649,9 @@ function wxFlagsSelected() {
 
 function buildWxFlags() {
   const selected = wxFlagsSelected();
-  // widespread_ifr is a shared setting and the backend already ignores it on
-  // IFR flights, so it stays on screen under both - with a note saying so.
-  const note = { widespread_ifr: "not applied on IFR flights" };
+  // widespread_ifr is a shared setting, but the row it controls is only built on
+  // VFR flights now, so it stays on screen under both - with a note saying which.
+  const note = { widespread_ifr: "VFR flights only" };
   $("#wxflags").innerHTML = (CONFIG.weather_flag_options || [])
     .map((f) => `<label class="control checkbox"><input type="checkbox" class="wxflag" value="${f}"${selected.has(f) ? " checked" : ""}> ${wxLabel(f)}${note[f] ? ` <span class="hint">(${note[f]})</span>` : ""}</label>`)
     .join("");
@@ -2784,7 +2793,7 @@ function fillProfileForm() {
   WX_FLAGS_SELECTED = new Set(eff.weather_flags);
   $$(".wxflag").forEach((c) => (c.checked = WX_FLAGS_SELECTED.has(c.value)));
   const imc = $("#set-imc-threat");
-  if (imc) imc.checked = !!eff.imc_as_threat;
+  if (imc) imc.checked = !!eff.hard_imc_as_threat;
   const night = $("#set-night-threat");
   if (night) night.checked = !!eff.night_as_threat;
 }
@@ -2816,7 +2825,7 @@ function readProfileForm() {
 
   // IMC-as-threat: only persist when it differs from the default (off).
   const imcEl = $("#set-imc-threat");
-  if (imcEl && imcEl.checked !== !!difr.imc_as_threat) mins.imc_as_threat = imcEl.checked;
+  if (imcEl && imcEl.checked !== !!difr.hard_imc_as_threat) mins.hard_imc_as_threat = imcEl.checked;
 
   // Night-as-threat: same, against a default of on.
   const nightDefault = CONFIG.default_night_as_threat !== false;
@@ -2884,7 +2893,7 @@ function renderMinimums() {
   const curPreset = PROFILE.conservatism || CONFIG.default_conservatism;
   const presetLabel = (CONFIG.conservatism_presets.find((p) => p.key === curPreset) || {}).label || curPreset;
   const consRow = row("Conservatism", presetLabel, "Standard", "", curPreset !== CONFIG.default_conservatism);
-  const imcRow = row("IMC as threat (IFR)", eff.imc_as_threat ? "on" : "off", "off", "", !!eff.imc_as_threat);
+  const imcRow = row("Hard IMC as a threat (IFR)", eff.hard_imc_as_threat ? "on" : "off", "off", "", !!eff.hard_imc_as_threat);
   const nightDefault = CONFIG.default_night_as_threat !== false;
   const nightRow = row("Night as threat", eff.night_as_threat ? "on" : "off",
     nightDefault ? "on" : "off", "", !!eff.night_as_threat !== nightDefault);
@@ -2990,6 +2999,79 @@ function windDir(magVal, trueVal) {
 }
 const fmtFt = (ft) => (ft == null ? "-" : `${Math.round(ft).toLocaleString()} ft`);
 const fmtCeil = (ft) => (ft == null ? "-" : `${(Math.round(ft / 100) * 100).toLocaleString()} ft`);
+// Tops round to 500 ft where a ceiling rounds to 100. A ceiling is compared
+// against a minimum, so its hundreds matter. A top is compared against cruising
+// levels a thousand feet apart, and above 10,000 ft it is derived from model
+// levels two thousand feet apart - printing "6,428 ft" would claim a precision the
+// number has never had.
+const fmtTops = (ft) => (ft == null ? "-" : `${(Math.round(ft / 500) * 500).toLocaleString()} ft`);
+
+const TOPS_TITLE =
+  "Estimated, not observed. The app walks the model's pressure-level cloud cover and "
+  + "interpolates where it falls back through broken - good to a few hundred feet low "
+  + "down, and to about a thousand above 10,000 ft where the levels are 2,000 ft apart. "
+  + "Treat it as a planning figure and confirm it against a PIREP or the GFA.";
+
+const TOPS_PIREP_TITLE =
+  "Reported by a pilot who flew through it - an observation, not a forecast. It "
+  + "describes the deck where and when it was filed, which is not necessarily the "
+  + "deck you will meet.";
+
+const TOPS_RH_TITLE =
+  " This one came from the humidity profile rather than from cloud cover, because the "
+  + "model served no per-level cover here - weaker again, since air ceasing to be "
+  + "saturated is close to, but not the same as, the cloud stopping.";
+
+// "Cloud below the cruise altitude" means two opposite things depending on where
+// the top of it is. Above the tops with a margin, the deck below is the thing you
+// were trying to get above; inside it, it is the thing you are flying in. One
+// sentence used to say the first while meaning the second - and it fired on every
+// normal IFR flight above a deck, which is exactly the flight it was least useful
+// on.
+function cloudLine(r, alt) {
+  if (!r.cloud_at_cruise) return "";
+  if (alt && alt.on_top && alt.tops_ft != null) {
+    const margin = fmtFt(alt.altitude_ft - alt.tops_ft);
+    const paid = alt.wind_cost_kt
+      ? ` · ${Math.round(alt.wind_cost_kt)} kt of wind given up for it` : "";
+    const cost = alt.wind_cost_kt
+      ? ` It is not the fastest level: it costs ${Math.round(alt.wind_cost_kt)} kt of headwind against ${fmtFt(alt.wind_optimal_ft)}, which comes straight off your groundspeed.`
+      : " It is also the fastest level, so it costs nothing.";
+    const src = alt.tops_source === "PIREP" ? "reported" : "estimated";
+    return `<span class="ok-note" title="The pick clears the ${src} tops by ${margin}.${cost} You still climb through the deck and descend back through it - check the icing row.">On top: ${margin} above the tops${paid}</span>`;
+  }
+  if (r.enroute_tops_msl_ft != null)
+    return `<span class="warn" title="Tops are ${fmtTops(r.enroute_tops_msl_ft)} MSL. No legal cruising altitude on this leg clears them by the 1,000 ft that would count as being on top - the hemispheric levels, the 12,500 ft no-oxygen cap and the climb realistic for ${r.distance_nm} nm all apply.">In cloud at cruise - tops ${fmtTops(r.enroute_tops_msl_ft)} MSL, out of reach on this leg</span>`;
+  // Tops unknown. Today's sentence, unchanged - it is still the honest one.
+  return `<span class="warn">Cloud below planned cruise altitude</span>`;
+}
+
+// Cloud tops, next to the ceiling they belong with. The ceiling is AGL and the
+// tops are MSL, so both carry their datum: "1,400" and "5,500" side by side with
+// no units invites subtracting one from the other.
+function topsSpan(r) {
+  if (r.enroute_tops_state === "above_scan") {
+    const lim = fmtTops(r.enroute_tops_scan_msl_ft);
+    return `<span title="The pressure levels this app samples stop near ${lim} MSL, and the deck was still broken at the top of the scan. The tops are higher than that - which is not the same as unknown, and not the same as known-but-out-of-reach."><span class="mk">Tops</span> above ${lim} MSL</span>`;
+  }
+  if (r.enroute_tops_msl_ft == null) return "";
+  const pirep = r.enroute_tops_source === "PIREP";
+  const where = r.enroute_tops_at ? ` <span class="hint">${escapeHtml(r.enroute_tops_at)}</span>` : "";
+  // A pilot who flew through it gets no "~" and no rounding apology: it is an
+  // observation. The model figure is an inference from a humidity profile, and no
+  // amount of interpolation makes it the same kind of thing.
+  const chip = pirep
+    ? `<span class="src-pirep">PIREP</span>${pirepAgeChip(r.enroute_tops_valid_from) || ""}`
+    : `<span class="src-model">model estimate</span>`;
+  const title = pirep ? TOPS_PIREP_TITLE
+                      : TOPS_TITLE + (r.enroute_tops_from_rh ? TOPS_RH_TITLE : "");
+  const main = `<span title="${escapeHtml(title)}"><span class="mk">Tops</span> ${pirep ? "" : "~"}${fmtTops(r.enroute_tops_msl_ft)} MSL ${chip}${where}</span>`;
+  // Both sources answered and they do not agree. Neither is hidden and they are
+  // never averaged - the mean of two heights is a third one nobody reported.
+  if (r.enroute_tops_model_ft == null) return main;
+  const gap = Math.abs(r.enroute_tops_model_ft - r.enroute_tops_msl_ft);
+  return main + `<span class="warn" title="One pilot flew it and the model derived it, and they are ${fmtTops(gap)} apart - which usually means one of them is describing a deck the other never saw. The altitude recommendation plans against the higher of the two.">model estimate ~${fmtTops(r.enroute_tops_model_ft)} - ${fmtTops(gap)} apart</span>`;
+}
 function ceilChip(w) {
   if (w.ceiling_agl_ft != null) return `<span><span class="mk">Ceiling</span> ${fmtCeil(w.ceiling_agl_ft)}</span>`;
   if (w.source === "Observed") return `<span><span class="mk">Ceiling</span> none</span>`;

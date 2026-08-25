@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # outside it is dropped outright rather than shown faint, because a report
     # from the far side of the country is not a near miss.
     pirep_corridor_nm: float = 50.0
+    # How long a PIREP's cloud TOPS are worth reading. Tighter than
+    # ``pirep_max_age_hr`` on purpose: a turbulence report describes an air mass
+    # that persists, but a cloud top is a height, and two hours of daytime heating
+    # can lift a stratocumulus deck a couple of thousand feet. This can only ever
+    # narrow the general PIREP gate, never widen it - a report reaching this test
+    # has already passed that one.
+    pirep_tops_max_age_hr: int = 2
 
     # Route timeline horizon (hours)
     timeline_hours: int = 48
@@ -238,8 +245,13 @@ def _validate_prefs(prefs: dict, base: dict) -> dict:
     presets = base.get("conservatism_presets", {}).get("presets", {})
     if isinstance(cons, str) and cons in presets:
         clean["conservatism"] = cons
-    if isinstance(prefs.get("imc_as_threat"), bool):
-        clean["imc_as_threat"] = prefs["imc_as_threat"]
+    # ``imc_as_threat`` is the pre-rename spelling. It lives in the pilot's
+    # localStorage, so dropping it would silently reset a saved personal minimum to
+    # off - which is a worse outcome than an inconsistent name ever was.
+    legacy_imc = prefs.get("imc_as_threat")
+    imc = prefs.get("hard_imc_as_threat", legacy_imc)
+    if isinstance(imc, bool):
+        clean["hard_imc_as_threat"] = imc
     if isinstance(prefs.get("night_as_threat"), bool):
         clean["night_as_threat"] = prefs["night_as_threat"]
     return clean
@@ -278,8 +290,9 @@ def merge_limits(base: dict, overrides: dict) -> dict:
             hl[group].update(clean[group])
     if "weather_flags" in clean:
         hl["weather_flags"] = clean["weather_flags"]
-    if "imc_as_threat" in clean:
-        out.setdefault("ifr_minimums", {})["imc_as_threat"] = clean["imc_as_threat"]
+    if "hard_imc_as_threat" in clean:
+        out.setdefault("ifr_minimums", {})["hard_imc_as_threat"] = \
+            clean["hard_imc_as_threat"]
     if "night_as_threat" in clean:
         out["threat_stacking"]["night_as_threat"] = clean["night_as_threat"]
     if "conservatism" in clean:

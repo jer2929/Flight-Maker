@@ -480,3 +480,79 @@ def test_a_kept_pirep_reaches_the_map_as_a_point():
     fc = ah.to_feature_collection(keep)
     assert fc["features"][0]["geometry"]["type"] == "Point"
     assert fc["features"][0]["properties"]["kind"] == "PIREP"
+
+
+# --- cloud tops off a PIREP -------------------------------------------------
+#
+# The only feed that reports a cloud top at all. AWC decodes it into fields; NAV
+# CANADA sends the raw /SK the fields were decoded from.
+
+
+def test_an_awc_pirep_carries_its_decoded_cloud_top():
+    # cloudTop1 is HUNDREDS of feet, like the /SK group it came from.
+    h = ah.from_awc_feature("pirep", {
+        "properties": {"rawOb": "UA /OV YYZ /FL050 /SK OVC030-TOP055",
+                       "cloudCvg1": "OVC", "cloudBas1": 30, "cloudTop1": 55},
+        "geometry": {"type": "Point", "coordinates": [-79.6, 43.6]}})
+    assert h.cloud_top_ft == 5500.0
+    assert h.cloud_top_cover == "OVC"
+    assert h.cloud_base_ft == 3000.0
+
+
+def test_an_awc_pirep_falls_back_to_the_raw_sky_field():
+    # The decoded keys are documented on the JSON output; this app asks for
+    # GeoJSON. If they do not survive that conversion, the /SK the pilot actually
+    # filed is still there - so a miss costs nothing.
+    h = ah.from_awc_feature("pirep", {
+        "properties": {"rawOb": "UA /OV YYZ /FL050 /SK BKN035-TOP060"},
+        "geometry": {"type": "Point", "coordinates": [-79.6, 43.6]}})
+    assert h.cloud_top_ft == 6000.0 and h.cloud_top_cover == "BKN"
+
+
+def test_a_cfps_pirep_carries_its_top_from_the_text():
+    h = ah.from_cfps_item("pirep", {
+        "location": "CYYZ", "text": "UA /OV YYZ /FL050 /SK OVC030-TOP055"})
+    assert h.cloud_top_ft == 5500.0
+
+
+def test_the_broken_layer_wins_over_a_scattered_one_below_it():
+    # Climbing over scattered cloud buys nothing - you were never in it.
+    h = ah.from_cfps_item("pirep", {
+        "location": "CYYZ", "text": "/OV YYZ /SK SCT040-TOP060/OVC080-TOP110"})
+    assert h.cloud_top_ft == 11000.0 and h.cloud_top_cover == "OVC"
+
+
+def test_a_scattered_only_report_still_says_what_it_saw():
+    # Reported with its coverage attached, so the caller can decide it is not
+    # worth planning against rather than never being told.
+    h = ah.from_cfps_item("pirep", {"location": "CYYZ",
+                                    "text": "/OV YYZ /SK SCT040-TOP060"})
+    assert h.cloud_top_ft == 6000.0 and h.cloud_top_cover == "SCT"
+
+
+def test_a_cloud_top_is_not_the_top_of_the_advisory_band():
+    # /FL050 makes the band 2,000-8,000 ft. The cloud top is 5,500 and must not
+    # be confused with either end of it.
+    h = ah.from_cfps_item("pirep", {
+        "location": "CYYZ", "text": "UA /OV YYZ /FL050 /SK OVC030-TOP055 /TB MOD"})
+    assert h.band == (2000.0, 8000.0)
+    assert h.cloud_top_ft == 5500.0
+
+
+def test_dedupe_keeps_a_cloud_top_contributed_by_either_half():
+    # CFPS wins the wording, and the AWC half is usually the one carrying the
+    # decoded top - so without an explicit line in _merge the tops vanish.
+    cfps_half = ah.from_cfps_item("pirep", {
+        "location": "CYYZ", "text": "UA /OV YYZ /FL050 /TB MOD"})
+    awc_half = ah.from_awc_feature("pirep", {
+        "properties": {"rawOb": "UA /OV YYZ /FL050 /TB MOD",
+                       "cloudCvg1": "OVC", "cloudTop1": 55},
+        "geometry": {"type": "Point", "coordinates": [-79.6, 43.6]}})
+    merged = ah._merge(cfps_half, awc_half)
+    assert merged.cloud_top_ft == 5500.0
+
+
+def test_a_pirep_that_reports_no_cloud_says_nothing_about_it():
+    h = ah.from_cfps_item("pirep", {"location": "CYYZ",
+                                    "text": "UA /OV YYZ /FL050 /TB MOD"})
+    assert h.cloud_top_ft is None and h.cloud_top_cover is None
