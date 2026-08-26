@@ -286,7 +286,7 @@ def test_ceiling_dropping_reports_the_fall_it_found():
 # --- The endpoint row must not gate an IFR flight on a circuit minimum -------
 #
 # Reported against an IFR CYFD -> CYKF: the card failed on
-# "Endpoint ceiling  1,200 ft AGL - below circuit minimum   ≥ 2,000 ft AGL (circuit)".
+# "Ceiling (departure/dest)  1,200 ft AGL - below circuit minimum   ≥ 2,000 ft AGL (circuit)".
 # A circuit minimum is a VFR idea - on IFR you fly an approach to a DA/MDA - and
 # the 2,000 ft it was measured against was a hardcoded fallback, reached because
 # the IFR minimums block has no ``day_circuit`` key to read.

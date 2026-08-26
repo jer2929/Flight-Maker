@@ -1561,18 +1561,18 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
             continue
         cv = round(ce / 100) * 100
         if circuit_limit is None:
-            checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
+            checks.append(LimitCheck(key="ceiling_endpoint", label="Ceiling (departure/dest)",
                                      limit_text=f"≥ {ceil_limit:,.0f} ft AGL",
                                      actual_text=f"{cv:,} ft AGL - below your IFR minimum",
                                      passed=False, location=lbl, source=src, source_text=txt))
         elif ce < circuit_limit:
             note = "IMC" if ce < 1000 else "below circuit minimum"
-            checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
+            checks.append(LimitCheck(key="ceiling_endpoint", label="Ceiling (departure/dest)",
                                      limit_text=f"≥ {circuit_limit:,.0f} ft AGL (circuit)",
                                      actual_text=f"{cv:,} ft AGL - {note}", passed=False,
                                      location=lbl, source=src, source_text=txt))
         else:
-            checks.append(LimitCheck(key="ceiling_endpoint", label="Endpoint ceiling",
+            checks.append(LimitCheck(key="ceiling_endpoint", label="Ceiling (departure/dest)",
                                      limit_text=f"≥ {circuit_limit:,.0f} ft AGL (circuit)",
                                      actual_text=f"{cv:,} ft AGL - circuits only",
                                      passed=True, advisory=True, location=lbl, source=src,
