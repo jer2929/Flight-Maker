@@ -488,9 +488,10 @@ const zHM = (iso) => {
 // carry no "Z" suffix ("2026-08-13T04:00"), and a bare ISO string without one is
 // parsed as *browser-local* - which silently shifted every hour label by the
 // viewer's own offset. Returns null on an unparseable value.
+const HAS_TZ_RE = /[Zz]|[+-]\d{2}:?\d{2}$/;
 const utcDate = (t) => {
   if (!t) return null;
-  const d = new Date(/[Zz]|[+-]\d{2}:?\d{2}$/.test(t) ? t : t + "Z");
+  const d = new Date(HAS_TZ_RE.test(t) ? t : t + "Z");
   return isNaN(d) ? null : d;
 };
 
@@ -540,7 +541,10 @@ const zTail = (baseIso, iso) => {
 // cannot touch other "+N" text - etdLabel's "· +21 min" is left alone. Only
 // ever run on already-escaped text, and only ever inserts this one known tag,
 // so it cannot introduce markup the escape just removed.
-const supDays = (s) => s.replace(/(\d{4}Z)\+(\d+)/g, "$1<sup>+$2</sup>");
+// Global, but only ever used with String.replace, which resets lastIndex
+// itself - so hoisting it out of the call is safe.
+const SUP_DAYS_RE = /(\d{4}Z)\+(\d+)/g;
+const supDays = (s) => s.replace(SUP_DAYS_RE, "$1<sup>+$2</sup>");
 // Escaped for HTML with any +N raised: for server text that can carry a span.
 const zText = (s) => supDays(escapeHtml(s));
 
@@ -561,12 +565,17 @@ const ETD_FINE_HRS = 4;
 
 const etdValue = (d) => `${d.toISOString().slice(0, 16)}Z`;
 
+// One formatter, built once. buildEtdOptions runs every 60 s over ~120 options
+// and zDayTime runs per rendered span, and each used to construct a fresh
+// Intl.DateTimeFormat - by far the most expensive part of formatting a label.
+const WEEKDAY_UTC_FMT = new Intl.DateTimeFormat(undefined, { weekday: "short", timeZone: "UTC" });
+
 // "Today" / "Tomorrow" / "Thu", by UTC date difference.
 function dayPrefix(d, now) {
   const diff = utcDayDiff(now, d);
   if (diff === 0) return "Today";
   if (diff === 1) return "Tomorrow";
-  return d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" });
+  return WEEKDAY_UTC_FMT.format(d);
 }
 
 // "Today 1445Z · +21 min" - the Zulu time to fly by, and how far off it is. The
@@ -669,8 +678,11 @@ function syncDiscoveryBtn() {
 function wire() {
   // makeDragOnly first so its guard runs before the readout listener (see note there).
   makeDragOnly($("#radius")); makeDragOnly($("#f-time"));
-  $("#radius").addEventListener("input", (e) => ($("#radius-out").textContent = `${e.target.value} nm`));
-  $("#f-time").addEventListener("input", (e) => ($("#f-time-out").textContent = +e.target.value ? `${e.target.value} min` : "Any"));
+  // Readout elements captured once. These fire on every pixel of a drag, and
+  // each used to run a document-wide querySelector to find the same span.
+  const radiusOut = $("#radius-out"), fTimeOut = $("#f-time-out");
+  $("#radius").addEventListener("input", (e) => (radiusOut.textContent = `${e.target.value} nm`));
+  $("#f-time").addEventListener("input", (e) => (fTimeOut.textContent = +e.target.value ? `${e.target.value} min` : "Any"));
   // Scope each seg-btn toggle to its own .seg group; re-render extra threats on IFR/VFR change.
   $$(".seg-btn").forEach((b) => b.addEventListener("click", () => {
     b.closest(".seg").querySelectorAll(".seg-btn").forEach((x) => x.classList.toggle("active", x === b));
@@ -1053,7 +1065,7 @@ const RADAR_LABELS = { RADAR_1KM_RRAI: "Rain", RADAR_1KM_RSNO: "Snow" };
 // the off-route areas as well.
 let RADAR = { map: null, wms: null, frames: [], idx: 0, layer: "RADAR_1KM_RRAI",
               timer: null, routeView: null, hazardView: null,
-              layerControl: null, stations: null, pirepLayer: null };
+              layerControl: null, pirepLayer: null };
 
 const radarFallback = () => `<div class="panel radar-panel"><h3>Radar</h3>
   <p class="hint">Radar map couldn't load.
@@ -1242,7 +1254,6 @@ async function loadFlightCategory(pts, etdUtc) {
   if (!gj || !(gj.features || []).length) return;
 
   const layer = flightCategoryLayer(gj);
-  RADAR.stations = layer;
   addRadarOverlay(layer, FLIGHT_CATEGORY_OVERLAY);
   if (flightCategoryOn()) layer.addTo(RADAR.map);
   const legend = $("#radar-legend");
@@ -1390,7 +1401,7 @@ function destroyRadar() {
   if (RADAR.map) { try { RADAR.map.remove(); } catch (_) {} }
   RADAR = { map: null, wms: null, frames: [], idx: 0, layer: RADAR.layer || "RADAR_1KM_RRAI",
             timer: null, routeView: null, hazardView: null,
-            layerControl: null, stations: null, pirepLayer: null };
+            layerControl: null, pirepLayer: null };
 }
 
 // The map takes a list of aerodromes rather than a route result, because a
@@ -1629,7 +1640,7 @@ function winLabel(win) {
 function clearRoute() {
   // route-self-check is a standing pre-check rendered on load - never cleared here,
   // so the pilot's ticked items survive a route assessment.
-  if (typeof destroyRadar === "function") destroyRadar();  // tear down any live Leaflet map
+  destroyRadar();  // tear down any live Leaflet map
   // Circuits fills only some of these, so every mount a route run can write has
   // to be listed - otherwise route-then-circuits leaves the previous flight's
   // panel on screen under the new verdict.
@@ -1669,9 +1680,11 @@ function renderRoute(r) {
     </div>`;
 
   $("#route-advisories").innerHTML = advisoriesBlock(r);
+  // Both cards mark the same span, so the label is derived once.
+  const winTxt = winLabel(win), winEtd = win && win.etd_utc;
   $("#route-endpoints").innerHTML =
-    endpointCard(r.departure, "Departure", winLabel(win), win && win.etd_utc) +
-    endpointCard(r.destination, "Destination", winLabel(win), win && win.etd_utc);
+    endpointCard(r.departure, "Departure", winTxt, winEtd) +
+    endpointCard(r.destination, "Destination", winTxt, winEtd);
   $("#route-enroute").innerHTML = enrouteBlock(r);
   loadRadar(r, routeStops(r));
 
@@ -1745,7 +1758,8 @@ function checklist(r) {
 const stackWord = (n) => ["Normal flight", "Mitigate carefully", "No-go solo", "No-go"][Math.min(n, 3)];
 // Map the backend's result label to a badge colour (verdict driven by the
 // pilot's conservatism preset, so we trust the label, not a local count).
-const labelVerdict = (label) => /no-go/i.test(label) ? "NOGO" : /mitigate/i.test(label) ? "MITIGATE" : "GO";
+const NOGO_RE = /no-go/i, MITIGATE_RE = /mitigate/i;
+const labelVerdict = (label) => NOGO_RE.test(label) ? "NOGO" : MITIGATE_RE.test(label) ? "MITIGATE" : "GO";
 
 function rowCheck(c) {
   const state = !c.applicable ? "na" : c.advisory ? "advisory" : c.passed ? "pass" : "fail";
@@ -1885,7 +1899,7 @@ function windRunwaySvg(rwy, w, opts = {}) {
       return wrap(`Runway ${ident}: wind variable`);
     }
 
-    const { delta, head, xw, severe, tail, hasHead, hasCross } = windVectors(rwy, w);
+    const { delta, head, xw, severe, tail, hasHead, hasCross } = opts.vec || windVectors(rwy, w);
     const fromRight = delta > 0;
     // Component arrows grow with strength but keep a generous floor so a light
     // wind still draws a full, legible arrow (not a tiny stub) - the corner
@@ -1973,8 +1987,30 @@ function windKeyRow(cls, marker, label, note) {
     + `<span class="wr-key-lbl">${label}${note ? ` <span class="wr-key-note">${note}</span>` : ""}</span>`;
 }
 
-function windLegend(rwy, w) {
-  const v = windVectors(rwy, w);
+// One row of the runway block: the diagram, its numbers line, and its key.
+// Takeoff, landing and the discovery card's "best runway into wind" were three
+// copies of this template differing only in the label and the numbers. It also
+// derives windVectors once for the pair - the picture and its key each used to
+// work it out separately from the same two inputs, so a 20-card discovery scan
+// did it about twice as often as it needed to.
+// The numbers half of a takeoff/landing row: ident, magnetic heading, dimensions
+// and both wind components with their gusts. Takeoff and landing print this
+// identically - only the word in front of it differs.
+function rwyComponentsLine(r, gust) {
+  return `RWY ${r.runway_ident} (${dirM(r.heading_mag, r.heading_true)})${dims(r)}`
+    + ` · headwind ${Math.round(r.headwind_kt)} kt${gust(r.headwind_kt_gust)}`
+    + ` · xwind ${Math.round(r.crosswind_kt)} kt${gust(r.crosswind_kt_gust)}`;
+}
+
+function rwyWrap(rwy, w, label, line) {
+  const vec = windVectors(rwy, w);
+  return `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rwy, w, { vec })}</span>`
+    + `<div class="rwy-lines"><div><strong>${label}</strong>: ${line}</div>`
+    + `${windLegend(rwy, w, vec)}</div></div>`;
+}
+
+function windLegend(rwy, w, vec) {
+  const v = vec || windVectors(rwy, w);
   if (!v) return "";  // calm or variable: the diagram drew a word, not vectors
   const rows = [windKeyRow("wr-wind", "wr-arrow-wind", "Total wind component")];
   if (v.hasHead) {
@@ -2021,8 +2057,8 @@ function endpointCard(a, role, timeLabel, etdIso) {
       ${w.visibility_sm != null ? `<span><span class="mk">Vis</span> ${w.visibility_sm} SM</span>` : ""}
       ${notamToggle(a)}
     </div>
-    ${showTakeoff && to ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(to, w)}</span><div class="rwy-lines"><div><strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt${gust(to.headwind_kt_gust)} · xwind ${Math.round(to.crosswind_kt)} kt${gust(to.crosswind_kt_gust)}</div>${windLegend(to, w)}</div></div>` : ""}
-    ${showLanding && ld ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(ld, w)}</span><div class="rwy-lines"><div><strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · headwind ${Math.round(ld.headwind_kt)} kt${gust(ld.headwind_kt_gust)} · xwind ${Math.round(ld.crosswind_kt)} kt${gust(ld.crosswind_kt_gust)}</div>${windLegend(ld, w)}</div></div>` : ""}
+    ${showTakeoff && to ? rwyWrap(to, w, "Takeoff", rwyComponentsLine(to, gust)) : ""}
+    ${showLanding && ld ? rwyWrap(ld, w, "Landing", rwyComponentsLine(ld, gust)) : ""}
     ${a.nearby_station ? nearbyBlock(a.nearby_station, timeLabel, etdIso) : ""}
     ${trendsBlock(a)}
     ${runwaysBlock(a)}
@@ -2030,7 +2066,7 @@ function endpointCard(a, role, timeLabel, etdIso) {
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
     ${obsLine(w.raw_metar)}
     ${tafBlock(w, timeLabel, etdIso)}
-    ${metarHistory(a)}
+    ${metarHistoryList(a.metar_history)}
   </div>`;
 }
 
@@ -2256,9 +2292,6 @@ function advisoriesBlock(r) {
   }
   return `<details class="panel advisories" open><summary>Area advisories: ${items.length} <span class="hint">(tap an item for the full text - check the altitudes, many apply only to higher levels)</span></summary>${items.map(advisoryItem).join("")}${aside}</details>`;
 }
-function metarHistory(a) {
-  return metarHistoryList(a.metar_history);
-}
 function metarHistoryList(h) {
   if (!h || h.length < 2) return "";
   return `<details class="mhist"><summary>Observation history (${h.length})</summary>${h.map((m) => obsLine(m)).join("")}</details>`;
@@ -2288,6 +2321,16 @@ function notamToggle(a) {
   return `<span class="notam-btn" onclick="toggleNotams('${a.airport.ident}')">${a.notam_count} NOTAM ▾</span>`;
 }
 // Plain-language NOTAM timing: a colour-coded status + a one-line "when".
+// Hoisted out of notamMeta, which is called from a .map() over every NOTAM and
+// used to rebuild all three on each one. zPad is the file's existing two-digit
+// pad; this is the same formatting, not a second copy of it.
+const NOTAM_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const notamWhen = (ms) => {
+  const d = new Date(ms);
+  return `${d.getUTCDate()} ${NOTAM_MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, `
+    + `${zPad(d.getUTCHours())}:${zPad(d.getUTCMinutes())}Z`;
+};
+
 // Green = active now, amber = upcoming, grey = expired. Null when we can't
 // parse any validity (so we don't mislabel it).
 function notamMeta(n) {
@@ -2295,17 +2338,13 @@ function notamMeta(n) {
   const end = n.end ? Date.parse(n.end) : null;
   if (start === null && end === null && !n.permanent) return null;
   const now = Date.now();
-  const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const p = (x) => String(x).padStart(2, "0");
-  const fmt = (ms) => { const d = new Date(ms);
-    return `${d.getUTCDate()} ${mon[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}Z`; };
   if (start !== null && now < start)
-    return { cls: "upcoming", label: "Upcoming", when: `Starts ${fmt(start)}` };
+    return { cls: "upcoming", label: "Upcoming", when: `Starts ${notamWhen(start)}` };
   if (end !== null && now > end)
-    return { cls: "expired", label: "Expired", when: `Ended ${fmt(end)}` };
+    return { cls: "expired", label: "Expired", when: `Ended ${notamWhen(end)}` };
   if (n.permanent || end === null)
     return { cls: "active", label: "Active", when: "Permanent" };
-  return { cls: "active", label: "Active", when: `Ends ${fmt(end)}${n.estimated ? " (est.)" : ""}` };
+  return { cls: "active", label: "Active", when: `Ends ${notamWhen(end)}${n.estimated ? " (est.)" : ""}` };
 }
 function notamItems(a) {
   return (a.notams || []).map((n) => {
@@ -2445,16 +2484,23 @@ function renderTimeline(timeline, windows) {
   html += `</div><div id="tl-detail" class="tl-detail" hidden></div>`;
   const root = $("#route-timeline");
   root.innerHTML = html;
-  const panel = root.querySelector("#tl-detail");
-  root.querySelectorAll(".tl-cell").forEach((cell) => {
-    cell.addEventListener("click", () => {
+  // One delegated listener on the container, bound once, rather than one per
+  // cell rebuilt on every assessment - see the note on wireWxPovers, which uses
+  // delegation for the same reason.
+  if (!root.dataset.cellsWired) {
+    root.dataset.cellsWired = "1";
+    root.addEventListener("click", (e) => {
+      const cell = e.target.closest(".tl-cell");
+      if (!cell || !root.contains(cell)) return;
+      const detail = root.querySelector("#tl-detail");
+      if (!detail) return;
       const prev = root.querySelector(".tl-cell.active");
       if (prev && prev !== cell) prev.classList.remove("active");
       const on = cell.classList.toggle("active");
-      if (on) { panel.textContent = cell.dataset.detail; panel.hidden = false; }
-      else { panel.hidden = true; }
+      if (on) { detail.textContent = cell.dataset.detail; detail.hidden = false; }
+      else { detail.hidden = true; }
     });
-  });
+  }
 }
 
 // ---------- Discovery ----------
@@ -2615,7 +2661,10 @@ function discoveryCard(a) {
       ${enrouteChip(a)}
       ${a.altitude ? `<span title="best VFR cruising altitude - kept ≥500 ft below every ceiling on this card (reported now and forecast for your window) and scaled to leg distance"><span class="mk">Best alt</span> ${fmtFt(a.altitude.altitude_ft)}</span>${a.altitude.on_top && a.altitude.tops_ft != null ? `<span class="ok-note" title="Cruise clears the ${a.altitude.tops_source === "PIREP" ? "reported" : "estimated"} tops (${fmtTops(a.altitude.tops_ft)} MSL) by ${fmtFt(a.altitude.altitude_ft - a.altitude.tops_ft)}${a.altitude.wind_cost_kt ? `, at ${Math.round(a.altitude.wind_cost_kt)} kt of wind` : " at no cost in wind"}">on top</span>` : ""}<span title="wind component along the leg at best altitude → groundspeed">${a.altitude.headwind_kt < 0 ? "tailwind" : "headwind"} ${Math.abs(Math.round(a.altitude.headwind_kt))} kt → GS ${Math.round(a.altitude.groundspeed_kt)} kt</span>` : ""}
     </div>
-    ${rw ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(rw, w)}</span><div class="rwy-lines"><div><strong>Best runway into wind</strong>: RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)} · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt</div>${windLegend(rw, w)}</div></div>` : `<div class="rwy-na">Runway data unavailable</div>`}
+    ${rw ? rwyWrap(rw, w, "Best runway into wind",
+        `RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)}`
+        + ` · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt`)
+      : `<div class="rwy-na">Runway data unavailable</div>`}
     ${runwaysBlock(a)}
     <div class="meta">${notamToggle(a)}<span class="links">${linksHtml(a)}</span></div>
     ${obsLine(w.raw_metar)}
@@ -2785,8 +2834,17 @@ function wireWxPopovers() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeWxPop(); });
   // Anchored to a chip that moves with the page - reposition rather than let it
   // drift away from what it is describing.
+  // Coalesced to one reposition per frame. positionWxPop writes, then reads two
+  // bounding boxes, then writes - two forced reflows - and a scroll fires far
+  // more often than the screen repaints, so the raw handler paid for both on
+  // every event.
+  let scrollFrame = 0;
   window.addEventListener("scroll", () => {
-    if (WX_POP.anchor && WX_POP.el && !WX_POP.el.hidden) positionWxPop(WX_POP.anchor, WX_POP.el);
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0;
+      if (WX_POP.anchor && WX_POP.el && !WX_POP.el.hidden) positionWxPop(WX_POP.anchor, WX_POP.el);
+    });
   }, { passive: true });
   window.addEventListener("resize", closeWxPop);
 }
@@ -2962,7 +3020,8 @@ function renderMinSliders() {
     const el = $("#" + f.id);
     if (el) {
       makeDragOnly(el); // before the readout listener - see note on makeDragOnly
-      el.addEventListener("input", (e) => ($("#" + f.id + "-out").textContent = `${e.target.value} ${f.unit}`));
+      const out = $("#" + f.id + "-out");   // captured once, not per input event
+      el.addEventListener("input", (e) => (out.textContent = `${e.target.value} ${f.unit}`));
     }
   }
 }
@@ -2979,10 +3038,16 @@ function renderRecencySlider() {
   </div>`;
   const recencyEl = document.getElementById("set-recency");
   makeDragOnly(recencyEl); // before the readout listener - see note on makeDragOnly
+  const recencyOut = document.getElementById("set-recency-out");
+  // The readout follows the drag; the expensive half does not. Rebuilding both
+  // self-assessment panels rebinds a listener per checkbox and discards any the
+  // pilot had already ticked, so it waits for the drag to end - which is also
+  // the only point at which the stored value needs writing.
   recencyEl.addEventListener("input", (e) => {
-    const val = +e.target.value;
-    document.getElementById("set-recency-out").textContent = `${val} hr`;
-    saveRecencyMin(val);
+    if (recencyOut) recencyOut.textContent = `${+e.target.value} hr`;
+  });
+  recencyEl.addEventListener("change", (e) => {
+    saveRecencyMin(+e.target.value);
     renderSelfAssessment("route-self-check");
     renderSelfAssessment("discovery-self-check");
   });
@@ -3387,8 +3452,9 @@ function precipText(h) {
   if (!h.precip) return "";
   return `precip: ${h.precip}${h.precip_mm != null ? ` (${h.precip_mm} mm)` : ""}`;
 }
+const METAR_AGE_RE = /\b(\d{2})(\d{2})(\d{2})Z\b/;
 function metarAgeMin(raw) {
-  const m = /\b(\d{2})(\d{2})(\d{2})Z\b/.exec(raw || "");
+  const m = METAR_AGE_RE.exec(raw || "");
   if (!m) return null;
   const now = new Date();
   let d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), +m[1], +m[2], +m[3]));
@@ -3416,9 +3482,10 @@ function ageChip(raw) {
 // changed - was displayed as an ordinary hourly report, and read as one. The
 // label comes from the report's own type token, which is also stripped from the
 // text so a feed that includes the prefix does not render it twice.
+const OBS_PREFIX_RE = /^\s*(METAR|SPECI)\s+/i;
 function obsLine(raw, cls = "raw") {
   if (!raw) return "";
-  const m = /^\s*(METAR|SPECI)\s+/i.exec(raw);
+  const m = OBS_PREFIX_RE.exec(raw);
   const label = m ? m[1].toUpperCase() : "METAR";
   const body = m ? raw.slice(m[0].length) : raw;
   return `<div class="${cls}">${label} ${escapeHtml(body)}${ageChip(raw)}</div>`;
@@ -3502,13 +3569,18 @@ function wxPopHas(a, kind) {
 function zDayTime(t) {
   const d = utcDate(t);
   if (!d) return t;
-  return `${d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })} ${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z`;
+  return `${WEEKDAY_UTC_FMT.format(d)} ${zPad(d.getUTCHours())}${zPad(d.getUTCMinutes())}Z`;
 }
 function fmtRange(a, b) {
   return `${zDayTime(a)} → ${zDayTime(b)}`;
 }
+// Hoisted: every card, checklist row, TAF period and tooltip goes through
+// escapeHtml, thousands of calls per render. The map used to be rebuilt for
+// *each escaped character* and the pattern object allocated per call.
+const ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const ESCAPE_RE = /[&<>"']/g;
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  return String(s).replace(ESCAPE_RE, (c) => ESCAPE_MAP[c]);
 }
 
 // ---------- PWA: register the service worker (installable + offline shell) ----------
