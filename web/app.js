@@ -2690,20 +2690,19 @@ function renderExtraThreats() {
   }));
 }
 
+// The three chips, and a legend saying what each one does. The description used
+// to belong to the *selected* chip alone, which answered the wrong question:
+// this is a setting a pilot picks once, and to pick it they have to see what the
+// other two would do. All three descriptions are on the page, always.
 function buildConservatism() {
   const cur = PROFILE.conservatism || CONFIG.default_conservatism;
   const presets = CONFIG.conservatism_presets || [];
   $("#conservatism").innerHTML =
     `<div class="preset-row">` +
     presets.map((p) => `<label class="preset"><input type="radio" name="conservatism" value="${p.key}" ${p.key === cur ? "checked" : ""}> ${p.label}</label>`).join("") +
-    `</div><p class="preset-desc hint" id="conservatism-desc"></p>`;
-  const updateDesc = () => {
-    const sel = ($$('input[name="conservatism"]').find((r) => r.checked) || {}).value || cur;
-    const desc = (presets.find((p) => p.key === sel) || {}).description || "";
-    $("#conservatism-desc").textContent = desc;
-  };
-  $$('input[name="conservatism"]').forEach((r) => r.addEventListener("change", updateDesc));
-  updateDesc();
+    `</div><dl class="preset-legend hint">` +
+    presets.map((p) => `<div class="preset-leg"><dt>${escapeHtml(p.label)}</dt><dd>${escapeHtml(p.description || "")}</dd></div>`).join("") +
+    `</dl>`;
 }
 
 // On touch devices the value only moves when the pilot grabs the thumb and drags
@@ -3108,11 +3107,10 @@ function topsSpan(r) {
 // sampled. Legs past the distance ladder now carry midpoints, and this says how
 // many, so "clear enroute" and "enroute not checked" stop looking alike.
 function enrouteChip(a) {
-  if (!a.enroute_points) {
-    // Short legs are not a gap in coverage, so this is a plain note rather than
-    // a warning: the ends genuinely are the route.
-    return `<span class="hint" title="Under 50 nm - your departure field and this aerodrome cover the whole leg, so no midpoints were sampled."><span class="mk">Enroute</span> ends only (short leg)</span>`;
-  }
+  // On a short leg the two ends genuinely are the route, so there is nothing
+  // here to report and the card stays quiet rather than explaining itself on a
+  // line that is otherwise all weather.
+  if (!a.enroute_points) return "";
   const n = a.enroute_points;
   const pts = `${n} point${n > 1 ? "s" : ""}`;
   const bits = [];

@@ -566,16 +566,11 @@ select, input[type=text], .route-inputs input {
 /* Source labels. These were pills - a tinted fill, a coloured border and a
    999px radius, the exact shape .badge uses for a VERDICT. A provenance label
    is a footnote on a number, not a control and not a state, so it is set as
-   one: condensed caps, tracked, colour-coded, and closed with a short rule in
-   its own colour the way a chart annotates a symbol. No box. */
+   one: condensed caps, tracked and colour-coded. No box, and no rule after it -
+   a bare dash trailing a chip read as a value the card had failed to fill in. */
 .src {
   font-family: var(--f-cond); font-weight: 600; font-size: var(--fs-2xs);
   letter-spacing: .1em; color: var(--muted); white-space: nowrap;
-}
-.src::after {
-  content: ""; display: inline-block; width: 11px; height: 1px;
-  background: currentColor; margin: 0 0 .22em 5px; vertical-align: middle;
-  opacity: .8;
 }
 .blend {
   font-family: var(--f-cond); font-weight: 600; font-size: .66rem;
@@ -1118,14 +1113,27 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
   background: #fff; border: 1px solid var(--line); border-radius: var(--r-md); }
 .gfa-cap { margin: 4px 0 0; }
 
-/* Conservatism presets - one inline row of chips + a single description line */
+/* Conservatism presets - one inline row of chips over a legend that says what
+   each of them does, so the choice can be made without clicking through it. */
 #conservatism { display: flex; flex-direction: column; gap: 8px; }
 .preset-row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px; }
 .preset { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 8px 12px;
   border: 1px solid var(--line); border-radius: var(--r-md); cursor: pointer; font-size: .88rem; }
 .preset:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .preset input { margin: 0; }
-.preset-desc { margin: 0; }
+/* Label column sized off the longest preset name, so the descriptions share a
+   left edge and the legend reads as three rows rather than three sentences. */
+.preset-legend { margin: 0; display: grid; gap: 4px; }
+.preset-leg { display: grid; grid-template-columns: 5.5rem 1fr; gap: 10px; align-items: baseline; }
+.preset-leg dt {
+  font-family: var(--f-cond); font-weight: 600; font-size: var(--fs-2xs);
+  text-transform: uppercase; letter-spacing: .1em; color: var(--muted);
+}
+.preset-leg dd { margin: 0; }
+/* The label column costs more than it buys once it is a third of the width. */
+@media (max-width: 560px) {
+  .preset-leg { grid-template-columns: 1fr; gap: 0; }
+}
 
 /* My Minimums panel as a div (not details). The pane owns its outer spacing. */
 
