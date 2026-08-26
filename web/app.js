@@ -1033,7 +1033,8 @@ const RADAR_LABELS = { RADAR_1KM_RRAI: "Rain", RADAR_1KM_RSNO: "Snow" };
 // between: the route as it has always been drawn, and that widened to take in
 // the off-route areas as well.
 let RADAR = { map: null, wms: null, frames: [], idx: 0, layer: "RADAR_1KM_RRAI",
-              timer: null, routeView: null, hazardView: null };
+              timer: null, routeView: null, hazardView: null,
+              layerControl: null, stations: null, pirepLayer: null };
 
 const radarFallback = () => `<div class="panel radar-panel"><h3>Radar</h3>
   <p class="hint">Radar map couldn't load.
@@ -1057,6 +1058,168 @@ const HAZARD_COLORS = {
   fzlvl: "#5bc0be", pcpn: "#6b8fb5", ash: "#9b7653", unknown: "#8a8a8a",
 };
 const hazardColor = (p) => HAZARD_COLORS[p.hazard] || HAZARD_COLORS.unknown;
+
+// ---------- Flight category (VFR / MVFR / IFR / LIFR per reporting station) ----------
+// The standard scheme, and standard on purpose: a pilot reads green/blue/red/
+// purple without being told what they mean, and a fifth invented palette would
+// throw that away. Theme-independent hex for the reason given above.
+//
+// Two of these deliberately sit near a HAZARD_COLORS entry - `ifr` there is
+// purple for an IFR AIRMET *area*, and `conv`/`ts` red is close to IFR red here.
+// They do not read alike in practice: an advisory is a translucent polygon and a
+// station is an opaque 5 px dot with a white rim, and the legend names both.
+const FLIGHT_CATEGORY_COLORS = {
+  VFR: "#1f9d4d", MVFR: "#2f7fd1", IFR: "#d63b3b",
+  LIFR: "#a24bc4", UNKNOWN: "#8a8a8a",
+};
+const FLIGHT_CATEGORY_ORDER = ["VFR", "MVFR", "IFR", "LIFR", "UNKNOWN"];
+const FLIGHT_CATEGORY_LEGEND = {
+  VFR: "VFR", MVFR: "marginal VFR", IFR: "IFR", LIFR: "low IFR",
+  UNKNOWN: "report unreadable",
+};
+const FLIGHT_CATEGORY_OVERLAY = "Flight category";
+const FLIGHT_CATEGORY_KEY = "minima.flightcat.v1";
+// Past this a dot is drawn faded - it mirrors ``flight_category_max_age_min``
+// server-side. An observation describes the half hour around it; at two hours
+// old it is describing air that has moved on.
+const FLIGHT_CATEGORY_STALE_MIN = 90;
+
+const flightCategoryColor = (c) => FLIGHT_CATEGORY_COLORS[c] || FLIGHT_CATEGORY_COLORS.UNKNOWN;
+
+// Default on: the whole point is seeing the picture without asking for it. The
+// choice sticks, though, the same way the theme does.
+function flightCategoryOn() {
+  try { return localStorage.getItem(FLIGHT_CATEGORY_KEY) !== "0"; } catch (_) { return true; }
+}
+function setFlightCategoryOn(on) {
+  try { localStorage.setItem(FLIGHT_CATEGORY_KEY, on ? "1" : "0"); } catch (_) {}
+}
+
+// A white rim, where `pirepStyle` uses a dark one. The two are both filled
+// circles over the same substrate, and a PIREP sitting on a station must still
+// read as a different kind of thing; the rim is what carries that, since the
+// 5/7 px difference in radius does not survive a glance.
+function flightCategoryStyle(f) {
+  const p = f.properties || {};
+  const c = flightCategoryColor(p.category);
+  const age = isoAgeMin(p.obs_time);
+  const stale = age != null && age > FLIGHT_CATEGORY_STALE_MIN;
+  return stale
+    ? { color: "#ffffff", weight: 1, opacity: 0.7, fillColor: c, fillOpacity: 0.45 }
+    : { color: "#ffffff", weight: 1.5, opacity: 0.95, fillColor: c, fillOpacity: 0.95 };
+}
+
+function flightCategoryPopup(p) {
+  // The two numbers that produced the colour, so the dot can be checked rather
+  // than taken on trust - and so "why is that blue" has an answer on the map.
+  // "no ceiling" is a claim about the sky, and it is only ours to make when the
+  // report actually parsed. On an unreadable one it would assert a clear day we
+  // cannot back up - the whole reason that dot is grey rather than green.
+  const ceil = p.ceiling_ft == null ? "no ceiling" : `${Math.round(p.ceiling_ft)} ft`;
+  const vis = p.visibility_sm == null ? "vis not reported" : `${p.visibility_sm} sm`;
+  const read = p.category === "UNKNOWN"
+    ? "ceiling and visibility both unreadable" : `${ceil} · ${vis}`;
+  const wind = p.wind_kt == null ? "" :
+    ` · ${p.wind_dir_true == null ? "VRB" : String(Math.round(p.wind_dir_true)).padStart(3, "0")}` +
+    `/${Math.round(p.wind_kt)}${p.gust_kt ? `G${Math.round(p.gust_kt)}` : ""} kt`;
+  const off = p.distance_nm == null ? ""
+    : p.distance_nm < 1 ? " · on your route" : ` · ${Math.round(p.distance_nm)} NM off track`;
+  const head = [p.ident, p.name].filter(Boolean).join(" · ");
+  return `<div class="hz-pop"><strong>${escapeHtml(head)}</strong>${ageChipFromMin(isoAgeMin(p.obs_time), { staleAfter: FLIGHT_CATEGORY_STALE_MIN })}
+    <div class="hint"><span class="fc-tag" style="background:${flightCategoryColor(p.category)};color:#fff">${escapeHtml(p.category || "")}</span>
+      ${escapeHtml(`${read}${wind}${off}`)}</div>
+    <pre>${escapeHtml((p.text || "").trim())}</pre></div>`;
+}
+
+function flightCategoryLayer(gj) {
+  return L.geoJSON(gj, {
+    // Radius only - `style` overwrites anything else set here (see hazardLayers).
+    pointToLayer: (f, latlng) => L.circleMarker(latlng, { radius: 5 }),
+    style: flightCategoryStyle,
+    onEachFeature: (f, layer) => {
+      const p = f.properties || {};
+      layer.bindPopup(flightCategoryPopup(p), { maxWidth: 360 });
+      if (p.ident) layer.bindTooltip(p.ident, { permanent: false });
+    },
+  });
+}
+
+// Data-driven like `hazardLegend`: only the categories actually out there. A
+// map showing four colours when the sky only has two is teaching the wrong
+// thing about the sky.
+function flightCategoryLegend(gj, meta, etdUtc) {
+  const present = [];
+  (gj.features || []).forEach((f) => {
+    const c = (f.properties || {}).category;
+    if (c && !present.includes(c)) present.push(c);
+  });
+  if (!present.length) return "";
+  present.sort((a, b) => FLIGHT_CATEGORY_ORDER.indexOf(a) - FLIGHT_CATEGORY_ORDER.indexOf(b));
+  const keys = present.map((c) =>
+    `<span class="hz-key hz-key-dot"><i style="background:${flightCategoryColor(c)}"></i>${escapeHtml(FLIGHT_CATEGORY_LEGEND[c] || c)}</span>`).join("");
+  return `${keys}<span class="hz-key hz-key-note">${escapeHtml(flightCategoryNote(meta, etdUtc))}</span>`;
+}
+
+// The line that keeps this layer honest. Everything else on the card is
+// assessed for the window you actually fly; these dots are the sky now, because
+// that is what a METAR is - and on a flight leaving in three hours those are
+// two different statements.
+function flightCategoryNote(meta, etdUtc) {
+  const bits = ["observations, not a forecast"];
+  if (meta && meta.newest_obs) bits.push(`newest ${zHM(meta.newest_obs)}`);
+  const ahead = etdUtc ? Math.round((Date.parse(etdUtc) - Date.now()) / 60000) : 0;
+  if (ahead > 60) {
+    bits.push(`your ETD is +${ahead >= 120 ? `${Math.round(ahead / 60)} h` : `${ahead} min`}`);
+  }
+  return bits.join(" · ");
+}
+
+// The layer control, created on first use rather than up front. It used to live
+// inside the hazards branch, so on a clear day there was no control at all and
+// the flight category toggle had nowhere to go - which is exactly the day you
+// most want to tick it and confirm the whole region is green. Building it
+// eagerly instead is the other failure: Leaflet's control does not hide itself
+// when it holds nothing, so a clear day whose station fetch also failed got an
+// empty panel in the corner.
+function addRadarOverlay(layer, name) {
+  if (!RADAR.map) return;
+  if (!RADAR.layerControl) {
+    RADAR.layerControl = L.control.layers(null, {}, { collapsed: false, position: "topright" })
+      .addTo(RADAR.map);
+  }
+  RADAR.layerControl.addOverlay(layer, name);
+}
+
+async function loadFlightCategory(pts, etdUtc) {
+  if (!RADAR.map || !pts.length || !pts[0].ident) return;
+  // The map this request belongs to. `destroyRadar` builds a new one per
+  // assessment, so identity is what tells "still the same flight" from "the
+  // pilot has already asked about another one".
+  const map = RADAR.map;
+  const params = new URLSearchParams({ dep: pts[0].ident });
+  // A circuit is one aerodrome and no track; the endpoint takes `dep` alone.
+  if (pts.length > 1 && pts[1] && pts[1].ident && pts[1].ident !== pts[0].ident) {
+    params.set("dest", pts[1].ident);
+  }
+  let data;
+  try {
+    data = await fetch(`/api/flight_category?${params}`).then((r) => r.json());
+  } catch (_) { return; }
+  // The pilot can run another assessment while this is in flight, which tears
+  // the map down underneath it. Adding a layer to a destroyed map throws, and
+  // adding it to the *replacement* map is worse - it draws one route's stations
+  // over another route's flight and appends a legend describing neither.
+  if (RADAR.map !== map) return;
+  const gj = data && data.geojson;
+  if (!gj || !(gj.features || []).length) return;
+
+  const layer = flightCategoryLayer(gj);
+  RADAR.stations = layer;
+  addRadarOverlay(layer, FLIGHT_CATEGORY_OVERLAY);
+  if (flightCategoryOn()) layer.addTo(RADAR.map);
+  const legend = $("#radar-legend");
+  if (legend) legend.insertAdjacentHTML("beforeend", flightCategoryLegend(gj, data, etdUtc));
+}
 
 // Relevant areas are drawn solid; the ones that were set aside stay on the map,
 // dashed. Seeing a line of convective SIGMETs sitting just north of track is
@@ -1163,9 +1326,11 @@ function hazardLegend(gj) {
   // A lone dot needs saying: it is one aircraft's report, not a forecast area.
   const dots = (gj.features || []).some((f) => f.geometry && f.geometry.type === "Point")
     ? `<span class="hz-key hz-key-dot"><i></i>PIREP (one aircraft's report)</span>` : "";
-  return `<div class="hz-legend">${seen.map((s) =>
+  // Keys only - `#radar-legend` is the shared container, because the flight
+  // category keys append into it once their fetch lands.
+  return `${seen.map((s) =>
     `<span class="hz-key"><i style="background:${s.color}"></i>${escapeHtml(s.label)}</span>`).join("")}
-    <span class="hz-key hz-key-dash"><i></i>not on your route</span>${dots}</div>`;
+    <span class="hz-key hz-key-dash"><i></i>not on your route</span>${dots}`;
 }
 
 function parseISODurationMin(s) {
@@ -1196,7 +1361,8 @@ function destroyRadar() {
   stopRadar();
   if (RADAR.map) { try { RADAR.map.remove(); } catch (_) {} }
   RADAR = { map: null, wms: null, frames: [], idx: 0, layer: RADAR.layer || "RADAR_1KM_RRAI",
-            timer: null, routeView: null, hazardView: null };
+            timer: null, routeView: null, hazardView: null,
+            layerControl: null, stations: null, pirepLayer: null };
 }
 
 // The map takes a list of aerodromes rather than a route result, because a
@@ -1229,7 +1395,7 @@ async function loadRadar(r, stops) {
       </div>
     </div>
     <div id="radar-map" class="radar-map"></div>
-    ${hazardsGeo ? hazardLegend(hazardsGeo) : ""}
+    <div class="hz-legend" id="radar-legend">${hazardsGeo ? hazardLegend(hazardsGeo) : ""}</div>
     <div class="radar-controls">
       <button id="radar-play" class="radar-play" title="Play / pause">▶</button>
       <input type="range" id="radar-slider" min="0" max="0" value="0" />
@@ -1256,14 +1422,21 @@ async function loadRadar(r, stops) {
     L.polyline(pts.map((p) => [p.lat, p.lon]),
       { color: "#e8eef7", weight: 2, opacity: 0.8, dashArray: "6 4" }).addTo(RADAR.map);
   }
+  RADAR.map.on("overlayadd overlayremove", (e) => {
+    if (e.name !== FLIGHT_CATEGORY_OVERLAY) return;
+    setFlightCategoryOn(e.type === "overlayadd");
+    // The stations arrive after the PIREPs and are added on top of them. One
+    // aircraft's report of moderate icing must not end up underneath a dot
+    // saying the field below it is VFR.
+    if (e.type === "overlayadd" && RADAR.pirepLayer) RADAR.pirepLayer.bringToFront();
+  });
   if (hazardsGeo) {
     const layers = hazardLayers(hazardsGeo);
     layers.areas.addTo(RADAR.map);
     layers.pireps.addTo(RADAR.map);
-    L.control.layers(null, {
-      "SIGMET / AIRMET areas": layers.areas,
-      "PIREPs": layers.pireps,
-    }, { collapsed: false, position: "topright" }).addTo(RADAR.map);
+    RADAR.pirepLayer = layers.pireps;
+    addRadarOverlay(layers.areas, "SIGMET / AIRMET areas");
+    addRadarOverlay(layers.pireps, "PIREPs");
     // Show the route first, then widen far enough to keep the PIREPs in frame.
     // The route bounds alone left a report 40 nm off track drawn but off-screen,
     // which is the same as not drawing it. PIREPs are capped at
@@ -1298,6 +1471,12 @@ async function loadRadar(r, stops) {
     }
   }
   setTimeout(() => RADAR.map && RADAR.map.invalidateSize(), 150);
+
+  // Not awaited: the map is already drawn and useful, and the dots land when
+  // they land - the same way the radar frames do. Stations deliberately get no
+  // vote on `RADAR.routeView` either; they span the whole 150 nm box, and
+  // letting them widen the framing would zoom the route down to nothing.
+  loadFlightCategory(pts, (r.window || {}).etd_utc);
 
   $$("#route-radar .radar-type").forEach((b) => b.addEventListener("click", () => {
     RADAR.layer = b.dataset.layer;

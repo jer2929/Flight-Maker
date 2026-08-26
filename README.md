@@ -243,6 +243,69 @@ apply is noise, not honesty. Everything kept is also drawn on the route map:
 solid polygons for the ones that apply, dashed and faint for the near misses,
 PIREPs as points, each with its full text on tap.
 
+### Flight category
+The same map carries a **flight category** layer: every aerodrome reporting a
+METAR near the route, drawn as one dot in the standard scheme - **green VFR,
+blue marginal VFR, red IFR, purple low IFR**. Ceiling and visibility otherwise
+exist in this app as two numbers on two endpoint cards, which answers what it is
+like where you are leaving from and nothing else. The question you actually ask a
+weather map first is *where is the good air and where is the bad*, and that is a
+shape - the edge of a marginal area north of track, and which way it is leaning -
+not a pair of readings.
+
+The thresholds are the usual ones, with the **worse of the two axes winning**, so
+a 5,000 ft ceiling never makes 2 sm of visibility flyable:
+
+| | Ceiling | Visibility |
+|---|---|---|
+| **VFR** | above 3,000 ft | more than 5 sm |
+| **Marginal VFR** | 1,000-3,000 ft | 3-5 sm |
+| **IFR** | 500 to under 1,000 ft | 1 to under 3 sm |
+| **Low IFR** | below 500 ft | below 1 sm |
+
+**No ceiling reported is unlimited, not unknown.** `SKC`, `CLR`, or nothing above
+a `SCT` layer means there is no ceiling because there is no ceiling - a positive
+statement about the sky - so the category falls to visibility alone. Only `BKN`,
+`OVC` and `VV` make a ceiling, which is why `SCT002 OVC008` is an eight-hundred
+foot field and not a two-hundred foot one.
+
+**A report that can't be read is grey, not absent.** A station dropped for being
+unparseable leaves empty map, and empty map reads as *nothing here* when the
+truth is *something here we couldn't decode*. The only station dropped outright
+is one that can't be placed at all - a dot with no position is not a dot. And a
+report **older than 90 minutes is drawn faded**: an observation describes the
+half hour around it, and at two hours old it is describing air that has moved on.
+
+**How far out it reaches: 150 nm past the route's own bounding box** - the same
+distance the advisories already use for "far enough off track to still be worth
+showing you". It is also the right number to look at. The map opens framed on
+your route, which is two to four hundred miles across, so a 150 nm pad fills the
+view and a little beyond rather than stopping in a hard rectangle edge
+mid-screen. The advisories' 25 nm corridor would draw a narrow ribbon of dots on
+an otherwise empty map, which loses the point entirely: you read a category map
+to see the *edge* of the bad air, not the six dots on your own track. It pads a
+rectangle rather than a corridor for the same reason - a corridor renders with
+visibly shaved corners, and a missing dot reads as "no station" instead of "not
+fetched". Each dot still says how far off track it is when you tap it.
+
+**They are observations, not a forecast, and the legend says so.** Everything
+else on the card is assessed for the window you actually fly; these dots are the
+sky right now, because that is what a METAR is. On a flight leaving in three
+hours those are two different statements, so the legend prints *"observations,
+not a forecast - newest 1800Z - your ETD is +3 h"* rather than leaving you to
+assume one or the other.
+
+**Nothing here gates anything.** The verdict is still the evaluator's, run
+against *your* minimums at *your* ETD. A flight category is a national
+convention with fixed thresholds and knows nothing about you: a 1,500 ft
+marginal-VFR ceiling is an ordinary day for one pilot and a hard NO-GO for
+another. This layer is a picture, and only a picture.
+
+The toggle sits in the map's layer control with the advisories, is **on by
+default**, and remembers being turned off. The stations load after the map is
+already drawn - the map does not wait for them - and if the feed is down you
+lose the dots and keep the radar, the hazards and the course line.
+
 **Circuits get the same picture, scoped to one point.** The circuits card used to
 print *"Weather (TAF + SIGMET/AIRMET/PIREP + model)"* over a card that fetched
 none of the three, so a SIGMET sitting over the field rendered as the same empty

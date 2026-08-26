@@ -66,6 +66,29 @@ class Settings(BaseSettings):
     # has already passed that one.
     pirep_tops_max_age_hr: int = 2
 
+    # Flight category map layer (VFR / MVFR / IFR / LIFR dots per station).
+    #
+    # How far past the route's own bounding box to ask for stations. The same
+    # 150 nm ``area_hazards.NEARBY_NM`` already uses for "far enough off track
+    # to still be worth showing you", and the right number visually too: the map
+    # opens at ``fitBounds(view, {maxZoom: 8})``, which frames roughly 200-400 nm
+    # across, so this fills the view and a little beyond rather than ending in a
+    # hard rectangle edge mid-screen. The PIREP corridor's 50 nm would draw a
+    # narrow band of dots on an otherwise empty map, which loses the whole point
+    # of the layer: you read a category map to see the *edge* of the bad air and
+    # which way it is leaning, not the six dots on your own track.
+    #
+    # This pads a rectangle, not a corridor - see ``flight_category.bbox_for``.
+    flight_category_corridor_nm: float = 150.0
+    # Past this, a dot is drawn faded. An observation is a statement about the
+    # half hour around it; at two hours old it is describing air that has moved
+    # on, and saying so quietly is better than either hiding it or letting it
+    # look as current as the station next door.
+    flight_category_max_age_min: int = 90
+    # Ceiling on the box we will ask an upstream for. Without it a
+    # transcontinental route pads out to most of a hemisphere.
+    flight_category_max_span_deg: float = 30.0
+
     # Route timeline horizon (hours)
     timeline_hours: int = 48
 
