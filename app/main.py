@@ -31,6 +31,8 @@ from app.services.geo import flight_time_hr, haversine_nm
 from app.services.evaluator import THREAT_LABELS
 from app.sources import _http, airports as ap
 
+_EMPTY_FC = {"type": "FeatureCollection", "features": []}
+
 
 def _load_datasets() -> None:
     """Parse the airport/runway/station tables into memory.
@@ -367,6 +369,43 @@ async def radar_times(layer: str = Query(default="RADAR_1KM_RRAI")):
     if not result:
         return JSONResponse({"error": "no time dimension"})
     return JSONResponse(result)
+
+
+@app.get("/api/flight_category")
+async def flight_category(dep: str = Query(...), dest: str = Query(default=None)):
+    """VFR / MVFR / IFR / LIFR per reporting station, as GeoJSON for the map.
+
+    ``dep`` alone is a circuits flight - one aerodrome, no track - and ``dep`` +
+    ``dest`` is a route, so one endpoint serves both maps. Loaded lazily by the
+    map rather than ridden along on the route payload: it is a hundred-odd
+    stations the assessment itself has no use for, and the map should draw
+    before it arrives.
+
+    Degrades like ``/api/gfa`` - an upstream failure returns 200 with an
+    ``error`` and an empty collection, so a dead feed costs the dots and leaves
+    the radar, hazards and course line exactly as they were.
+    """
+    from app.services import flight_category as fc
+    from app.services import geometry
+
+    a = ap.get_airport(dep)
+    if a is None:
+        return JSONResponse({"error": "unknown departure",
+                             "geojson": _EMPTY_FC}, status_code=404)
+    b = ap.get_airport(dest) if dest else None
+    if dest and b is None:
+        return JSONResponse({"error": "unknown destination",
+                             "geojson": _EMPTY_FC}, status_code=404)
+
+    s = get_settings()
+    path = (geometry.route_path((a.lat, a.lon), (b.lat, b.lon),
+                                s.hazard_route_sample_nm)
+            if b else [(a.lat, a.lon)])
+    try:
+        stations, meta = await fc.collect(path)
+    except Exception as e:
+        return JSONResponse({"error": str(e), "geojson": _EMPTY_FC})
+    return JSONResponse({"geojson": fc.to_feature_collection(stations), **meta})
 
 
 @app.get("/api/suggest")

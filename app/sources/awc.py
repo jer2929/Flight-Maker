@@ -127,6 +127,32 @@ def _bbox_radius_nm(bbox: tuple[float, float, float, float]) -> float:
     return haversine_nm(min_lat, min_lon, max_lat, max_lon) / 2.0 + 25.0
 
 
+async def metars_in_bbox(bbox: tuple[float, float, float, float],
+                         idents_fallback: list[str] | None = None) -> list[dict]:
+    """Every station's latest METAR inside ``bbox``, for the flight-category map.
+
+    One request for the whole box rather than one per aerodrome: the map draws a
+    hundred-odd stations, and asking for them by name would be a hundred-odd
+    idents in a URL to answer a question the upstream already filters spatially.
+
+    Worth the same two request shapes ``pireps`` needs, and for the same reason.
+    ``bbox`` is the documented spatial filter and is tried first; some
+    deployments of this endpoint reject it, and rather than lose the layer
+    entirely, fall back to naming the stations - which our own table can list
+    for any box. Rows from the ids form carry no coordinates, which is why
+    ``services.flight_category._row_position`` can place a station from the
+    station table as well as from the row.
+    """
+    box = ",".join(f"{v:.3f}" for v in bbox)
+    try:
+        return await _area("metar", {"format": "json", "bbox": box})
+    except Exception:
+        if not idents_fallback:
+            raise
+    return await _area("metar", {"format": "json",
+                                 "ids": ",".join(sorted(idents_fallback))})
+
+
 async def metar_history(idents: list[str], hours: int = 6) -> dict[str, list[str]]:
     """Recent raw METARs per ident, newest first."""
     idents = [i.upper() for i in idents]

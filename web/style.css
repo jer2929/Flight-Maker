@@ -1077,6 +1077,17 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .hz-key i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; opacity: .75; }
 .hz-key-dash i { background: transparent; border: 1px dashed var(--muted); }
 .hz-key-dot i { background: var(--muted); border-radius: 50%; }
+/* The legend container is now always in the markup, because the flight category
+   keys append into it once their fetch lands - so it has to collapse when a
+   clear day leaves it with nothing to say. */
+.hz-legend:empty { display: none; }
+/* "observations, not a forecast - newest 1800Z". Not a key, so no swatch. */
+.hz-key-note { font-style: italic; opacity: .85; }
+/* The category chip in a station popup. Geometry only: it is painted over its
+   own category colour, which is one of the theme-independent map hexes, so both
+   its background and its text colour are set inline where those live. */
+.fc-tag { display: inline-block; padding: 1px 6px; border-radius: var(--r-sm);
+  font-size: .68rem; font-weight: 600; letter-spacing: .02em; }
 .hz-pop pre { margin: 6px 0; padding: 6px; max-height: 180px; overflow: auto;
   white-space: pre-wrap; word-break: break-word; font-size: .72rem;
   background: var(--well-strong); border-radius: var(--r-sm); }
