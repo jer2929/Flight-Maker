@@ -62,9 +62,8 @@ from app.services.evaluator import (
     threat_weight,
 )
 from app.services.geo import (
-    along_track_nm,
+    along_and_cross_nm,
     compass,
-    cross_track_nm,
     flight_time_hr,
     haversine_nm,
     initial_bearing_true,
@@ -1005,10 +1004,12 @@ def _corridor_airports(dep: Airport, dest: Airport,
         # the trig below is far more expensive than four comparisons.
         if not (lat_lo <= a.lat <= lat_hi and lon_lo <= a.lon <= lon_hi):
             continue
-        xtd = cross_track_nm(dep.lat, dep.lon, dest.lat, dest.lon, a.lat, a.lon)
+        # Both from one great-circle solution rather than two. The cross-track
+        # reject still runs first; the along-track value it now has in hand is
+        # an atan2 over terms already computed.
+        atd, xtd = along_and_cross_nm(dep.lat, dep.lon, dest.lat, dest.lon, a.lat, a.lon)
         if abs(xtd) > ENROUTE_CORRIDOR_NM:
             continue
-        atd = along_track_nm(dep.lat, dep.lon, dest.lat, dest.lon, a.lat, a.lon)
         if not (0 < atd < distance_nm):
             continue
         hits.append((a, atd, xtd))
