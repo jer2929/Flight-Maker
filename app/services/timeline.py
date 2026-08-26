@@ -76,10 +76,14 @@ def _model_conditions(fc: dict, i: int) -> dict:
     # instead, so they can tell "clear" from "nothing sampled" - and this is the
     # path every endpoint card's weather goes through, so it was throwing that
     # distinction away one hop from where it was derived.
-    stack = openmeteo.cloud_stack(hourly, i, elev)
+    # One walk of the pressure levels for both derivations - see
+    # ``openmeteo.profile``. This runs once per hour per endpoint, 48 hours at a
+    # time, so the shared profile is the difference between one walk and two.
+    prof = openmeteo.profile(hourly, i, elev)
+    stack = openmeteo.cloud_stack(hourly, i, elev, prof=prof)
     stack_sky = sky.from_stack(stack)
     if ceiling is None:  # GEM has no cloud_base - infer from saturated layers
-        ceiling = openmeteo.derive_ceiling_ft(hourly, i, elev)
+        ceiling = openmeteo.derive_ceiling_ft(hourly, i, elev, prof=prof)
     else:
         # ``cloud_base`` answered where the pressure levels may not have. It is
         # the ceiling this hour is gated on, so the stack has to carry it.
@@ -200,8 +204,6 @@ def _endpoint_hour(fc: dict, taf_segs: list[dict], i: int,
     merged, taf_used = _merge_model_taf(_model_conditions(fc, i), taf)
     return merged, taf_used, taf
 
-
-endpoint_hour = _endpoint_hour  # public alias for reuse by the orchestrator
 
 
 def endpoint_hour_sourced(fc: dict, taf_segs: list[dict], i: int,
@@ -587,7 +589,8 @@ def etd_nudge(timeline: list[HourCondition], etd_utc: datetime, flight_time_hr: 
     _, j, hours = best
     target = timeline[j]
     # What stops applying at the suggested time, in the strip's own words.
-    gone = [r for r in timeline[idx].reasons if r not in set(target.reasons)]
+    still = set(target.reasons)
+    gone = [r for r in timeline[idx].reasons if r not in still]
     return EtdSuggestion(
         etd_utc=target.time,
         delta_min=round((stamps[j] - etd_utc).total_seconds() / 60),

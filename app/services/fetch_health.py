@@ -104,7 +104,3 @@ def detail(name: str | None) -> None:
     if details is not None:
         details.append(name)
 
-
-def failures() -> list[str]:
-    """The failures recorded so far in this request (for in-flight decisions)."""
-    return list(_failures.get() or [])

@@ -83,6 +83,11 @@ PRESSURE_TOPS_LEVELS_FT: dict[str, float] = {
 PRESSURE_SCAN_LEVELS_FT: dict[str, float] = {
     **PRESSURE_CLOUD_LEVELS_FT, **PRESSURE_TOPS_LEVELS_FT,
 }
+# The scan order, lowest first. Derived once: ``profile`` runs thousands of
+# times per discovery scan and re-sorting a module constant on every call is
+# pure waste.
+PRESSURE_SCAN_ORDER: tuple[str, ...] = tuple(
+    sorted(PRESSURE_SCAN_LEVELS_FT, key=lambda k: PRESSURE_SCAN_LEVELS_FT[k]))
 
 HPA_TO_INHG = 0.02952998    # Open-Meteo serves pressure in hPa; altimeters read inHg
 
@@ -402,7 +407,7 @@ def _level_msl_ft(hourly: dict, lvl: str, i: int) -> float:
     return PRESSURE_SCAN_LEVELS_FT[lvl]
 
 
-def _profile(hourly: dict, i: int, elevation_ft: float | None) -> list[dict]:
+def profile(hourly: dict, i: int, elevation_ft: float | None) -> list[dict]:
     """Every scan level's height and cloud amount at one hour, lowest first.
 
     The single walk the three cloud derivations share. ``lowest_layer`` wants the
@@ -417,6 +422,11 @@ def _profile(hourly: dict, i: int, elevation_ft: float | None) -> list[dict]:
     unknown), ``cover_pct`` and ``from_rh``. A level the model does not serve at
     all is absent rather than zero - unserved is unknown, never clear.
 
+    Callers deriving more than one answer about the same hour should build the
+    profile once and hand it to each of ``lowest_layer``, ``deck_top`` and
+    ``cloud_stack`` as ``prof``. That is not only cheaper - it is the standing
+    rule above made mechanical: three questions, provably one sky.
+
     ``from_rh`` marks a level whose cover came from the saturation fallback:
     relative humidity mapped onto the cover scale so it crosses at exactly
     ``CLOUD_RH_PCT`` == ``BKN_COVER_PCT`` and the interpolations do not have to
@@ -425,7 +435,7 @@ def _profile(hourly: dict, i: int, elevation_ft: float | None) -> list[dict]:
     thinner amounts must skip these levels rather than believe the mapped number.
     """
     out: list[dict] = []
-    for lvl in sorted(PRESSURE_SCAN_LEVELS_FT, key=lambda k: PRESSURE_SCAN_LEVELS_FT[k]):
+    for lvl in PRESSURE_SCAN_ORDER:
         msl_ft = _level_msl_ft(hourly, lvl, i)
         cover = _at(hourly, f"cloud_cover_{lvl}", i)
         from_rh = False
@@ -442,7 +452,8 @@ def _profile(hourly: dict, i: int, elevation_ft: float | None) -> list[dict]:
     return out
 
 
-def lowest_layer(hourly: dict, i: int, elevation_ft: float | None) -> dict:
+def lowest_layer(hourly: dict, i: int, elevation_ft: float | None,
+                 prof: list[dict] | None = None) -> dict:
     """The lowest significant cloud layer at one hour, with its provenance.
 
     Used when the model has no ``cloud_base`` (e.g. GEM). A ceiling is the lowest
@@ -474,7 +485,7 @@ def lowest_layer(hourly: dict, i: int, elevation_ft: float | None) -> dict:
     prev_agl: float | None = None      # last level below the threshold
     prev_cover: float | None = None
 
-    for lyr in _profile(hourly, i, elevation_ft):
+    for lyr in (profile(hourly, i, elevation_ft) if prof is None else prof):
         agl, cover = lyr["agl_ft"], lyr["cover_pct"]
         out["sampled"] = True
         if agl > 100:
@@ -515,14 +526,15 @@ def lowest_layer(hourly: dict, i: int, elevation_ft: float | None) -> dict:
     return out
 
 
-def deck_top(hourly: dict, i: int, elevation_ft: float | None = None) -> dict:
+def deck_top(hourly: dict, i: int, elevation_ft: float | None = None,
+             prof: list[dict] | None = None) -> dict:
     """The TOP of the cloud at one hour, with its provenance.
 
     The structural mirror of :func:`lowest_layer`. That function walks the pressure
     levels low->high looking for the first level at or above ``BKN_COVER_PCT`` and
     interpolates the *base* on the way up through the threshold; this one keeps
     walking and interpolates the *top* on the way back down through it. Same
-    levels, same ``_profile``, same saturation fallback - so a ceiling and a
+    levels, same ``profile``, same saturation fallback - so a ceiling and a
     top can never be derived from two different pictures of the same sky.
 
     Everything here is **MSL**, deliberately, and every field name says so. A
@@ -568,7 +580,7 @@ def deck_top(hourly: dict, i: int, elevation_ft: float | None = None) -> dict:
     # "Below the field" the same way ``lowest_layer`` means it (its ``agl > 100``).
     floor = (elevation_ft + 100.0) if elevation_ft is not None else None
 
-    for lyr in _profile(hourly, i, elevation_ft):
+    for lyr in (profile(hourly, i, elevation_ft) if prof is None else prof):
         msl, cover, from_rh = lyr["msl_ft"], lyr["cover_pct"], lyr["from_rh"]
 
         out["sampled"] = True
@@ -616,14 +628,15 @@ def deck_top(hourly: dict, i: int, elevation_ft: float | None = None) -> dict:
     return out
 
 
-def cloud_stack(hourly: dict, i: int, elevation_ft: float | None) -> dict:
+def cloud_stack(hourly: dict, i: int, elevation_ft: float | None,
+                prof: list[dict] | None = None) -> dict:
     """Every cloud layer at one hour, lowest first - the sky as it would be reported.
 
     :func:`lowest_layer` answers "is there a ceiling" and :func:`deck_top` answers
     "what is on top of it". Neither answers the question a pilot actually asks
     first, which is *what is the sky doing* - and the difference between "clear",
     "scattered at 4,000" and "nothing came back" is the difference between three
-    flights. Same walk (``_profile``), same thresholds, same interpolation, so the
+    flights. Same walk (``profile``), same thresholds, same interpolation, so the
     stack printed on the card and the ceiling the verdict gates on are the same
     cloud.
 
@@ -650,7 +663,7 @@ def cloud_stack(hourly: dict, i: int, elevation_ft: float | None) -> dict:
     if elevation_ft is None:
         return out
 
-    prof = _profile(hourly, i, elevation_ft)
+    prof = profile(hourly, i, elevation_ft) if prof is None else prof
     if not prof:
         return out
     out["sampled"] = True
@@ -731,14 +744,15 @@ def _cross(prof: list[dict], outside: int | None, inside: int, thresh: float) ->
     return other["agl_ft"] + frac * (here["agl_ft"] - other["agl_ft"])
 
 
-def derive_ceiling_ft(hourly: dict, i: int, elevation_ft: float | None) -> float | None:
+def derive_ceiling_ft(hourly: dict, i: int, elevation_ft: float | None,
+                      prof: list[dict] | None = None) -> float | None:
     """Ceiling (ft AGL) from the lowest broken+ layer, or None.
 
     Thin wrapper over :func:`lowest_layer` for callers that only want the number.
     Callers that render text to a pilot should use ``lowest_layer`` instead, so
     they can distinguish "clear" from "nothing sampled".
     """
-    return lowest_layer(hourly, i, elevation_ft)["ceiling_ft"]
+    return lowest_layer(hourly, i, elevation_ft, prof=prof)["ceiling_ft"]
 
 
 # ---------------------------------------------------------------------------

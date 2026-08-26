@@ -238,8 +238,14 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
 
     elevation_ft = openmeteo.field_elevation_ft(fc)
     ceiling = openmeteo.cloud_base_to_ceiling_ft(at("cloud_base"))
-    layer = openmeteo.lowest_layer(hourly, i, elevation_ft)
-    tops = openmeteo.deck_top(hourly, i, elevation_ft)
+    # One walk of the pressure levels, shared by all three derivations below.
+    # ``openmeteo.profile``'s standing rule is that the base, the top and the
+    # printed stack can never come from two different pictures of the sky;
+    # building it here makes that mechanical rather than a promise, and saves
+    # rebuilding the same profile three times for every point sampled.
+    prof = openmeteo.profile(hourly, i, elevation_ft)
+    layer = openmeteo.lowest_layer(hourly, i, elevation_ft, prof=prof)
+    tops = openmeteo.deck_top(hourly, i, elevation_ft, prof=prof)
     if ceiling is None:  # GEM lacks cloud_base -> infer from the pressure levels
         ceiling = layer["ceiling_ft"]
     # Whether this point produced a usable reading at all. A failed fetch and a
@@ -256,7 +262,8 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
         # kept whole so the route can report what the sky is doing and not only
         # whether it broke a limit.
         "sky": sky_svc.with_ceiling(
-            sky_svc.from_stack(openmeteo.cloud_stack(hourly, i, elevation_ft)), ceiling),
+            sky_svc.from_stack(
+                openmeteo.cloud_stack(hourly, i, elevation_ft, prof=prof)), ceiling),
         "sct_base_ft": layer["sct_base_ft"],
         "max_cover_pct": layer["max_cover_pct"],
         "scan_top_ft": layer["scan_top_ft"],
@@ -1210,17 +1217,6 @@ def _enroute_candidates(mids: list[tuple[float, float]],
     return out
 
 
-def _station_position(ident: str) -> tuple[float, float] | None:
-    """Where a station is, for PIREPs that report position off one.
-
-    The station table, not the airport table. The airport table is Canada-only
-    by design, so resolving against it meant every US station and every navaid a
-    ``/OV`` field named came back unplaced - and an unplaced PIREP never reaches
-    the map.
-    """
-    return ap.get_station(ident)
-
-
 async def _gather_hazards(sites: list[str], path: list[tuple[float, float]],
                           buffer_nm: float, gairmet_hours: list[int],
                           pirep_age_hr: int) -> list[ah.AreaHazard]:
@@ -1269,8 +1265,14 @@ async def _gather_hazards(sites: list[str], path: list[tuple[float, float]],
         for item in result:
             try:
                 if product.startswith("cfps:"):
+                    # Where a station is, for PIREPs that report position off
+                    # one. The station table, not the airport table: the airport
+                    # table is Canada-only by design, so resolving against it
+                    # meant every US station and every navaid a ``/OV`` field
+                    # named came back unplaced - and an unplaced PIREP never
+                    # reaches the map.
                     haz = ah.from_cfps_item(product.split(":")[1], item, now=now,
-                                            resolve_station=_station_position)
+                                            resolve_station=ap.get_station)
                 else:
                     haz = ah.from_awc_feature(product, item)
             except Exception:
@@ -1717,6 +1719,11 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     point_fcs_job = _safe(openmeteo.forecast_points(
         [(dep.lat, dep.lon), (dest.lat, dest.lon)] + list(mids), days),
         [], fetch_health.HRDPS)
+    # The pad the hazard fetch is scoped by, and the pad the FIR test below
+    # re-derives. They have to be the same number - a narrower pad on the test
+    # would set aside, on its region alone, a bulletin the fetch had already
+    # judged near enough to ask for - so it is one number, not two expressions.
+    _haz_pad_nm = max(settings.hazard_corridor_nm, settings.pirep_corridor_nm)
 
     (metars, tafs, awc_hist, cfps_hist, notams, raw_hazards,
      point_fcs, corridor_fcs) = await asyncio.gather(
@@ -1742,8 +1749,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # aviationweather.gov (international SIGMET, US SIGMET/AIRMET, G-AIRMET,
         # CWA, PIREP) together. Scoped to the route below, once they are all in
         # one shape - the fetch is deliberately wide, the filtering is not.
-        _gather_hazards(all_sites, route_pts,
-                        max(settings.hazard_corridor_nm, settings.pirep_corridor_nm),
+        _gather_hazards(all_sites, route_pts, _haz_pad_nm,
                         _gairmet_hours(etd_utc, eta_prov, now),
                         settings.pirep_max_age_hr),
         # Departure, destination and the midpoints, in one request (see above).
@@ -1926,14 +1932,18 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
             lv.direction_mag = _mag(lv.direction_true, dep.lat, dep.lon)
         return rec
 
+    # The departure half of both tops rolls-ups below. Unlike the destination
+    # half - which is genuinely read twice, at ``eta_prov`` and then at the
+    # wind-corrected ``eta_utc`` - the departure is read at the ETD both times,
+    # so it is the same dict either way.
+    dep_tops_pt = {"ceiling_ft": dep_a.weather.ceiling_agl_ft, **_tops_at(dep_fc, etd_utc)}
     # Tops for the first pick, from the provisional destination - the same
     # two-pass shape the ceiling gate above uses, and for the same reason: the
     # altitude decides the ETA, and the ETA decides which forecast hour the
     # destination is read at. The finished figure is recomputed below once the
     # destination card exists, and the pick is re-run if it moved.
     prov_tops = _route_tops(
-        [({"ceiling_ft": dep_a.weather.ceiling_agl_ft, **_tops_at(dep_fc, etd_utc)},
-          "departure")]
+        [(dep_tops_pt, "departure")]
         + [(e, "enroute") for e in enroute]
         + [({"ceiling_ft": dest_ws_prov.ceiling_agl_ft, **_tops_at(dest_fc, eta_prov)},
             "destination")])
@@ -2003,8 +2013,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # TAF never reports a cloud top, so there is nothing to merge in and
     # ``_merge_enroute_report`` deliberately says nothing about tops either.
     route_tops = _route_tops(
-        [({"ceiling_ft": dep_a.weather.ceiling_agl_ft, **_tops_at(dep_fc, etd_utc)},
-          point_labels[0])]
+        [(dep_tops_pt, point_labels[0])]
         + [(e, lbl) for e, lbl in zip(enroute, point_labels[1:-1])]
         + [({"ceiling_ft": dest_a.weather.ceiling_agl_ft, **_tops_at(dest_fc, eta_utc)},
             point_labels[-1])])
@@ -2119,8 +2128,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # would set aside, on its region alone, a bulletin the fetch had already
     # judged near enough to ask for - and this test only ever runs on the ones
     # with no shape to judge them by.
-    known_firs = firs.firs_for_path(
-        route_pts, max(settings.hazard_corridor_nm, settings.pirep_corridor_nm))
+    known_firs = firs.firs_for_path(route_pts, _haz_pad_nm)
     relevant_haz, aside_haz = ah.filter_relevant(
         raw_hazards, path=route_pts, buffer_nm=settings.hazard_corridor_nm,
         low_ft=haz_low_ft, high_ft=haz_high_ft, etd=etd_utc, eta=eta_utc,
@@ -2596,8 +2604,11 @@ async def suggest(
         # below is estimated at a level the flight could plausibly use. The gate
         # the pilot is shown is rebuilt from the finished card further down; this
         # provisional one never reaches the card.
-        cand_ceiling = (_point_at(cand_fc, None if is_now else cand_eta).get("ceiling_ft")
-                        if cand_fc else None)
+        # One sample of the candidate's forecast, read twice: the provisional
+        # gate below wants only the ceiling, the tops pick wants the whole point.
+        # ``_point_at`` is the heaviest pure function here, so it runs once.
+        cand_pt = _point_at(cand_fc, None if is_now else cand_eta) if cand_fc else {}
+        cand_ceiling = cand_pt.get("ceiling_ft")
         # Carried with the aerodrome it came from: the gate spans both ends, and
         # a deck the pilot is told about has to say where it is.
         prov_ceiling, _prov_at = _lowest_deck(
@@ -2605,7 +2616,6 @@ async def suggest(
         # Tops across both ends, the same "highest wins" the route card uses: to
         # be on top you have to clear the higher of them. A card whose tops are
         # unknown at either end passes None and keeps the wind-only pick.
-        cand_pt = _point_at(cand_fc, None if is_now else cand_eta) if cand_fc else {}
         cand_tops = _card_tops(origin_tops, cand_pt, cand_ceiling, origin_ceiling)
         alt = recommend_altitude(
             levels_now, bearing, cruise_kt,

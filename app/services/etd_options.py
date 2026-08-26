@@ -209,7 +209,10 @@ def wait_options(timeline: list[HourCondition], etd_utc: datetime,
             continue
         if _worse_anywhere(base, cand, cfg):
             continue
-        if _run_from(timeline, j, cand.verdict, daylight_only) < need:
+        # Walks the tail of the strip; the accepted hour reports the same
+        # number below, so it is measured once.
+        run_hr = _run_from(timeline, j, cand.verdict, daylight_only)
+        if run_hr < need:
             continue
         improvements = [imp for imp in (
             _tailwind(base, cand, cfg),
@@ -223,7 +226,7 @@ def wait_options(timeline: list[HourCondition], etd_utc: datetime,
             etd_utc=cand.time,
             delta_min=round((stamps[j] - etd_utc).total_seconds() / 60),
             verdict=cand.verdict, advisory=True,
-            hours_available=_run_from(timeline, j, cand.verdict, daylight_only),
+            hours_available=run_hr,
             improvements=improvements))
 
     # Most improvements first, then soonest - a pilot would rather wait one hour

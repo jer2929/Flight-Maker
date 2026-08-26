@@ -704,6 +704,33 @@ def threat_verdict(threat_count: int) -> Verdict:
     return Verdict(rule[str(min(threat_count, 3))])
 
 
+def _decision(
+    weather: WeatherSummary,
+    best_runway: RunwayWind | None,
+    mode: str,
+    manual_threats: list[str] | None = None,
+    extra_checks: list[LimitCheck] | None = None,
+    ceiling_mode: str = "xc",
+    flight_rules: str = "vfr",
+) -> tuple[Verdict, list[LimitCheck], list[ThreatCheck], int, set[str]]:
+    """:func:`decision` plus the raw threat set it derived.
+
+    ``evaluate`` wants the set to name the threats in its reason line, and used
+    to call ``derive_threats`` a second time to get it - three ``get_limits()``
+    reads and two more config lookups, once per timeline hour, 48 hours per
+    route. The public 4-tuple is what every other caller (and every test)
+    unpacks, so the extra element lives here rather than on that signature.
+    """
+    checks = conditions_checks(weather, best_runway, mode, ceiling_mode=ceiling_mode, flight_rules=flight_rules) + (extra_checks or [])
+    present = derive_threats(weather, manual_threats, flight_rules=flight_rules)
+    tchecks = threat_check_list(present, flight_rules=flight_rules)
+    weighted = threat_weight(present)
+
+    verdict = _worse(checks_verdict(checks), threat_verdict(weighted))
+    # Return the weighted count so the result label matches the verdict.
+    return verdict, checks, tchecks, weighted, present
+
+
 def decision(
     weather: WeatherSummary,
     best_runway: RunwayWind | None,
@@ -715,13 +742,9 @@ def decision(
 ) -> tuple[Verdict, list[LimitCheck], list[ThreatCheck], int]:
     """Structured decision. ``extra_checks`` lets the route add weather-hazard
     rows (icing/turbulence/etc.) computed elsewhere."""
-    checks = conditions_checks(weather, best_runway, mode, ceiling_mode=ceiling_mode, flight_rules=flight_rules) + (extra_checks or [])
-    present = derive_threats(weather, manual_threats, flight_rules=flight_rules)
-    tchecks = threat_check_list(present, flight_rules=flight_rules)
-    weighted = threat_weight(present)
-
-    verdict = _worse(checks_verdict(checks), threat_verdict(weighted))
-    # Return the weighted count so the result label matches the verdict.
+    verdict, checks, tchecks, weighted, _present = _decision(
+        weather, best_runway, mode, manual_threats, extra_checks,
+        ceiling_mode=ceiling_mode, flight_rules=flight_rules)
     return verdict, checks, tchecks, weighted
 
 
@@ -733,11 +756,10 @@ def evaluate(
     flight_rules: str = "vfr",
 ) -> tuple[Verdict, list[str], int]:
     """Legacy tuple form used by the timeline: (verdict, reasons, count)."""
-    verdict, checks, _t, count = decision(
+    verdict, checks, _t, count, present = _decision(
         weather, best_runway, mode, manual_threats, flight_rules=flight_rules)
     reasons = [f"{c.label} {c.actual_text} (limit {c.limit_text})"
                for c in checks if not c.passed and c.applicable]
-    present = derive_threats(weather, manual_threats, flight_rules=flight_rules)
     if present:
         reasons.append("Threat stack (%d): %s" % (
             count, ", ".join(THREAT_LABELS.get(t, t) for t in sorted(present))))

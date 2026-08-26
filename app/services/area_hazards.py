@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import cached_property
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Optional
 
@@ -113,9 +114,23 @@ class AreaHazard:
     drop_reason: Optional[str] = None
     distance_nm: Optional[float] = None
 
-    @property
+    @cached_property
     def band(self) -> tuple[float, float]:
-        """The altitude band, falling back to whatever the text says."""
+        """The altitude band, falling back to whatever the text says.
+
+        Cached because the fallback is the *common* path - CFPS bulletins often
+        carry no structured base/top - and it costs an ``.upper()`` plus up to
+        seven regex searches over the raw product. The band is read once per
+        hazard by ``_drop_reason``, again by ``band_label`` and again by
+        ``to_feature_collection``, over a national feed of a few hundred
+        advisories that ``filter_relevant`` walks twice per route.
+
+        Safe to cache: the three fields it reads (``base_ft``, ``top_ft``,
+        ``text``) are set at construction and never reassigned; the only fields
+        anything mutates afterwards are ``relevant``, ``drop_reason`` and
+        ``distance_nm``. ``dataclasses.replace`` builds a fresh instance, so a
+        copy re-derives rather than inheriting a stale band.
+        """
         if self.base_ft is not None and self.top_ft is not None \
                 and self.top_ft >= self.base_ft:
             return self.base_ft, self.top_ft

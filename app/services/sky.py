@@ -132,9 +132,11 @@ def worst(skies: list[Sky | None]) -> Sky | None:
     # all), the one whose lowest layer sits lowest. ``min`` is stable, so an exact
     # tie keeps the earlier point - the departure end, which is the one a pilot
     # meets first.
-    return min(known, key=lambda s: (rank.get(s.state, 3),
-                                     ceiling_ft(s) if ceiling_ft(s) is not None else 1e9,
-                                     _lowest_base(s)))
+    def _key(s):
+        ceil = ceiling_ft(s)      # scans the layers; once per sky, not twice
+        return (rank.get(s.state, 3), 1e9 if ceil is None else ceil, _lowest_base(s))
+
+    return min(known, key=_key)
 
 
 def describe(sky: Sky | None) -> str:

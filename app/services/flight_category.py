@@ -294,8 +294,13 @@ def _clamp_span(min_lat: float, min_lon: float, max_lat: float, max_lon: float,
             min(90.0, max_lat), min(180.0, max_lon))
 
 
+# The default cap on the *request* form of the ident list. Named so the one
+# caller that slices the uncapped list itself cannot drift from the default.
+DEFAULT_BBOX_LIMIT = 400
+
+
 def idents_in_bbox(bbox: tuple[float, float, float, float],
-                   limit: int | None = 400) -> list[str]:
+                   limit: int | None = DEFAULT_BBOX_LIMIT) -> list[str]:
     """Reporting idents inside ``bbox``, from our own station table.
 
     Two jobs. It builds the ids form of the upstream request - for deployments
@@ -436,8 +441,12 @@ async def collect(path: list[Point],
     box = bbox_for(path, corridor_nm, max_span_deg)
     # Uncapped: this is "who should have reported", and it is diffed against
     # what came back. The cap belongs on the *request*, not on the expectation.
-    expected = set(idents_in_bbox(box, limit=None))
-    rows = await awc.metars_in_bbox(box, idents_in_bbox(box))
+    every = idents_in_bbox(box, limit=None)
+    expected = set(every)
+    # The capped list is a prefix of the uncapped one (``idents_in_bbox`` sorts
+    # by distance from the box centre before slicing), so the widest table in
+    # the app is walked once rather than twice for the same box.
+    rows = await awc.metars_in_bbox(box, every[:DEFAULT_BBOX_LIMIT])
 
     now = datetime.now(timezone.utc)
     parsed = [st for st in (from_row(r, path, now) for r in rows) if st]
