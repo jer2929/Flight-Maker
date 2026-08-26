@@ -9,7 +9,7 @@ noon for a thunderstorm forecast at midnight.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from metar import Metar
@@ -806,7 +806,8 @@ def _by_field(periods: list[dict], eff: dict) -> dict[str, dict]:
     return out
 
 
-def zulu_range(start: datetime, end: datetime) -> str:
+def zulu_range(start: datetime, end: datetime,
+               ref: Optional[datetime] = None) -> str:
     """A Zulu time span as the pilot reads it: ``2000Z-0300Z+1``.
 
     The ``+N`` suffix marks a day rollover. A span routinely runs past midnight
@@ -815,6 +816,20 @@ def zulu_range(start: datetime, end: datetime) -> str:
     calendar days between the two *dates*, so it answers "which day does this
     end on", not "how many hours long is it".
 
+    ``ref`` anchors those counts to a different day - in practice the ETD. A
+    span measured only against *itself* says nothing about which day it falls
+    on, and that was a real misreading: a thunderstorm forecast tomorrow morning
+    printed ``0500Z-0900Z`` beside a ``1245Z-1307Z`` flight window and read as
+    this morning, an hour the pilot had already flown past. Anchored to the ETD
+    the same span reads ``0500Z+1-0900Z+1``. Each endpoint carries its own
+    suffix, so this extends the bare form rather than redefining it: a span that
+    starts today and lands tomorrow is still ``2000Z-0300Z+1``.
+
+    ``+N`` therefore always means "later than the day you are departing", never
+    "earlier". A span that *starts* before ``ref`` falls back to anchoring on
+    itself: a ``-1`` suffix would collide with the ``-`` separating the two
+    times, and ``0500Z-1-0900Z-1`` is not a span anyone can read.
+
     The one range formatter in the codebase. Every span the app prints - the TAF
     groups, the flight window, the out-of-window hazard periods - goes through
     it, so a rollover cannot be marked on one line of a card and missed on the
@@ -822,13 +837,21 @@ def zulu_range(start: datetime, end: datetime) -> str:
     that are HTML-escaped, and one of them lands in a ``title`` attribute where
     a tag would print literally. The client raises the ``+N`` at render time.
     """
-    days = (end.date() - start.date()).days
-    tail = f"+{days}" if days > 0 else ""
+    base = start.date()
+    if ref is not None and ref.date() <= base:
+        base = ref.date()
     z = "%H%MZ"
-    return f"{start.strftime(z)}-{end.strftime(z)}{tail}"
+    return (f"{start.strftime(z)}{_day_tail(start, base)}"
+            f"-{end.strftime(z)}{_day_tail(end, base)}")
 
 
-def period_label(seg: dict) -> str:
+def _day_tail(dt: datetime, base: date) -> str:
+    """The ``+N`` an endpoint carries relative to ``base``; empty on the day."""
+    days = (dt.date() - base).days
+    return f"+{days}" if days > 0 else ""
+
+
+def period_label(seg: dict, ref: Optional[datetime] = None) -> str:
     """A TAF group as the pilot reads it: ``TEMPO 1900Z-2100Z``.
 
     ``MAIN`` is this module's internal name for the opening group - the TAF
@@ -839,8 +862,10 @@ def period_label(seg: dict) -> str:
     The one labeller in the codebase - the route card, the discovery cards and
     the hour-by-hour strip all call it, so the same group cannot be described
     two different ways on one page. The times themselves come from
-    :func:`zulu_range`, which every other span in the app shares.
+    :func:`zulu_range`, which every other span in the app shares - ``ref``
+    included, so a group forecast for tomorrow morning is marked as such on the
+    source line the same way the hazard row marks it.
     """
     label = seg.get("label", "")
     name = "initial group" if label == "MAIN" else label
-    return f"{name} {zulu_range(seg['start'], seg['end'])}".strip()
+    return f"{name} {zulu_range(seg['start'], seg['end'], ref)}".strip()

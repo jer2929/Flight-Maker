@@ -48,6 +48,36 @@ def test_stations_carry_the_us_airports_the_airport_table_drops():
     assert {r["ident"] for r in rows} == {"CYYZ", "KBUF"}
 
 
+def test_stations_carry_water_aerodromes_and_heliports():
+    """CYHC files METARs. So do CYAW and CYWH. None of them were in this table.
+
+    ``KEEP_TYPES`` is right to exclude them from the *airport* table - that one
+    answers "where could I put this aircraft down", and a heliport is not that.
+    But this table answers "where is the thing that filed this report", and
+    seventeen CY/CZ idents were being dropped from it for having the wrong kind
+    of surface to land a Cessna on.
+    """
+    rows = refresh._stations(
+        [_row("CYHC", 49.29, -123.11, "CA", "seaplane_base"),
+         _row("CYAW", 44.64, -63.50, "CA", "heliport"),
+         _row("CYYZ", 43.68, -79.63, "CA", "large_airport")], [])
+    assert {r["ident"] for r in rows} == {"CYHC", "CYAW", "CYYZ"}
+
+
+def test_the_airport_table_still_excludes_them():
+    # The other half: widening the station table must not widen the landing
+    # options. A closed field stays out of both.
+    assert "seaplane_base" not in refresh.KEEP_TYPES
+    assert "heliport" not in refresh.KEEP_TYPES
+    assert refresh.KEEP_TYPES < refresh.STATION_AIRPORT_TYPES
+
+
+def test_the_dataset_version_was_bumped_for_the_wider_station_table():
+    # A cached copy built under the old scope is missing those stations, and
+    # nothing else would make it rebuild.
+    assert refresh.DATASET_VERSION == "4"
+
+
 def test_stations_carry_navaids():
     rows = refresh._stations([], [_row("YXU", 43.03, -81.15, "CA", "VOR")])
     assert [r["ident"] for r in rows] == ["YXU"]

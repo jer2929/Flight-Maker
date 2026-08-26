@@ -561,8 +561,15 @@ def _parse_model_time(t: str, offset_s: int = 0) -> datetime | None:
     return naive.replace(tzinfo=timezone.utc) - timedelta(seconds=offset_s or 0)
 
 
-def _window_forecast(taf_win: dict | None) -> WindowForecast | None:
-    """The raw ``weather.worst_in_window`` result as the wire model."""
+def _window_forecast(taf_win: dict | None,
+                     ref: datetime | None = None) -> WindowForecast | None:
+    """The raw ``weather.worst_in_window`` result as the wire model.
+
+    ``ref`` is the flight time these groups were evaluated at. It reaches
+    ``weather.period_label`` so a group forecast for the next UTC day says so -
+    the same anchoring the out-of-window hazard rows use, so the source line and
+    the hazard line cannot disagree about which morning they mean.
+    """
     if not taf_win:
         return None
     prob = taf_win.get("prob") or {}
@@ -572,8 +579,8 @@ def _window_forecast(taf_win: dict | None) -> WindowForecast | None:
         visibility_sm=taf_win.get("visibility_sm"),
         wind_kt=taf_win.get("wind_kt"), gust_kt=taf_win.get("gust_kt"),
         hazards=list(taf_win.get("hazards") or []),
-        governing=[wx.period_label(s) for s in taf_win.get("governing", [])],
-        by_field={k: wx.period_label(s)
+        governing=[wx.period_label(s, ref) for s in taf_win.get("governing", [])],
+        by_field={k: wx.period_label(s, ref)
                   for k, s in (taf_win.get("by_field") or {}).items()},
         by_field_text={k: s.get("text", "")
                        for k, s in (taf_win.get("by_field") or {}).items()},
@@ -587,7 +594,7 @@ def _window_forecast(taf_win: dict | None) -> WindowForecast | None:
         prob_visibility_sm=prob.get("visibility_sm"),
         prob_wind_kt=prob.get("wind_kt"), prob_gust_kt=prob.get("gust_kt"),
         prob_hazards=list(prob.get("hazards") or []),
-        prob_labels=[wx.period_label(s) for s in taf_win.get("prob_periods", [])],
+        prob_labels=[wx.period_label(s, ref) for s in taf_win.get("prob_periods", [])],
     )
 
 
@@ -625,7 +632,7 @@ def _endpoint_weather_forecast(metar: str | None, taf: str | None,
         fc or {}, taf_segs, _window_indices(fc, lo, hi) or [i], lo, hi)
     _apply(ws, cond)
     ws.field_sources = srcs
-    ws.window_forecast = _window_forecast(taf_win)
+    ws.window_forecast = _window_forecast(taf_win, when)
     ws.window_gated = True
     ws.as_of = when.strftime("%d%H%M") + "Z"
     # Headline provenance: the TAF is authoritative for ceiling/vis, so if it
@@ -661,7 +668,8 @@ def _endpoint_weather_at(metar: str | None, taf: str | None,
     if is_now or when is None:
         ws = _endpoint_weather(metar, taf, fc, ensemble, field_elev_ft)
         if taf_segs and span:
-            ws.window_forecast = _window_forecast(wx.worst_in_window(taf_segs, *span))
+            ws.window_forecast = _window_forecast(
+                wx.worst_in_window(taf_segs, *span), span[0])
         return ws
     return _endpoint_weather_forecast(metar, taf, taf_segs, fc, when, span,
                                       ensemble, field_elev_ft)
@@ -955,7 +963,11 @@ def _window_hazards(dep_segs: list[dict], dest_segs: list[dict],
                 "hazards": list(s["cond"].get("hazards") or []),
                 "start": s["start"], "end": s["end"],
                 "label": s.get("label", ""),
-                "when": wx.zulu_range(s["start"], s["end"]),
+                # Anchored to the ETD, not to the span itself: a hazard due
+                # tomorrow morning that starts and ends on one date carries no
+                # rollover of its own, and printed bare beside today's flight
+                # window it read as an hour already flown past.
+                "when": wx.zulu_range(s["start"], s["end"], etd),
             })
     return inside, outside, prob_only - inside
 
@@ -1148,7 +1160,14 @@ def _discovery_enroute_n(dist_nm: float) -> int:
 
 
 # ICAO idents that typically publish a METAR/TAF (certified CY/CZ, US K).
-_REPORTING_RE = re.compile(r"^(C[YZ]|K)[A-Z0-9]{2}$")
+#
+# Both alternatives are four characters. The K branch used to read ``K`` plus
+# two, which is three - so every real US ident failed it and only oddities like
+# "K12" passed. Latent for the Canada-only callers below, which read the airport
+# table and never see a K ident at all; not latent for
+# ``flight_category.idents_in_bbox``, which reads the *station* table and so was
+# offering the map zero US stations in a box that holds a hundred and thirty.
+_REPORTING_RE = re.compile(r"^(C[YZ][A-Z0-9]{2}|K[A-Z0-9]{3})$")
 
 
 def _reporting_candidates(airport: Airport, max_nm: float = 90.0, limit: int = 5) -> list[Airport]:

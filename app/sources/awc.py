@@ -18,6 +18,7 @@ should cost detail, not the whole picture.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Iterable
 
 from app.config import get_settings
 from app.services import weather as wx
@@ -142,15 +143,42 @@ async def metars_in_bbox(bbox: tuple[float, float, float, float],
     for any box. Rows from the ids form carry no coordinates, which is why
     ``services.flight_category._row_position`` can place a station from the
     station table as well as from the row.
+
+    The ids form is a **top-up**, not only a fallback. A bbox response that
+    succeeds is not the same as a bbox response that is complete: CYZR reports
+    hourly and was absent from a map drawn well inside its box, and nothing
+    downstream could tell that from "no aerodrome there". So whatever the bbox
+    form returns is diffed against the stations our own table places in the box,
+    and anything missing is asked for by name in one more request. It costs a
+    request only when there is a gap, and ``_area`` caches it like every other
+    product.
     """
     box = ",".join(f"{v:.3f}" for v in bbox)
     try:
-        return await _area("metar", {"format": "json", "bbox": box})
+        rows = await _area("metar", {"format": "json", "bbox": box})
     except Exception:
         if not idents_fallback:
             raise
-    return await _area("metar", {"format": "json",
-                                 "ids": ",".join(sorted(idents_fallback))})
+        return await _ids_form(idents_fallback)
+
+    missing = sorted(set(idents_fallback or []) - _idents_of(rows))
+    if missing:
+        rows = list(rows) + await _ids_form(missing)
+    return rows
+
+
+async def _ids_form(idents: Iterable[str]) -> list[dict]:
+    """The ids shape of the same request, for a named set of stations."""
+    wanted = sorted({i.upper() for i in idents})
+    if not wanted:
+        return []
+    return await _area("metar", {"format": "json", "ids": ",".join(wanted)})
+
+
+def _idents_of(rows: Iterable[dict]) -> set[str]:
+    """The idents a METAR response actually carried."""
+    return {str(r.get("icaoId") or r.get("id") or "").upper().strip()
+            for r in rows} - {""}
 
 
 async def metar_history(idents: list[str], hours: int = 6) -> dict[str, list[str]]:

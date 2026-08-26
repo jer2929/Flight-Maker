@@ -175,7 +175,10 @@ def test_worst_category_is_drawn_last():
     gj = fc.to_feature_collection([st("A", "VFR"), st("B", "LIFR"),
                                    st("C", fc.UNKNOWN), st("D", "IFR")])
     order = [f["properties"]["category"] for f in gj["features"]]
-    assert order == [fc.UNKNOWN, "VFR", "IFR", "LIFR"]
+    # No UNKNOWN tier any more: a report that parsed neither axis is a parser
+    # failure, not a fifth flight category, and it was putting a fifth colour in
+    # a four-colour legend. It is dropped here and counted in ``meta`` instead.
+    assert order == ["VFR", "IFR", "LIFR"]
 
 
 def test_counts_include_the_zeros():
@@ -232,7 +235,9 @@ def test_bbox_is_the_first_request_shape(monkeypatch):
 
     async def fake_get_json(url, params, *, headers=None, attempts=2):
         calls.append({"url": url, "params": dict(params)})
-        return []
+        # Every expected station answered, so there is nothing to top up.
+        return [{"icaoId": "CYFD", "rawOb": "CYFD 261800Z 27008KT 15SM SKC",
+                 "lat": 43.0, "lon": -80.0}]
 
     monkeypatch.setattr(_http, "get_json", fake_get_json)
     asyncio.run(awc.metars_in_bbox((42.0, -83.0, 46.0, -78.0), ["CYFD"]))
@@ -343,3 +348,96 @@ def test_stale_reports_are_still_served(monkeypatch):
     body = _client().get("/api/flight_category", params={"dep": "CYFD"}).json()
     assert len(body["geojson"]["features"]) == 1
     assert body["geojson"]["features"][0]["properties"]["obs_time"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Nothing goes missing quietly
+# ---------------------------------------------------------------------------
+
+def test_the_reporting_pattern_matches_four_letter_us_idents():
+    """The K branch used to be ``K`` plus two characters, which is three.
+
+    So KDTW, KBUF and KTOL all failed it and only oddities like "K12" passed -
+    and ``idents_in_bbox``, which reads the station table and *does* see US
+    idents, was offering the map zero US stations in a box that holds a hundred
+    and thirty. Pinned by ident, because that is the form the bug took: a
+    count would have looked plausible either way.
+    """
+    from app.orchestrator import _REPORTING_RE
+
+    for ident in ("CYZR", "CYXU", "CZBA", "KDTW", "KBUF", "KTOL"):
+        assert _REPORTING_RE.match(ident), ident
+    for ident in ("K12", "CY", "KDTWX", "CWRZ"):
+        assert not _REPORTING_RE.match(ident), ident
+
+
+def test_idents_in_bbox_returns_both_sides_of_the_border():
+    # A southern-Ontario box is half US airspace. Returning only the Canadian
+    # half is not a smaller map, it is a wrong one.
+    box = (40.53, -84.57, 45.54, -77.73)          # CYXU +/- 150 nm
+    ids = fc.idents_in_bbox(box)
+    assert "CYXU" in ids and "CYZR" in ids
+    assert any(i.startswith("K") for i in ids), "no US station in a border box"
+
+
+def test_idents_in_bbox_can_answer_uncapped():
+    # ``collect`` diffs against this to say which stations are missing, and a
+    # capped expectation would call the ones it gave up "not expected".
+    box = (40.53, -84.57, 45.54, -77.73)
+    assert len(fc.idents_in_bbox(box, limit=None)) >= len(fc.idents_in_bbox(box, limit=5))
+    assert len(fc.idents_in_bbox(box, limit=5)) == 5
+
+
+def test_a_station_absent_from_the_bbox_response_is_asked_for_by_name(monkeypatch):
+    """The reported case: CYZR reports hourly and was not on the map.
+
+    A bbox response that *succeeds* is not the same as one that is complete, and
+    from the map a missing dot reads as "no aerodrome there". So whatever comes
+    back is diffed against the stations our own table places in the box, and the
+    gap is requested by name.
+    """
+    calls: list[dict] = []
+
+    async def fake_get_json(url, params, *, headers=None, attempts=2):
+        params = dict(params)
+        calls.append(params)
+        if "bbox" in params:
+            return [{"icaoId": "CYXU", "rawOb": "CYXU 261800Z 27008KT 15SM SKC",
+                     "lat": 43.0, "lon": -81.1}]
+        return [{"icaoId": "CYZR", "rawOb": "CYZR 261800Z 24006KT 9SM OVC012"}]
+
+    monkeypatch.setattr(_http, "get_json", fake_get_json)
+    rows = asyncio.run(awc.metars_in_bbox((42.0, -83.0, 46.0, -78.0),
+                                          ["CYXU", "CYZR"]))
+    assert len(calls) == 2
+    assert calls[1]["ids"] == "CYZR", "the top-up asks only for what is missing"
+    assert awc._idents_of(rows) == {"CYXU", "CYZR"}
+
+    # And the topped-up row still becomes a dot: it carries no coordinates, so
+    # it is placed from the station table - the reason that branch exists.
+    st = fc.from_row(rows[1])
+    assert st is not None and st.ident == "CYZR"
+    assert st.category == "MVFR"                  # OVC012 with 9 SM
+
+
+def test_an_unreadable_report_is_counted_rather_than_coloured():
+    # Grey said "something here we could not decode", which is true and is not a
+    # flight category. The station still has to be admitted to, though, or
+    # hiding it turns into losing it.
+    ok = fc.Station(ident="A", lat=43.0, lon=-80.0, category="VFR")
+    bad = fc.Station(ident="B", lat=43.5, lon=-80.5, category=fc.UNKNOWN)
+    assert fc.to_feature_collection([ok, bad])["features"][0]["properties"]["ident"] == "A"
+    assert len(fc.to_feature_collection([ok, bad])["features"]) == 1
+
+    m = fc.meta([ok], 150.0, unreadable=1, expected_missing=["CYZR"])
+    assert m["stations"] == 1 and m["unreadable"] == 1
+    assert m["expected_missing"] == ["CYZR"]
+    assert fc.UNKNOWN not in m["counts"], "no unreadable tier in the legend"
+
+
+def test_category_of_still_says_unknown_internally():
+    # The concept is not gone - it is how ``category_of`` reports that neither
+    # axis parsed, and how ``worse`` knows to lose every comparison. It just
+    # never reaches a feature.
+    assert fc.category_of(None, None) == fc.UNKNOWN
+    assert fc.worse(fc.UNKNOWN, "IFR") == "IFR"
