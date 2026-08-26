@@ -239,8 +239,14 @@ def endpoint_window_sourced(fc: dict, taf_segs: list[dict], idxs: list[int],
     return merged, _sources(merged, taf, taf_used), taf
 
 
-def _prob_for_hour(*taf_results: dict | None) -> tuple[str | None, set[str]]:
+def _prob_for_hour(*taf_results: dict | None,
+                   ref: datetime | None = None) -> tuple[str | None, set[str]]:
     """The PROB group over this hour: ``(advisory text, hazards that gate)``.
+
+    ``ref`` is the hour this row describes, and it anchors the group's printed
+    span: a PROB group on the far side of midnight Z reads ``0500Z+1-0900Z+1``
+    rather than as an hour this morning. Same anchoring as the route card's
+    source lines, from the same formatter.
 
     A PROB30/PROB40 is a 30-40% chance, not a forecast. Its ceiling, visibility
     and wind are reported and never gate. The hazards it carries gate only when
@@ -254,7 +260,7 @@ def _prob_for_hour(*taf_results: dict | None) -> tuple[str | None, set[str]]:
         if not res or not res.get("prob"):
             continue
         cond = dict(res["prob"]) if cond is None else _worse(cond, res["prob"])
-        labels.extend(wx.period_label(s) for s in res.get("prob_periods", []))
+        labels.extend(wx.period_label(s, ref) for s in res.get("prob_periods", []))
     if cond is None:
         return None, set()
     hazards = list(cond.get("hazards") or [])
@@ -414,7 +420,7 @@ def build_timeline(
         # visibility and wind never gate; the hazards it carries gate only if the
         # pilot put them on their own auto-NO-GO list - the same rule the route
         # card applies, read out of the same place.
-        prob_note, prob_gating = _prob_for_hour(dep_raw, dest_raw)
+        prob_note, prob_gating = _prob_for_hour(dep_raw, dest_raw, ref=dt_utc)
         haz = sorted(set(combined.get("hazards", [])) | static_hazards | prob_gating)
         daylight = _daylight_at(dep_fc, dest_fc, i)
         ws = WeatherSummary(

@@ -337,6 +337,61 @@ def test_zulu_range_counts_multiple_days():
     assert zulu_range(start, start + timedelta(days=2)) == "1800Z-1800Z+2"
 
 
+# --- zulu_range, anchored to a reference day ----------------------------------
+#
+# The reported bug: a thunderstorm forecast for tomorrow morning printed
+# "0500Z-0900Z" beside a "1245Z-1307Z" flight window and read as this morning -
+# an hour the pilot had already flown past. The span is right; what it is
+# missing is which day it is on, which only a reference can supply.
+
+def test_zulu_range_marks_a_span_on_the_day_after_the_reference():
+    etd = datetime(2026, 8, 26, 12, 45, tzinfo=timezone.utc)
+    start = datetime(2026, 8, 27, 5, 0, tzinfo=timezone.utc)
+    assert zulu_range(start, start + timedelta(hours=4), etd) == "0500Z+1-0900Z+1"
+
+
+def test_zulu_range_leaves_a_span_on_the_reference_day_bare():
+    etd = datetime(2026, 8, 26, 12, 45, tzinfo=timezone.utc)
+    start = datetime(2026, 8, 26, 14, 0, tzinfo=timezone.utc)
+    assert zulu_range(start, start + timedelta(hours=2), etd) == "1400Z-1600Z"
+
+
+def test_an_anchored_rollover_still_reads_the_way_it_always_did():
+    # The suffix is per-endpoint, so anchoring EXTENDS the bare form rather than
+    # redefining it: a span leaving on the reference day and landing the next is
+    # the same "2000Z-0300Z+1" it was before there was a reference at all.
+    etd = datetime(2026, 8, 26, 12, 45, tzinfo=timezone.utc)
+    start = datetime(2026, 8, 26, 20, 0, tzinfo=timezone.utc)
+    assert zulu_range(start, start + timedelta(hours=7), etd) == "2000Z-0300Z+1"
+    assert zulu_range(start, start + timedelta(hours=7)) == "2000Z-0300Z+1"
+
+
+def test_a_span_before_the_reference_anchors_on_itself():
+    # "+N" only ever means later than the reference day. A "-1" suffix cannot be
+    # told from the dash separating the two times - "0500Z-1-0900Z-1" is not a
+    # span anyone can read - so a span that starts earlier falls back to the
+    # bare form, which is exactly what the app printed before.
+    etd = datetime(2026, 8, 26, 12, 45, tzinfo=timezone.utc)
+    start = datetime(2026, 8, 25, 20, 0, tzinfo=timezone.utc)
+    assert zulu_range(start, start + timedelta(hours=3), etd) == "2000Z-2300Z"
+
+
+def test_a_reference_two_days_back_counts_both_endpoints_from_it():
+    etd = datetime(2026, 8, 26, 12, 45, tzinfo=timezone.utc)
+    start = datetime(2026, 8, 28, 5, 0, tzinfo=timezone.utc)
+    assert zulu_range(start, start + timedelta(hours=4), etd) == "0500Z+2-0900Z+2"
+
+
+def test_period_label_carries_the_reference_through():
+    etd = datetime(2026, 8, 26, 12, 45, tzinfo=timezone.utc)
+    seg = {"label": "TEMPO",
+           "start": datetime(2026, 8, 27, 5, 0, tzinfo=timezone.utc),
+           "end": datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc)}
+    assert period_label(seg, etd) == "TEMPO 0500Z+1-0900Z+1"
+    # And without one it is unchanged, so every existing caller is untouched.
+    assert period_label(seg) == "TEMPO 0500Z-0900Z"
+
+
 def test_segments_keep_main_as_their_internal_label():
     # Only the *display* changes - code still keys off "MAIN".
     assert [s["label"] for s in parse_taf_segments(TAF)] == ["MAIN", "FM", "TEMPO"]

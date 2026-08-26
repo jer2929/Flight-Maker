@@ -40,7 +40,10 @@ KEEP_TYPES = {"small_airport", "medium_airport", "large_airport"}
 # v2: added runway width_ft and dropped US airports (Canada-only).
 # v3: added stations_ca.csv - the position-only table PIREP /OV fields resolve
 #     against, which needs the US and the navaids the airport table drops.
-DATASET_VERSION = "3"
+# v4: stations_ca.csv also keeps water aerodromes and heliports. They publish
+#     METARs - CYHC, CYAW, CYWH among them - and the flight-category map was
+#     missing every one of them because this table never carried the position.
+DATASET_VERSION = "4"
 VERSION_FILE = DATA_DIR / ".dataset_version"
 
 AIRPORT_FIELDS = ["ident", "name", "latitude_deg", "longitude_deg",
@@ -57,6 +60,14 @@ STATION_FIELDS = ["ident", "latitude_deg", "longitude_deg"]
 # option. So positions get their own table, wider and thinner.
 STATION_TYPES = {"VOR", "VORTAC", "VOR-DME", "DME", "NDB", "NDB-DME", "TACAN"}
 STATION_COUNTRIES = {"CA", "US"}
+
+# The aerodrome types this table keeps - deliberately wider than ``KEEP_TYPES``.
+# That set answers "where could I put this aircraft down", so it is right to
+# exclude a water aerodrome and a heliport. This one answers "where is the thing
+# that filed this report", and CYHC (Vancouver Harbour), CYAW (Shearwater) and
+# CYWH (Victoria Harbour) all file METARs. Seventeen CY/CZ idents were dropped
+# here for having the wrong kind of surface to land a Cessna on.
+STATION_AIRPORT_TYPES = KEEP_TYPES | {"seaplane_base", "heliport"}
 
 
 def _fetch_csv(url: str) -> list[dict]:
@@ -105,7 +116,7 @@ def _stations(airports: list[dict], navaids: list[dict]) -> list[dict]:
                           "longitude_deg": r["longitude_deg"]}
 
     add(navaids, STATION_TYPES)
-    add(airports, KEEP_TYPES)
+    add(airports, STATION_AIRPORT_TYPES)
     return sorted(out.values(), key=lambda r: r["ident"])
 
 

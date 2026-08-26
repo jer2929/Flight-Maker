@@ -188,3 +188,39 @@ def test_the_flight_window_label_marks_its_own_rollover():
     etd = datetime(2026, 8, 16, 13, 53, tzinfo=timezone.utc)
     assert orchestrator._window_label(
         etd, etd + timedelta(minutes=46)) == "1353Z-1439Z"
+
+
+def test_a_hazard_on_the_next_day_is_marked_against_the_flight_window():
+    """The reported bug: "thunderstorm at CYXU 0500Z-0900Z" reads as this morning.
+
+    The span is right and starts and ends on one UTC date, so it carries no
+    rollover of its own - but that date is the day AFTER the flight window
+    printed beside it, and nothing said so. Anchored to the ETD both endpoints
+    carry the marker, so an hour already flown past cannot be confused with one
+    still to come.
+    """
+    etd = datetime(2026, 8, 26, 12, 45, tzinfo=timezone.utc)
+    storm = {
+        "kind": "overlay", "label": "TEMPO",
+        "start": datetime(2026, 8, 27, 5, 0, tzinfo=timezone.utc),
+        "end": datetime(2026, 8, 27, 9, 0, tzinfo=timezone.utc),
+        "cond": {"hazards": ["thunderstorm"]},
+    }
+    _, outside, _ = orchestrator._window_hazards(
+        [], [storm], etd, etd + timedelta(minutes=22), dest_ident="CYXU")
+    assert [o["when"] for o in outside] == ["0500Z+1-0900Z+1"]
+
+
+def test_a_hazard_on_the_flight_day_stays_bare():
+    # The converse, so the marker keeps meaning something: a hazard outside the
+    # window but on the same UTC date carries no suffix at all.
+    etd = datetime(2026, 8, 26, 12, 45, tzinfo=timezone.utc)
+    storm = {
+        "kind": "overlay", "label": "TEMPO",
+        "start": datetime(2026, 8, 26, 18, 0, tzinfo=timezone.utc),
+        "end": datetime(2026, 8, 26, 21, 0, tzinfo=timezone.utc),
+        "cond": {"hazards": ["thunderstorm"]},
+    }
+    _, outside, _ = orchestrator._window_hazards(
+        [], [storm], etd, etd + timedelta(minutes=22), dest_ident="CYXU")
+    assert [o["when"] for o in outside] == ["1800Z-2100Z"]

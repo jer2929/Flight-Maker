@@ -55,6 +55,23 @@ def test_convective_passes_when_ts_is_outside_the_window():
     assert "1800-2200Z" in row.actual_text
 
 
+def test_an_out_of_window_hazard_does_not_eat_the_icing_altitude_band():
+    """``where`` holds the altitude slab, and a ``for`` body has no scope.
+
+    The out-of-window loop rebound it per item, so the moment any such hazard
+    existed the icing and turbulence rows below stopped naming the band they
+    grade and printed the last hazard's aerodrome instead - "no MOD+ report in
+    at CYHM". Nothing asserted on that column, which is why it stayed green.
+    """
+    clean = _run(planned_low_ft=3000, planned_high_ft=6500)
+    dirty = _run(planned_low_ft=3000, planned_high_ft=6500,
+                 out_of_window=[{"ident": "CYHM", "hazards": ["thunderstorm"],
+                                 "when": "1800-2200Z"}])
+    for key in ("icing", "turbulence"):
+        assert clean[key].limit_text == "no MOD+ report in 3,000-6,500 ft"
+        assert dirty[key].limit_text == clean[key].limit_text
+
+
 def test_metar_hazard_gates_now_but_only_advises_for_a_later_etd():
     now = _run(metar_hazards={"thunderstorm"}, etd_is_now=True)["convective"]
     assert not now.passed

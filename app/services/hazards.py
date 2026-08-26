@@ -285,9 +285,13 @@ def weather_checks(
     # so they render as advisory rows naming the period they apply to.
     for item in list(out_of_window)[:4]:
         names = ", ".join(h.replace("_", " ") for h in item.get("hazards", []))
-        where = f" at {item['ident']}" if item.get("ident") else ""
+        # Not ``where``: that name already holds the altitude slab this function
+        # opened with, and a ``for`` body has no scope of its own. Rebinding it
+        # here left the icing and turbulence rows below printing
+        # "no MOD+ report in  at CYXU" instead of the band they grade.
+        at_ident = f" at {item['ident']}" if item.get("ident") else ""
         add("hazard_out_of_window", "Forecast hazard (outside window)", False,
-            f"{names}{where} {item['when']} - outside {win_bare}", advisory=True)
+            f"{names}{at_ident} {item['when']} - outside {win_bare}", advisory=True)
 
     # 2. Embedded convective cloud.
     #

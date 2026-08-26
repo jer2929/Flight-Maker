@@ -295,12 +295,17 @@ def _clamp_span(min_lat: float, min_lon: float, max_lat: float, max_lon: float,
 
 
 def idents_in_bbox(bbox: tuple[float, float, float, float],
-                   limit: int = 400) -> list[str]:
+                   limit: int | None = 400) -> list[str]:
     """Reporting idents inside ``bbox``, from our own station table.
 
-    Only used to build the ids form of the upstream request, for deployments
-    that reject the bbox one. Nearest-to-centre first, so the cap gives up the
-    edges of the box rather than an arbitrary slice of it.
+    Two jobs. It builds the ids form of the upstream request - for deployments
+    that reject the bbox one, and for the top-up in ``sources.awc`` that asks
+    again for whatever the bbox form did not return. And, uncapped
+    (``limit=None``), it is the list :func:`collect` diffs against what came
+    back, to say which stations are missing rather than leaving a hole.
+
+    Nearest-to-centre first, so a cap gives up the edges of the box rather than
+    an arbitrary slice of it.
     """
     from app.orchestrator import _REPORTING_RE
 
@@ -314,7 +319,7 @@ def idents_in_bbox(bbox: tuple[float, float, float, float],
             continue
         found.append((math.hypot(lat - clat, lon - clon), ident))
     found.sort()
-    return [ident for _d, ident in found[:limit]]
+    return [ident for _d, ident in (found if limit is None else found[:limit])]
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +334,11 @@ def to_feature_collection(stations: Iterable[Station]) -> dict:
     field of green is the single most important dot on the map, and it must not
     end up underneath its neighbours.
     """
-    ordered = sorted(stations, key=_draw_rank)
+    # Unreadable reports never become dots - see :func:`collect`, which counts
+    # them into ``meta`` first. Dropped here too, unconditionally, so "a feature
+    # has a real flight category" is a property of this function rather than of
+    # whoever called it.
+    ordered = sorted((s for s in stations if s.category != UNKNOWN), key=_draw_rank)
     features = []
     for s in ordered:
         features.append({
@@ -359,9 +368,11 @@ def to_feature_collection(stations: Iterable[Station]) -> dict:
 
 
 def _draw_rank(s: Station) -> int:
-    """Sort key: VFR first, worst last, unreadable at the very bottom."""
-    if s.category == UNKNOWN:
-        return -1
+    """Sort key: VFR first, worst last.
+
+    No unreadable tier any more - :func:`collect` drops those before they reach
+    a feature, so every station sorted here has a real category.
+    """
     return len(CATEGORIES) - CATEGORIES.index(s.category)
 
 
@@ -372,20 +383,30 @@ def counts(stations: Iterable[Station]) -> dict[str, int]:
     an absent key would leave the legend unable to tell it from "not fetched".
     """
     out = {c: 0 for c in CATEGORIES}
-    out[UNKNOWN] = 0
     for s in stations:
         out[s.category] = out.get(s.category, 0) + 1
     return out
 
 
-def meta(stations: list[Station], corridor_nm: float) -> dict:
-    """What the legend needs to say beyond the colours themselves."""
+def meta(stations: list[Station], corridor_nm: float,
+         unreadable: int = 0, expected_missing: list[str] | None = None) -> dict:
+    """What the legend needs to say beyond the colours themselves.
+
+    ``unreadable`` and ``expected_missing`` are the stations that did *not*
+    become a dot: one whose report would not parse, one our own table places
+    inside the box that no report came back for. Both used to be invisible -
+    an unreadable report drew grey and an absent one drew nothing, and neither
+    could be told from "there is no aerodrome there". A map that hides a station
+    has to be able to say how many it hid, or hiding turns into losing.
+    """
     times = [s.obs_time for s in stations if s.obs_time is not None]
     fmt = "%Y-%m-%dT%H:%M:%SZ"
     return {
         "counts": counts(stations),
         "stations": len(stations),
         "corridor_nm": corridor_nm,
+        "unreadable": unreadable,
+        "expected_missing": sorted(expected_missing or []),
         "newest_obs": max(times).strftime(fmt) if times else None,
         "oldest_obs": min(times).strftime(fmt) if times else None,
     }
@@ -413,9 +434,21 @@ async def collect(path: list[Point],
                     else max_span_deg)
 
     box = bbox_for(path, corridor_nm, max_span_deg)
+    # Uncapped: this is "who should have reported", and it is diffed against
+    # what came back. The cap belongs on the *request*, not on the expectation.
+    expected = set(idents_in_bbox(box, limit=None))
     rows = await awc.metars_in_bbox(box, idents_in_bbox(box))
 
     now = datetime.now(timezone.utc)
     parsed = [st for st in (from_row(r, path, now) for r in rows) if st]
     stations = newest_per_station(parsed)
-    return stations, meta(stations, corridor_nm)
+
+    # An unreadable report is no longer drawn. Grey said "something here we
+    # could not decode", which is true and is not a flight category - it put a
+    # fifth colour in a four-colour legend to report a parser failure. It is
+    # counted instead, so the map still admits to it without colouring it.
+    unreadable = sum(1 for st in stations if st.category == UNKNOWN)
+    stations = [st for st in stations if st.category != UNKNOWN]
+
+    missing = sorted(expected - {st.ident for st in stations})
+    return stations, meta(stations, corridor_nm, unreadable, missing)

@@ -510,9 +510,29 @@ const dayDiff = (fromIso, toIso) => {
 // A Zulu span, mirroring the backend's `weather.zulu_range`: "2000Z-0300Z+1".
 // A span routinely runs past midnight Z, and a bare "2000Z-0300Z" reads as
 // running backwards. Plain text - `supDays` raises the +N once, at render time.
-const zRange = (fromIso, toIso) => {
-  const n = dayDiff(fromIso, toIso);
-  return `${zHM(fromIso)}-${zHM(toIso)}${n > 0 ? `+${n}` : ""}`;
+//
+// `refIso` anchors the day counts on another instant - the ETD - exactly as the
+// backend's `ref` does. Without it a span measured only against itself says
+// nothing about which day it falls on, so a TAF group for tomorrow morning
+// printed "0500Z-0900Z" and read as an hour already flown past. Each endpoint
+// carries its own suffix, so the bare form is unchanged: a span that starts
+// today and lands tomorrow is still "2000Z-0300Z+1". `+N` only ever means
+// later than the reference day - a span starting before it anchors on itself,
+// because "0500Z-1" cannot be told from the dash that separates the two times.
+const zRange = (fromIso, toIso, refIso) => {
+  const base = zBase(fromIso, refIso);
+  return `${zHM(fromIso)}${zTail(base, fromIso)}-${zHM(toIso)}${zTail(base, toIso)}`;
+};
+
+// The day the suffixes count from: the reference when it is not after the span,
+// the span's own start otherwise.
+const zBase = (fromIso, refIso) => {
+  const a = utcDate(fromIso), r = refIso ? utcDate(refIso) : null;
+  return r && a && utcDayDiff(r, a) >= 0 ? refIso : fromIso;
+};
+const zTail = (baseIso, iso) => {
+  const n = dayDiff(baseIso, iso);
+  return n > 0 ? `+${n}` : "";
 };
 
 // Raise a rollover marker into a superscript, so "+1" reads as an annotation on
@@ -527,9 +547,8 @@ const zText = (s) => supDays(escapeHtml(s));
 // The arriving end of a span, marker already raised. The arrow forms
 // ("ETD 2330Z → ETA 0115Z+1") are not "A-B" ranges, but they ask the same
 // question of the same two times. Returns HTML - these sites build their own.
-const zEnd = (fromIso, toIso) => {
-  const n = dayDiff(fromIso, toIso);
-  return supDays(`${zHM(toIso)}${n > 0 ? `+${n}` : ""}`);
+const zEnd = (fromIso, toIso, refIso) => {
+  return supDays(`${zHM(toIso)}${zTail(zBase(fromIso, refIso), toIso)}`);
 };
 
 // Quarter-hour granularity for the first few hours, because that is the
@@ -1070,12 +1089,15 @@ const hazardColor = (p) => HAZARD_COLORS[p.hazard] || HAZARD_COLORS.unknown;
 // station is an opaque 5 px dot with a white rim, and the legend names both.
 const FLIGHT_CATEGORY_COLORS = {
   VFR: "#1f9d4d", MVFR: "#2f7fd1", IFR: "#d63b3b",
-  LIFR: "#a24bc4", UNKNOWN: "#8a8a8a",
+  LIFR: "#a24bc4",
+  // Not a category any more - the server drops unreadable reports rather than
+  // colouring them, and `flightCategoryNote` counts them instead. Kept as the
+  // fallback below, so an unexpected value still draws as something.
+  UNKNOWN: "#8a8a8a",
 };
-const FLIGHT_CATEGORY_ORDER = ["VFR", "MVFR", "IFR", "LIFR", "UNKNOWN"];
+const FLIGHT_CATEGORY_ORDER = ["VFR", "MVFR", "IFR", "LIFR"];
 const FLIGHT_CATEGORY_LEGEND = {
   VFR: "VFR", MVFR: "marginal VFR", IFR: "IFR", LIFR: "low IFR",
-  UNKNOWN: "report unreadable",
 };
 const FLIGHT_CATEGORY_OVERLAY = "Flight category";
 const FLIGHT_CATEGORY_KEY = "minima.flightcat.v1";
@@ -1112,13 +1134,12 @@ function flightCategoryStyle(f) {
 function flightCategoryPopup(p) {
   // The two numbers that produced the colour, so the dot can be checked rather
   // than taken on trust - and so "why is that blue" has an answer on the map.
-  // "no ceiling" is a claim about the sky, and it is only ours to make when the
-  // report actually parsed. On an unreadable one it would assert a clear day we
-  // cannot back up - the whole reason that dot is grey rather than green.
+  // "no ceiling" is a claim about the sky, and it is safe to make here: a report
+  // that parsed neither axis never becomes a dot at all, so every station shown
+  // has at least one real number behind its colour.
   const ceil = p.ceiling_ft == null ? "no ceiling" : `${Math.round(p.ceiling_ft)} ft`;
   const vis = p.visibility_sm == null ? "vis not reported" : `${p.visibility_sm} sm`;
-  const read = p.category === "UNKNOWN"
-    ? "ceiling and visibility both unreadable" : `${ceil} · ${vis}`;
+  const read = `${ceil} · ${vis}`;
   const wind = p.wind_kt == null ? "" :
     ` · ${p.wind_dir_true == null ? "VRB" : String(Math.round(p.wind_dir_true)).padStart(3, "0")}` +
     `/${Math.round(p.wind_kt)}${p.gust_kt ? `G${Math.round(p.gust_kt)}` : ""} kt`;
@@ -1167,6 +1188,13 @@ function flightCategoryLegend(gj, meta, etdUtc) {
 function flightCategoryNote(meta, etdUtc) {
   const bits = ["observations, not a forecast"];
   if (meta && meta.newest_obs) bits.push(`newest ${zHM(meta.newest_obs)}`);
+  // Stations the map is deliberately not drawing. An unreadable report used to
+  // draw grey and a station that never answered drew nothing at all, and from
+  // the map neither could be told from "no aerodrome there". Say the number.
+  const unreadable = (meta && meta.unreadable) || 0;
+  if (unreadable) bits.push(`${unreadable} report${unreadable > 1 ? "s" : ""} unreadable`);
+  const absent = ((meta && meta.expected_missing) || []).length;
+  if (absent) bits.push(`${absent} station${absent > 1 ? "s" : ""} not reporting`);
   const ahead = etdUtc ? Math.round((Date.parse(etdUtc) - Date.now()) / 60000) : 0;
   if (ahead > 60) {
     bits.push(`your ETD is +${ahead >= 120 ? `${Math.round(ahead / 60)} h` : `${ahead} min`}`);
@@ -1581,8 +1609,9 @@ function renderCircuits(r) {
   $("#route-advisories").innerHTML = advisoriesBlock(r);
   $("#route-mitigation").innerHTML = v === "MITIGATE" ? mitigationBlock(r.threat_checks) : "";
   const etdVal = ($("#etd") || {}).value;
+  const etdIso = etdVal && etdVal !== "now" ? etdVal : null;
   $("#route-endpoints").innerHTML = endpointCard(
-    r, "Aerodrome", etdVal && etdVal !== "now" ? `your ETD ${zHM(etdVal)}` : "");
+    r, "Aerodrome", etdIso ? `your ETD ${zHM(etdIso)}` : "", etdIso);
   // Circuits carries the same hazard GeoJSON the route does, so it gets the same
   // map - one marker instead of two, and no course line.
   loadRadar(r, circuitStop(r));
@@ -1641,8 +1670,8 @@ function renderRoute(r) {
 
   $("#route-advisories").innerHTML = advisoriesBlock(r);
   $("#route-endpoints").innerHTML =
-    endpointCard(r.departure, "Departure", winLabel(win)) +
-    endpointCard(r.destination, "Destination", winLabel(win));
+    endpointCard(r.departure, "Departure", winLabel(win), win && win.etd_utc) +
+    endpointCard(r.destination, "Destination", winLabel(win), win && win.etd_utc);
   $("#route-enroute").innerHTML = enrouteBlock(r);
   loadRadar(r, routeStops(r));
 
@@ -1964,7 +1993,7 @@ function windLegend(rwy, w) {
   return `<div class="wr-key">${rows.join("")}</div>`;
 }
 
-function endpointCard(a, role, timeLabel) {
+function endpointCard(a, role, timeLabel, etdIso) {
   const w = a.weather || {};
   const issues = a.reasons || [];
   const wind = windStr(w);
@@ -1994,13 +2023,13 @@ function endpointCard(a, role, timeLabel) {
     </div>
     ${showTakeoff && to ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(to, w)}</span><div class="rwy-lines"><div><strong>Takeoff</strong>: RWY ${to.runway_ident} (${dirM(to.heading_mag, to.heading_true)})${dims(to)} · headwind ${Math.round(to.headwind_kt)} kt${gust(to.headwind_kt_gust)} · xwind ${Math.round(to.crosswind_kt)} kt${gust(to.crosswind_kt_gust)}</div>${windLegend(to, w)}</div></div>` : ""}
     ${showLanding && ld ? `<div class="rwy-wrap"><span class="rwy-diag">${windRunwaySvg(ld, w)}</span><div class="rwy-lines"><div><strong>Landing</strong>: RWY ${ld.runway_ident} (${dirM(ld.heading_mag, ld.heading_true)})${dims(ld)} · headwind ${Math.round(ld.headwind_kt)} kt${gust(ld.headwind_kt_gust)} · xwind ${Math.round(ld.crosswind_kt)} kt${gust(ld.crosswind_kt_gust)}</div>${windLegend(ld, w)}</div></div>` : ""}
-    ${a.nearby_station ? nearbyBlock(a.nearby_station, timeLabel) : ""}
+    ${a.nearby_station ? nearbyBlock(a.nearby_station, timeLabel, etdIso) : ""}
     ${trendsBlock(a)}
     ${runwaysBlock(a)}
     <div class="links">${linksHtml(a)}</div>
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
     ${obsLine(w.raw_metar)}
-    ${tafBlock(w, timeLabel)}
+    ${tafBlock(w, timeLabel, etdIso)}
     ${metarHistory(a)}
   </div>`;
 }
@@ -2010,7 +2039,7 @@ function endpointCard(a, role, timeLabel) {
 // "green" means one thing wherever you read it. `in_window` and `gates` are
 // computed server-side so the browser never reasons about TAF validity
 // arithmetic.
-function tafBlock(w, timeLabel) {
+function tafBlock(w, timeLabel, etdIso) {
   if (!w.raw_taf) return "";
   const ps = w.taf_periods || [];
   // Unparseable TAF: fall back to the raw line rather than showing nothing.
@@ -2026,11 +2055,11 @@ function tafBlock(w, timeLabel) {
     if (advisory) note += " · amber edge = only a chance, not counted against your limits";
   }
   return `<details class="taf" open><summary>TAF <span class="hint">${note}</span></summary>
-    ${ps.map(tafRow).join("")}
+    ${ps.map((p) => tafRow(p, etdIso)).join("")}
     <div class="raw taf-raw">${escapeHtml(w.raw_taf)}</div></details>`;
 }
 
-function tafRow(p) {
+function tafRow(p, etdIso) {
   // A PROB30/40 you fly through is still green - it happens during the flight -
   // but carries an amber edge, because it is a possibility to weigh rather than
   // a limit that fails the card on its own.
@@ -2042,7 +2071,7 @@ function tafRow(p) {
   ].filter(Boolean).join(" ");
   return `<div class="${cls}">
     <span class="taf-k">${escapeHtml(p.label || "")}</span>
-    <span class="taf-t">${supDays(zRange(p.start, p.end))}</span>
+    <span class="taf-t">${supDays(zRange(p.start, p.end, etdIso))}</span>
     <span class="taf-x">${escapeHtml(p.text || "")}</span></div>`;
 }
 
@@ -2146,7 +2175,7 @@ function trendsBlock(a) {
   }
   return `<details class="trends" open><summary>Trends from recent METARs (${t.length})</summary>${t.map((x) => `<div class="trend">${x}</div>`).join("")}</details>`;
 }
-function nearbyBlock(n, timeLabel) {
+function nearbyBlock(n, timeLabel, etdIso) {
   // This station's TAF is the only forecast the field has, so it gets the same
   // period split and flight-window highlight as one that reports its own - but
   // it is NOT your field, and nothing in it gates the verdict. A TAF's ceiling,
@@ -2156,7 +2185,7 @@ function nearbyBlock(n, timeLabel) {
   const taf = tafBlock({
     raw_taf: n.taf, taf_periods: n.taf_periods,
     taf_valid_from: n.taf_valid_from, taf_valid_to: n.taf_valid_to,
-  }, timeLabel);
+  }, timeLabel, etdIso);
   const caveat = n.taf
     ? `<div class="hint nearby-caveat">Reference only - ${escapeHtml(n.ident)} is ${n.distance_nm} NM away, so this forecast does not count against your limits.</div>`
     : "";
@@ -2682,7 +2711,7 @@ function tafPopBody(a) {
       <span class="hint">${w.taf_valid_from ? `valid ${supDays(zRange(w.taf_valid_from, w.taf_valid_to))}` : ""}</span>
       ${wxPopClose()}
     </div>
-    ${tafBlock(w, wxPopWindowLabel(a))}`;
+    ${tafBlock(w, wxPopWindowLabel(a), a.etd_utc)}`;
 }
 
 // The model, hour by hour, either side of the leg. Deliberately raw HRDPS with

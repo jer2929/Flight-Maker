@@ -411,7 +411,11 @@ select, input[type=text], .route-inputs input {
 
 /* No margin of its own - both users (#route-endpoints, #discovery-results) are
    pane children, and the pane owns the gaps between blocks. */
-.results { display: grid; gap: var(--sp-3); }
+/* minmax(0,1fr), not the implicit auto: a grid item's default min-width is its
+   min-content, so one card with an unbreakable run in it widens the track past
+   the pane - and html/body{overflow-x:clip} then hides the overflow instead of
+   letting you scroll to it. Same guard, same reason, as .chk and .wx-h. */
+.results { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
 .two-col { grid-template-columns: 1fr 1fr; }
 @media (max-width: 780px) {
   .two-col { grid-template-columns: 1fr; }
@@ -430,8 +434,12 @@ select, input[type=text], .route-inputs input {
 .card.GO { border-left-color: var(--go); }
 .card.MITIGATE { border-left-color: var(--mitigate); }
 .card.NOGO { border-left-color: var(--nogo); }
-.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-.card-head h3 { margin: 0; font-family: var(--f-cond); font-size: 1.08rem; letter-spacing: .01em; }
+/* Wraps, because the heading holds runs it cannot break: .planned-etd is nowrap
+   mono and .badge is nowrap caps, and on a 360px phone the two together are
+   wider than a card. Without the wrap the badge simply left the card on the
+   right - and, being clipped rather than scrolled, left no trace it had. */
+.card-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 10px; }
+.card-head h3 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-family: var(--f-cond); font-size: 1.08rem; letter-spacing: .01em; }
 /* A verdict box, and now the only pill-shaped thing in the app besides
    .notam-status - which is also a state. The fill is gone: on a card that
    already carries a verdict-coloured state bar, a filled badge was the third
@@ -553,7 +561,7 @@ select, input[type=text], .route-inputs input {
   border: 1px solid var(--line); border-radius: var(--r-sm); padding: 6px 8px; }
 .notam a { color: var(--accent); font-weight: 700; margin-right: 6px; white-space: nowrap; }
 .notam-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
-.notam-text { white-space: pre-wrap; }
+.notam-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* The second and last box. Same reasoning as .badge: a NOTAM being live or
    lapsed is a state, so it keeps an object's outline - without the fill. */
 .notam-status { font-family: var(--f-cond); font-size: var(--fs-2xs); font-weight: 700;
@@ -877,7 +885,14 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .wr-key-arrow { width: 30px; height: 12px; overflow: visible; }
 .wr-key-lbl { min-width: 0; }
 .wr-key-note { opacity: .8; }
-@media (max-width: 480px) { .rwy-wrap { flex-direction: column; gap: 6px; } }
+@media (max-width: 480px) {
+  .rwy-wrap { flex-direction: column; gap: 6px; }
+  /* Its own line on a phone. This is the rule that fixes the reported bug: a
+     "Now" departure omits .planned-etd entirely and the card fits, while any
+     later ETD adds ~200px of unbreakable mono to the heading and pushed every
+     card past the right edge. Reads better stacked at this width anyway. */
+  .planned-etd { display: block; margin-left: 0; }
+}
 /* Prior permission required. A condition of the aerodrome, not a verdict - so
    it annotates the ident rather than wearing the verdict's box. */
 .ppr { font-family: var(--f-cond); font-size: .68rem; font-weight: 700;
