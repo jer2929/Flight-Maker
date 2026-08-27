@@ -642,9 +642,16 @@ class Advisory(BaseModel):
     valid_to: Optional[str] = None
     distance_nm: Optional[float] = None   # 0 = the route goes through it
     product_id: Optional[str] = None      # "CZYZ SIGMET A1"
+    fir: Optional[str] = None             # "CZEG" - the region it was issued for
     # Set only on advisories that were fetched but set aside, saying why:
     # "outside your altitudes", "not on your route", ...
     drop_label: Optional[str] = None
+    # True when the bulletin was kept but never placed - its area is written in
+    # words rather than coordinates, so all we know is the region it names. The
+    # card chips it, because an advisory with no distance beside it otherwise
+    # reads as a rendering fault rather than as the honest answer it is. Such a
+    # product never gates a verdict (``area_hazards.gating``).
+    region_only: bool = False
 
 
 class EnrouteAirport(BaseModel):

@@ -37,7 +37,17 @@ _LIVE = ((NOW - timedelta(hours=1)).strftime("%d%H%M") + "/"
 
 
 def _haz(kind: str, **kw) -> ah.AreaHazard:
-    base = dict(kind=kind, text=kind, source=ah.CFPS, source_url="c")
+    """One advisory that reached this aerodrome.
+
+    ``positioned=True`` because that is what these fixtures stand for: a bulletin
+    whose area was read and tested against the field. ``filter_relevant`` sets it
+    on the real path; these call ``_area_advisory_check`` directly, so they have
+    to state it. A hazard left unplaced is a different case with its own test
+    below - and it is exactly the case that used to NO-GO a flight on the
+    strength of naming a FIR.
+    """
+    base = dict(kind=kind, text=kind, source=ah.CFPS, source_url="c",
+                positioned=True)
     base.update(kw)
     return ah.AreaHazard(**base)
 
@@ -233,6 +243,17 @@ def test_a_sigmet_outranks_an_airmet_in_the_same_row(upstreams):
         _haz("SIGMET", hazard="conv"),
     ])
     assert row.passed is False
+
+
+def test_a_sigmet_we_could_not_place_does_not_fail_the_row(upstreams):
+    """A bulletin with no readable area names a FIR and nothing else, and a FIR
+    is not "over this aerodrome" - CZEG alone is some 1,900 nm tall. It is still
+    reported, and it says why it carries no position."""
+    row = orchestrator._area_advisory_check(
+        [_haz("SIGMET", text="CZEG SIGMET A1 SEV TURB", hazard="turb",
+              fir="CZEG", positioned=False)])
+    assert row.passed is True and row.advisory is True
+    assert ah.REGION_ONLY_LABEL in row.actual_text
 
 
 def test_the_advisory_row_never_leaves_the_weather_group(upstreams):

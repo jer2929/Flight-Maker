@@ -132,6 +132,20 @@ def weather_checks(
     # the forecasts meant a single "MOD turb" report from an airliner in the
     # climb failed the turbulence row outright.
     pirep_text: str = "",
+    # Forecast area products we could not PLACE - the bulletin names its area in
+    # words ("N OF FORT MCMURRAY", or nothing but the FIR), so there is no polygon
+    # to test against the route. Held apart from ``area_text`` for the same reason
+    # PIREPs are held apart from both: it is worth reading and it is not worth
+    # cancelling a flight over.
+    #
+    # This is the fix for a real NO-GO. Such a bulletin used to ride in
+    # ``area_text``, and the only thing standing between it and a failed icing row
+    # was ``area_hazards``' last-resort FIR test - which asks "is this region on
+    # your route", not "is this weather near you". CZEG spans 48-79 degrees north,
+    # so a Fort McMurray icing AIRMET NO-GO'd a flight 350 nm south of it, and the
+    # failed row then propagated into all 48 hours of the timeline strip. It is
+    # reported here, at any severity, and it never fails a row.
+    region_text: str = "",
     # --- model-derived air mass (never gates; see ``services.airmass``) -------
     icing_bands: list[dict] = (),       # cloud-below-freezing bands, ft MSL
     turbulence: Optional[dict] = None,  # shear / gust / low-level-jet index
@@ -198,6 +212,7 @@ def weather_checks(
     embedded_gates: bool = True,
 ) -> list[LimitCheck]:
     area = area_text.upper()
+    region = region_text.upper()
     checks: list[LimitCheck] = []
 
     def add(key, label, failed, actual, *, advisory=False, applicable=True,
@@ -248,6 +263,9 @@ def weather_checks(
         in_endpoint = flag in hazards
         in_metar = flag in metar_hazards
         in_area = bool(area) and _has(area, *area_pats)
+        # Same words, in a bulletin we could not place. Deliberately NOT part of
+        # ``failed`` - see the ``region_text`` parameter above.
+        in_region = bool(region) and _has(region, *area_pats)
         in_prob = flag in prob_hazards and not in_taf
         failed = in_taf or in_endpoint or in_area or (in_metar and etd_is_now)
         if failed:
@@ -262,8 +280,14 @@ def weather_checks(
                 srcs.append("SIGMET/AIRMET")
             if not gates:
                 srcs.append("not on your auto-NO-GO list")
+            if in_region:
+                srcs.append("region-wide AIRMET/SIGMET")
             add(key, label, failed and gates, f"{name}{win} - " + " + ".join(srcs),
                 applicable=gates)
+        elif in_region:
+            add(key, label, False,
+                f"{name} forecast for the region{win} - AIRMET/SIGMET with no "
+                f"position stated, advisory only", advisory=True)
         elif in_prob:
             add(key, label, False,
                 f"{name} possible{win} - TAF {_prob_where(prob_labels)}, advisory only",
@@ -339,55 +363,81 @@ def weather_checks(
             rpt = {**rpt, "base_ft": level[0], "top_ft": level[1]}
         return _report_text(rpt, kind, "", source="PIREP")
 
+    def _region_note(kind: str) -> str:
+        """A forecast for the region that we could not place on the route.
+
+        Reported at any severity and never gating, exactly like ``_pirep_note``
+        above and for a kindred reason: a report we cannot put on the map is not
+        a report we can put in a verdict. It says which region, because that is
+        the whole of what the bulletin committed to.
+        """
+        rpt = area_products.find_hazard(region_text, kind, planned_low_ft, planned_high_ft)
+        if not rpt:
+            return ""
+        return _report_text(rpt, kind, "", source="AIRMET/SIGMET, region-wide")
+
     icing_rpt = area_products.find_hazard(raw_text, "icing", planned_low_ft, planned_high_ft)
     icing_pirep = _pirep_note("icing")
+    icing_region = _region_note("icing")
     frz = (f"freezing level ~{round(freezing_level_ft):,} ft"
            if freezing_level_ft is not None else "")
     bands = airmass.bands_overlapping(list(icing_bands), planned_low_ft, planned_high_ft)
     model_txt = airmass.describe_icing(bands)
     if icing_rpt and _gates(icing_rpt):
         add("icing", "Forecast icing", True,
-            " - ".join(x for x in (_report_text(icing_rpt, "icing", where), icing_pirep) if x),
+            " - ".join(x for x in (_report_text(icing_rpt, "icing", where),
+                                   icing_pirep, icing_region) if x),
             limit=mod_limit)
     else:
         bits = []
+        # "on your route", not a bare "none": a region-wide report may follow on
+        # the very next clause, and "no AIRMET/SIGMET icing - MOD icing SFC-FL100"
+        # is a row arguing with itself.
+        none_here = "no AIRMET/SIGMET icing on your route"
         if icing_rpt:
             bits.append(_report_text(icing_rpt, "icing", where) + " - not gating")
         elif model_txt:
-            bits.append(f"no AIRMET/SIGMET icing; model shows cloud below freezing {model_txt}")
+            bits.append(f"{none_here}; model shows cloud below freezing {model_txt}")
         else:
-            bits.append(f"no AIRMET/SIGMET icing; no model cloud below freezing "
+            bits.append(f"{none_here}; no model cloud below freezing "
                         f"{planned_low_ft:,.0f}-{planned_high_ft:,.0f} ft")
+        if icing_region:
+            bits.append(icing_region)
         if icing_pirep:
             bits.append(icing_pirep)
         if frz:
             bits.append(frz)
         bits.append(f"confirm on the GFA icing panel below ({gfa_region})")
         add("icing", "Forecast icing", False, " - ".join(bits), limit=mod_limit,
-            advisory=bool(icing_pirep))
+            advisory=bool(icing_pirep or icing_region))
 
     # 5. Moderate turbulence at low level, same two-source treatment.
     turb_rpt = area_products.find_hazard(raw_text, "turbulence", planned_low_ft, planned_high_ft)
     turb_pirep = _pirep_note("turbulence")
+    turb_region = _region_note("turbulence")
     turb = turbulence or {}
     if turb_rpt and _gates(turb_rpt):
         add("turbulence", "Moderate turbulence (low level)", True,
-            " - ".join(x for x in (_report_text(turb_rpt, "turbulence", where), turb_pirep) if x),
+            " - ".join(x for x in (_report_text(turb_rpt, "turbulence", where),
+                                   turb_pirep, turb_region) if x),
             limit=mod_limit)
     else:
         bits = []
+        none_here = "no AIRMET/SIGMET turbulence on your route"   # see the icing row
         if turb_rpt:
             bits.append(_report_text(turb_rpt, "turbulence", where) + " - not gating")
         else:
             desc = airmass.describe_turbulence(turb)
             level = turb.get("level", "none")
-            bits.append(f"no AIRMET/SIGMET turbulence; model {desc} - {level}"
-                        if desc else "no AIRMET/SIGMET turbulence; no model data")
+            bits.append(f"{none_here}; model {desc} - {level}"
+                        if desc else f"{none_here}; no model data")
+        if turb_region:
+            bits.append(turb_region)
         if turb_pirep:
             bits.append(turb_pirep)
         bits.append(f"confirm on the GFA turbulence panel below ({gfa_region})")
         add("turbulence", "Moderate turbulence (low level)", False, " - ".join(bits),
-            limit=mod_limit, advisory=bool(turb_pirep))
+            limit=mod_limit, advisory=bool(turb_pirep or turb_region))
 
     # 6. Low-level wind shear forecast
     _forecast_hazard("low_level_wind_shear", "llws", "Low-level wind shear", "LLWS",

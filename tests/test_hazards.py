@@ -490,3 +490,47 @@ def test_embedded_convective_reads_cvctv_cld_embd():
 
 def test_quiet_air_leaves_the_embedded_row_alone():
     assert _run()["embedded_ts"].passed
+
+
+# ---------------------------------------------------------------------------
+# region_text - a forecast we could not place
+#
+# A CFPS bulletin whose area is written in words ("N OF FORT MCMURRAY", or
+# nothing but the FIR) has no polygon to test against the route. It used to ride
+# in with ``area_text`` and NO-GO the flight, because the only thing left judging
+# it was whether the FIR it named was on the route - and CZEG spans 48 to 79
+# degrees north. It is reported here, at any severity, and never gates.
+# ---------------------------------------------------------------------------
+
+def test_region_wide_icing_is_reported_but_never_gates():
+    c = _run(region_text="CZEG AIRMET I1 MOD ICE SFC/100")["icing"]
+    assert c.passed, "a bulletin with no position must not fail a hard limit"
+    assert c.advisory, "but the pilot must still be told it was forecast"
+    assert "MOD icing" in c.actual_text and "region-wide" in c.actual_text
+
+
+def test_region_wide_turbulence_is_reported_but_never_gates():
+    c = _run(region_text="CZEG AIRMET T1 SEV TURB SFC/100")["turbulence"]
+    assert c.passed and c.advisory
+    assert "SEV turbulence" in c.actual_text and "region-wide" in c.actual_text
+
+
+def test_the_region_wide_note_does_not_contradict_the_row_it_sits_in():
+    # "no AIRMET/SIGMET icing - MOD icing SFC-FL100" is a row arguing with
+    # itself. The phrase is scoped to what it actually means.
+    c = _run(region_text="CZEG AIRMET I1 MOD ICE SFC/100")["icing"]
+    assert "no AIRMET/SIGMET icing on your route" in c.actual_text
+
+
+def test_a_region_wide_convective_product_advises_rather_than_failing():
+    c = _run(region_text="CZEG AIRMET: CONVECTIVE TSRA")["convective"]
+    assert c.passed and c.advisory
+    assert "no position stated" in c.actual_text
+
+
+def test_a_placed_product_still_gates_alongside_a_region_wide_one():
+    # The narrowness of the change: region_text softens nothing about area_text.
+    c = _run(raw_text="AIRMET MOD ICG 020/080",
+             region_text="CZEG AIRMET I1 SEV ICE SFC/100")["icing"]
+    assert not c.passed
+    assert "region-wide" in c.actual_text, "and the second one is still named"

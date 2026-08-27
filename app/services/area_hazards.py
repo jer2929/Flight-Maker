@@ -113,6 +113,11 @@ class AreaHazard:
     relevant: bool = True
     drop_reason: Optional[str] = None
     distance_nm: Optional[float] = None
+    # Was this bulletin's position actually tested against the route? Not the
+    # same as ``bool(geometry)``: it means the geometry test *ran*, and so
+    # ``distance_nm`` is a real answer rather than an absence. Everything the
+    # verdict is allowed to gate on hangs off this - see ``gating`` below.
+    positioned: bool = False
 
     @cached_property
     def band(self) -> tuple[float, float]:
@@ -173,8 +178,12 @@ def to_advisory(h: AreaHazard) -> Advisory:
         severity=h.severity, band_label=band_label(h),
         valid_from=h.valid_from, valid_to=h.valid_to,
         distance_nm=(round(h.distance_nm, 1) if h.distance_nm is not None else None),
-        product_id=h.product_id,
+        product_id=h.product_id, fir=h.fir,
         drop_label=DROP_LABELS.get(h.drop_reason or "") or None,
+        # Only meaningful on one we KEPT: a set-aside product already explains
+        # itself through ``drop_label``, and saying both would be two answers to
+        # the same question.
+        region_only=(h.relevant and not h.positioned),
     )
 
 
@@ -585,6 +594,13 @@ DROP_LABELS = {
     "fir": "another region",
 }
 
+# Not a drop reason - a bulletin we kept but could not place. The FIR it names is
+# the only evidence of where it is, and a FIR is not a location: ``services.firs``
+# draws CZEG as 48-79 degrees north, some 1,900 nm tall. So this label says the one
+# true thing about such a product - it is somewhere in that region - and
+# ``gating`` below keeps it out of the verdict.
+REGION_ONLY_LABEL = "region-wide - position not stated"
+
 # A validity that starts a little after landing still describes the air you were
 # just in; a hard edge at the ETA would hide a SIGMET issued mid-flight.
 _WINDOW_PAD = timedelta(minutes=30)
@@ -655,6 +671,10 @@ def filter_relevant(
     aside: list[AreaHazard] = []
 
     for h in hazards:
+        # Reset before the test, not after: ``filter_relevant`` is run more than
+        # once over the same objects (the tops pass, then the card), and a stale
+        # True from an earlier route would be a claim about this one.
+        h.positioned = False
         reason = _drop_reason(h, path=path, buffer_nm=buffer_nm, low_ft=low_ft,
                               high_ft=high_ft, etd=etd, eta=eta, now=now,
                               known_firs=known_firs,
@@ -688,6 +708,8 @@ def _drop_reason(h: AreaHazard, *, path, buffer_nm, low_ft, high_ft,
             near = pirep_buffer_nm
         hit, dist = geometry.polyline_intersects_polygon(path, h.geometry, near)
         h.distance_nm = None if dist == float("inf") else dist
+        # The test ran, so the answer below - hit or miss - is about this route.
+        h.positioned = True
         if not hit:
             return "geometry"
     elif h.kind == "PIREP":
@@ -736,6 +758,33 @@ def _drop_reason(h: AreaHazard, *, path, buffer_nm, low_ft, high_ft,
     if v_from and v_from > eta + _WINDOW_PAD:
         return "time"
     return None
+
+
+def gating(hazards: Iterable[AreaHazard]) -> list[AreaHazard]:
+    """The forecast products a hard-limit row is allowed to fail a flight on.
+
+    Two exclusions, and they are the whole point of this function:
+
+    * **PIREPs.** One aeroplane's experience of one moment, usually not an
+      aeroplane like yours. Already held apart everywhere else; held apart here
+      so there is one definition of it.
+    * **Anything unplaced.** A bulletin whose area we could not read is a bulletin
+      we cannot say is anywhere near you. It used to reach the icing and
+      turbulence rows through ``area_text`` and NO-GO a flight on the strength of
+      naming a FIR - and a FIR the size of Alberta plus the Northwest Territories
+      is not a position. It is still shown, still counted, and still says what it
+      forecasts; it just cannot end the flight. See ``REGION_ONLY_LABEL``.
+    """
+    return [h for h in hazards if h.kind != "PIREP" and h.positioned]
+
+
+def unplaced(hazards: Iterable[AreaHazard]) -> list[AreaHazard]:
+    """The kept forecast products we could not place - reported, never gating.
+
+    The complement of :func:`gating` over the non-PIREP products, so nothing
+    falls between the two and goes unmentioned.
+    """
+    return [h for h in hazards if h.kind != "PIREP" and not h.positioned]
 
 
 def drop_counts(aside: Iterable[AreaHazard]) -> dict[str, int]:

@@ -2359,6 +2359,12 @@ function advisoryChips(a) {
   if (a.band_label && a.band_label !== "no altitude given") out.push(chip(a.band_label));
   if (a.distance_nm === 0) out.push(chip("on route"));
   else if (a.distance_nm > 0) out.push(chip(`${Math.round(a.distance_nm)} NM off track`));
+  // Why there is no distance beside it, and why it is not on the map: the
+  // bulletin describes its area in words, so all it committed to is the region.
+  // Without this the pilot reads an advisory with a blank where every other one
+  // carries a number, which looks like a fault rather than the honest answer.
+  // Such a product never gates a verdict - see `area_hazards.gating`.
+  else if (a.region_only) out.push(chip(`region-wide${a.fir ? ` (${a.fir})` : ""}`));
   // Green with the time remaining while it is actually running. Built as HTML
   // rather than escaped with the rest because it carries its own class, and
   // empty for a product with no validity - a PIREP, mostly.
