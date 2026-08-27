@@ -79,6 +79,11 @@ class RunwayWind(BaseModel):
     width_ft: Optional[float] = None
     surface: Optional[str] = None
     surface_label: Optional[str] = None
+    # Tri-state, straight off ``surface_is_hard``: True hard/paved, False soft,
+    # None unknown. The browser needs the backend's own reading - deriving it
+    # from ``surface_label`` breaks on the raw-string fallback for surfaces the
+    # label table has never heard of.
+    is_hard: Optional[bool] = None
 
 
 class RunwayComponent(BaseModel):
@@ -91,6 +96,7 @@ class RunwayComponent(BaseModel):
     width_ft: Optional[float] = None
     surface: Optional[str] = None
     surface_label: Optional[str] = None
+    is_hard: Optional[bool] = None   # see RunwayWind.is_hard
     headwind_kt: float       # positive = headwind, negative = tailwind
     headwind_kt_gust: Optional[float] = None   # using gust + half-gust factor
     crosswind_kt: float      # magnitude

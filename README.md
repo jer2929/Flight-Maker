@@ -387,6 +387,28 @@ modelled wind **at your overfly time**. Grass and private strips are included on
 purpose: these are precautionary-landing options, not destinations. This section
 is situational awareness only and never affects your verdict.
 
+### The surface filter and the runway a card recommends
+
+Filtering discovery to **Hard (paved)** keeps aerodromes that *have* a paved
+runway - and many of the interesting ones also have a grass strip. The runway a
+card headlines as "best runway into wind" is now picked from the surface you
+asked for, not from every runway at the field.
+
+That used to be a wind-only pick, and it was wrong in a way that reached past the
+label. The headline runway is what the crosswind limit row is evaluated on, what
+"Within my crosswind limit" filters on, and what the crosswind sort orders by. So
+at a field whose grass strip lay across the paved one, a hard-paved scan would
+recommend the grass, report its zero crosswind, and pass a crosswind filter the
+paved runway - the only one you said you'd use - failed by 6 kt. Brantford
+(CYFD), the default base, is exactly that field: asphalt 05/23 and turf 14/32, 90
+degrees apart.
+
+The runway dropdown still lists **every** usable end, including the ones that
+don't match - a strip you can't use in a crosswind is still a strip, and worth
+knowing about. Those rows are dimmed and tagged `not hard-paved` so they read as
+what they are rather than as the recommendation. Aerodromes whose surface the
+dataset doesn't recognise are never tagged: "we don't know" isn't "wrong for you".
+
 ### Why a discovery candidate isn't a GO
 Every non-GO card says so on its face, directly under the badge: the personal
 minimums it busts, the **stacked threats** with the count and what the stack comes

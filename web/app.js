@@ -2405,15 +2405,31 @@ function metarHistoryList(h) {
   return `<details class="mhist"><summary>Observation history (${h.length})</summary>${h.map((m) => obsLine(m)).join("")}</details>`;
 }
 
-function runwaysBlock(a) {
+// Does this end match the surface the scan was filtered to? `is_hard` is the
+// backend's tri-state (true hard / false soft / null unknown) - an unknown
+// surface is never marked, because "we don't know" is not "wrong for you".
+function offSurface(c, surface) {
+  if (!surface || surface === "any" || c.is_hard == null) return false;
+  return surface === "hard" ? c.is_hard === false : c.is_hard === true;
+}
+
+// `surface` is the filter the caller's cards were scanned under. The dropdown
+// still lists every usable end - a pilot filtering for pavement should see that
+// the grass strip exists - but the ones that do not match say so, so none of
+// them can be read as the runway the card is recommending.
+function runwaysBlock(a, surface) {
   const comps = a.runway_components || [];
   if (!comps.length) return `<div class="rwy-na">Runway data unavailable</div>`;
   const w = a.weather || {};
   const usable = comps.filter((c) => c.tailwind_kt <= 0).sort((x, y) => y.headwind_kt - x.headwind_kt);
   if (!usable.length) return "";
   const gust = (g) => g ? ` (gust ${Math.round(Math.abs(g))})` : "";
-  const rows = usable.map((c) =>
-    `<div class="rwy-comp-row"><span class="rwy-diag-sm">${windRunwaySvg(c, w, { compact: true })}</span><div class="rwy-comp">RWY ${c.ident} ${dirM(c.heading_mag, c.heading_true)} · ${dimsText(c)} · head ${Math.round(c.headwind_kt)} kt${gust(c.headwind_kt_gust)} / xwind ${Math.round(c.crosswind_kt)} kt${gust(c.crosswind_kt_gust)}</div></div>`).join("");
+  const tag = surface === "hard" ? "not hard-paved" : "not soft-field";
+  const rows = usable.map((c) => {
+    const off = offSurface(c, surface);
+    const note = off ? ` <span class="rwy-offsurface-tag">${tag}</span>` : "";
+    return `<div class="rwy-comp-row${off ? " rwy-offsurface" : ""}"><span class="rwy-diag-sm">${windRunwaySvg(c, w, { compact: true })}</span><div class="rwy-comp">RWY ${c.ident} ${dirM(c.heading_mag, c.heading_true)} · ${dimsText(c)}${note} · head ${Math.round(c.headwind_kt)} kt${gust(c.headwind_kt_gust)} / xwind ${Math.round(c.crosswind_kt)} kt${gust(c.crosswind_kt_gust)}</div></div>`;
+  }).join("");
   return `<details class="runways"><summary>Usable runways into wind: ${usable.length} <span class="hint">(no tailwind component)</span></summary>${rows}</details>`;
 }
 
@@ -2642,6 +2658,10 @@ async function runDiscovery() {
     // Keyed by ident so the weather popovers can read the assessment itself,
     // rather than the card having to carry a copy of it in an attribute.
     DISCOVERY_BY_IDENT = Object.fromEntries(data.map((a) => [a.airport.ident, a]));
+    // The surface these cards were *scanned* with, not whatever the control says
+    // when a card happens to re-render. Change the filter without re-running and
+    // the cards on screen are still answers to the old question.
+    DISCOVERY_SURFACE = p.surface || "any";
     // "Nothing matched your filters" is a real answer; "nothing came back
     // because the forecast failed" is not, and the banner above says which.
     $("#discovery-results").innerHTML = data.length
@@ -2773,7 +2793,7 @@ function discoveryCard(a) {
         `RWY ${rw.runway_ident} (${dirM(rw.heading_mag, rw.heading_true)})${dims(rw)}`
         + ` · xwind ${Math.round(rw.crosswind_kt)} kt · headwind ${Math.round(rw.headwind_kt)} kt`)
       : `<div class="rwy-na">Runway data unavailable</div>`}
-    ${runwaysBlock(a)}
+    ${runwaysBlock(a, DISCOVERY_SURFACE)}
     <div class="meta">${notamToggle(a)}<span class="links">${linksHtml(a)}</span></div>
     ${obsLine(w.raw_metar)}
     <div class="notam-list hidden" id="notams-${a.airport.ident}">${notamItems(a)}</div>
@@ -2794,6 +2814,9 @@ function discoveryCard(a) {
 // Hover on a pointer device, tap on a touch one - one element, reused, appended
 // to <body> so it can escape the card's overflow and stacking context.
 let DISCOVERY_BY_IDENT = {};
+// Surface filter the visible discovery cards were scanned under - "any" until a
+// scan says otherwise. Read by runwaysBlock() to mark the ends that do not match.
+let DISCOVERY_SURFACE = "any";
 // `pinned` is what a click buys you on a mouse: hover already opened the thing,
 // so the click has to mean "keep it open while I read it" rather than toggling
 // it shut the instant the pointer that opened it arrives.

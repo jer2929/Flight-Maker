@@ -68,7 +68,8 @@ from app.services.geo import (
     haversine_nm,
     initial_bearing_true,
 )
-from app.services.runway import all_runway_components, best_runway, fill_headings, surface_is_hard
+from app.services.runway import (all_runway_components, best_runway, fill_headings,
+                                 surface_matches)
 from app.services.winds_aloft import clears_ceiling, lowest_ceiling, recommend_altitude
 from app.sources import airports as ap
 from app.sources import awc, cfps, openmeteo
@@ -799,6 +800,7 @@ def _assess_endpoint(
     span: tuple[datetime, datetime] | None = None,
     show_obs: bool = True, history_unavailable: bool = False,
     extra_checks: list[LimitCheck] | None = None,
+    runway_surface: str = "any",
 ) -> AirportAssessment:
     lat, lon = airport.lat, airport.lon
     runways = fill_headings(ap.get_runways(airport.ident), lat, lon)
@@ -831,7 +833,11 @@ def _assess_endpoint(
         # a card for a departure hours away shows no observation at all.
         weather.raw_metar = None
 
-    rw = _rw_with_mag(best_runway(runways, weather.wind_dir_true, weather.wind_kt, weather.gust_kt), lat, lon)
+    # ``runway_surface`` is the discovery scan's surface filter. The pick drives
+    # the crosswind limit row below, so a scan filtered to pavement has to be
+    # gated on a paved runway's crosswind rather than a grass strip's.
+    rw = _rw_with_mag(best_runway(runways, weather.wind_dir_true, weather.wind_kt,
+                                  weather.gust_kt, surface=runway_surface), lat, lon)
     verdict, checks, tchecks, n = decision(
         weather, rw, mode, manual_threats,
         extra_checks=extra_checks, ceiling_mode=ceiling_mode,
@@ -2426,9 +2432,10 @@ def _runways_pass_filters(ident: str, surface: str, min_length_ft: float = 0.0,
     rws = ap.get_runways(ident)
     if not rws:
         return surface == "any" and not min_length_ft and not min_width_ft
-    if surface == "hard" and not any(surface_is_hard(r.surface) is True for r in rws):
-        return False
-    if surface == "soft" and not any(surface_is_hard(r.surface) is False for r in rws):
+    # The same predicate ``best_runway`` narrows its pick with, so the gate that
+    # lets an aerodrome into the scan and the runway the card then headlines can
+    # never disagree about what "hard" means.
+    if surface != "any" and not any(surface_matches(r.surface, surface) for r in rws):
         return False
     if min_length_ft and not any((r.length_ft or 0) >= min_length_ft for r in rws):
         return False
@@ -2559,7 +2566,13 @@ async def suggest(
         notams, mode, manual_threats, 0.0, 0.0, None, ensemble=origin_ens,
         flight_rules=flight_rules,
         ceiling_mode="xc", when=etd_utc, is_now=is_now,
-        span=departure_span(etd_utc), show_obs=show_obs)
+        span=departure_span(etd_utc), show_obs=show_obs,
+        # The departure runway obeys the filter too. Its crosswind row is
+        # restamped onto every card in the scan (``origin_rows`` below), so
+        # picking a grass strip here puts a runway the pilot excluded behind the
+        # badge on the whole page - and the default base is a field with exactly
+        # that pair of runways.
+        runway_surface=surface)
     # Every row that explains the origin's verdict, restamped as the departure so
     # it can never be read as the candidate's own weather - the exact confusion
     # the old cruising-altitude row caused when it printed a deck at the origin
@@ -2633,7 +2646,7 @@ async def suggest(
             airport, metars.get(airport.ident), tafs.get(airport.ident),
             cand_fc, notams, mode, manual_threats, dist, bearing, alt,
             ensemble=ens_by_ident.get(airport.ident), flight_rules=flight_rules,
-            ceiling_mode="xc",
+            ceiling_mode="xc", runway_surface=surface,
             when=eta,
             # The candidate is read over the window it is *arrived into*. This
             # has been wrong in both directions: originally no span at all, then
