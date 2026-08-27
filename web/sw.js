@@ -38,17 +38,31 @@ const SHELL = [
      from a font CDN precisely because of the line above this list: a
      cross-origin request is bypassed by this worker, so an installed app
      opened offline would lose its type and re-flow every number column. */
-  "/fonts/plex-sans-400.woff2",
-  "/fonts/plex-sans-600.woff2",
+  "/fonts/plex-sans-var.woff2",
   "/fonts/plex-sans-condensed-600.woff2",
   "/fonts/plex-sans-condensed-700.woff2",
   "/fonts/plex-mono-400.woff2",
   "/fonts/plex-mono-500.woff2",
 ];
 
+// The five entries the app cannot open without. These are precached with
+// addAll, which is atomic on purpose: a shell missing its script is not a shell.
+const SHELL_CORE = ["/", "/index.html", "/app.js", "/style.css", "/manifest.webmanifest"];
+
 self.addEventListener("install", (event) => {
+  // Split, because addAll rejects atomically. One 404 on any single icon or
+  // font used to fail the whole install: skipWaiting never ran, activate never
+  // ran, old caches were never purged, and every installed browser went on
+  // serving the previous deploy's shell indefinitely - which is the exact
+  // failure the header above says this worker exists to prevent. The core must
+  // still be all-or-nothing; the trimmings must not be able to veto a deploy.
   event.waitUntil(
-    caches.open(SHELL_CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())
+    caches.open(SHELL_CACHE).then((c) =>
+      c.addAll(SHELL_CORE).then(() => Promise.all(
+        SHELL.filter((u) => !SHELL_CORE.includes(u))
+             .map((u) => c.add(u).catch(() => {}))
+      ))
+    ).then(() => self.skipWaiting())
   );
 });
 
@@ -74,8 +88,15 @@ self.addEventListener("fetch", (event) => {
 
   // App navigations: try the network, fall back to the cached shell offline.
   if (req.mode === "navigate") {
+    // A dead network REJECTS, but a 500 or a 502 RESOLVES - so catch() alone
+    // handed the user the origin's error page on an app whose whole offline
+    // story is "it still opens". Anything that is not a usable response falls
+    // back to the shell, which can then show the app's own error UI.
+    const shell = () => caches.match("/index.html", { ignoreSearch: true });
     event.respondWith(
-      fetch(req).catch(() => caches.match("/index.html", { ignoreSearch: true }))
+      fetch(req)
+        .then((res) => (res && res.ok ? res : shell().then((c) => c || res)))
+        .catch(() => shell())
     );
     return;
   }

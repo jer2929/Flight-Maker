@@ -48,7 +48,6 @@ const PILOT_FITNESS_ITEMS = [
   { id: "pf_hydration", label: "Poor hydration or no food in several hours" },
   { id: "pf_blood",     label: "Blood donation within 24 hours" },
   { id: "pf_scuba",     label: "Scuba diving within 12 hours" },
-  { id: "pf_co",        label: "Carbon monoxide exposure" },
   { id: "pf_injury",    label: "Physical injury / pain affecting controls" },
   { id: "pf_emotional", label: "Emotional distress (grief, anger, shock)" },
 ];
@@ -138,6 +137,66 @@ function saveEnabledMM(set) {
   try { localStorage.setItem("fm_minimums_v1", JSON.stringify([...set])); } catch (_) {}
 }
 let enabledMM = loadEnabledMM();
+
+// ---- Your own self-assessment items (per-browser) ----
+// The catalogues above are the standard IMSAFE/PAVE ground, but a pilot's real
+// personal limits are their own: "recovering from a cold", "flying the club's
+// other 172", "first flight since the check ride". These are stored beside the
+// enabled/disabled set rather than inside it, because that set holds only ids -
+// a custom item has to carry its wording too.
+//
+// Deliberately NOT wiped by "Reset to defaults", for the same reason the theme
+// is not: resetting the weather minimums restores a profile the app shipped,
+// and it has no default wording for a rule the pilot wrote themselves.
+const CUSTOM_ITEMS_KEY = "fm_custom_items_v1";
+const CUSTOM_LABEL_MAX = 80;   // one line in the panel; longer is a note, not a gate
+const CUSTOM_MAX_PER_SECTION = 12;
+
+let customItems = loadCustomItems();
+
+function loadCustomItems() {
+  const empty = { pf: [], ep: [] };
+  let raw = null;
+  try { raw = JSON.parse(localStorage.getItem(CUSTOM_ITEMS_KEY) || "null"); } catch (_) { raw = null; }
+  if (!raw || typeof raw !== "object") return empty;
+  const clean = (list) => (Array.isArray(list) ? list : [])
+    .filter((i) => i && typeof i.id === "string" && typeof i.label === "string" && i.label.trim())
+    .map((i) => ({ id: i.id, label: i.label.trim().slice(0, CUSTOM_LABEL_MAX) }))
+    .slice(0, CUSTOM_MAX_PER_SECTION);
+  return { pf: clean(raw.pf), ep: clean(raw.ep) };
+}
+
+function saveCustomItems() {
+  try { localStorage.setItem(CUSTOM_ITEMS_KEY, JSON.stringify(customItems)); } catch (_) {}
+}
+
+// Section-prefixed and random so a custom id can never collide with a built-in
+// one, nor with an id the pilot removed and re-added under different wording.
+function newCustomId(section) {
+  return `${section}_own_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function addCustomItem(section, label) {
+  const text = String(label || "").trim().slice(0, CUSTOM_LABEL_MAX);
+  if (!text) return null;
+  const list = customItems[section];
+  if (list.length >= CUSTOM_MAX_PER_SECTION) return null;
+  if (list.some((i) => i.label.toLowerCase() === text.toLowerCase())) return null;  // no duplicates
+  const item = { id: newCustomId(section), label: text };
+  list.push(item);
+  saveCustomItems();
+  // A pilot who just typed a rule wants it applied, not merely offered.
+  enabledMM.add(item.id);
+  saveEnabledMM(enabledMM);
+  return item;
+}
+
+function removeCustomItem(section, id) {
+  customItems[section] = customItems[section].filter((i) => i.id !== id);
+  saveCustomItems();
+  enabledMM.delete(id);
+  saveEnabledMM(enabledMM);
+}
 
 function loadRecencyMin() {
   try { const v = localStorage.getItem("fm_recency_min"); if (v !== null) return +v; } catch (_) {}
@@ -246,6 +305,14 @@ const THEME_WORDS = {
   dark: "Dark",
 };
 
+// Guarded because init() is re-entrant: the config-failure banner wires its
+// retry button to init, so every retry click used to add a second click handler
+// and a second matchMedia listener to the same button. Two handlers means one
+// tap advances the cycle twice - Auto jumps straight past Light to Dark - and
+// the count grows with every retry. The listeners are on elements that live for
+// the life of the page, so binding them once is the whole fix.
+let THEME_WIRED = false;
+
 function wireTheme() {
   let pref = loadTheme();
   applyTheme(pref);
@@ -263,6 +330,11 @@ function wireTheme() {
     btn.setAttribute("title", label);
   };
   paint();
+
+  // Re-entry still repaints (above) so the button's label tracks a theme changed
+  // in another tab, but it must not bind a second time.
+  if (THEME_WIRED) return;
+  THEME_WIRED = true;
 
   if (btn) {
     btn.addEventListener("click", () => {
@@ -282,54 +354,90 @@ function wireTheme() {
   }
 }
 
+// "Custom" carries no preset models, so the dropdown is swapped for a text box
+// the pilot types their type into ("Champ 7AC", "RV-7", the club's tail number).
+// It used to be a disabled select reading "Custom", which let you set a TAS but
+// gave you nowhere to record what the aeroplane actually was.
+function isCustomMake(make) {
+  return !Object.keys(AIRCRAFT_CATALOG[make] || {}).length;
+}
+
 function fillModelOptions(make) {
-  const sel = $("#ac-model");
+  const sel = $("#ac-model"), own = $("#ac-model-custom");
   const names = Object.keys(AIRCRAFT_CATALOG[make] || {});
-  if (!names.length) {  // "Custom" - no preset models, TAS typed by hand
-    sel.innerHTML = `<option value="">Custom</option>`;
-    sel.disabled = true;
+  const custom = !names.length;
+  sel.hidden = custom;
+  sel.disabled = custom;
+  if (own) own.hidden = !custom;
+  if (custom) {
+    sel.innerHTML = "";
+    if (own) own.value = AIRCRAFT.model || "";
   } else {
-    sel.disabled = false;
-    sel.innerHTML = names.map((n) => `<option value="${n}">${n}</option>`).join("");
+    sel.innerHTML = names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
   }
 }
 
 function buildAircraftPicker() {
   const makeSel = $("#ac-make"), modelSel = $("#ac-model"), tasInput = $("#ac-tas");
+  const ownInput = $("#ac-model-custom");
   if (!makeSel || !modelSel || !tasInput) return;
-  makeSel.innerHTML = Object.keys(AIRCRAFT_CATALOG).map((m) => `<option value="${m}">${m}</option>`).join("");
+  makeSel.innerHTML = Object.keys(AIRCRAFT_CATALOG)
+    .map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
 
-  // Restore the stored selection, defaulting to the Cessna 172 profile.
+  // Whichever control is standing in for "which type": the dropdown normally,
+  // the free-text box on a custom make.
+  const modelValue = () => (isCustomMake(makeSel.value)
+    ? (ownInput ? ownInput.value.trim().slice(0, 40) : "")
+    : modelSel.value);
+
+  // Restore the stored selection, defaulting to the Cessna 172 profile. A stored
+  // custom type is restored verbatim - it is not in any catalogue to match against.
   const make = (AIRCRAFT.make && AIRCRAFT_CATALOG[AIRCRAFT.make]) ? AIRCRAFT.make : "Cessna";
   makeSel.value = make;
-  fillModelOptions(make);
   const models = Object.keys(AIRCRAFT_CATALOG[make] || {});
-  const model = (AIRCRAFT.model && models.includes(AIRCRAFT.model)) ? AIRCRAFT.model : (models[0] || "");
-  modelSel.value = model;
+  const model = isCustomMake(make)
+    ? (AIRCRAFT.model || "")
+    : ((AIRCRAFT.model && models.includes(AIRCRAFT.model)) ? AIRCRAFT.model : (models[0] || ""));
+  AIRCRAFT = { ...AIRCRAFT, make, model: model || null };
+  fillModelOptions(make);          // reads AIRCRAFT.model for the custom box
+  if (!isCustomMake(make)) modelSel.value = model;
   const presetTas = (AIRCRAFT_CATALOG[make] || {})[model];
   tasInput.value = Math.round(AIRCRAFT.tas || presetTas || (CONFIG ? CONFIG.cruise_kt : 110));
   AIRCRAFT = { make, model: model || null, tas: +tasInput.value || null };
   saveAircraft();
 
   const syncTasFromModel = () => {
-    const m = makeSel.value, md = modelSel.value;
+    const m = makeSel.value, md = modelValue();
     const t = (AIRCRAFT_CATALOG[m] || {})[md];
     if (t) tasInput.value = Math.round(t);  // prefill, but stay editable
     AIRCRAFT = { make: m, model: md || null, tas: +tasInput.value || null };
     saveAircraft();
   };
   makeSel.addEventListener("change", () => {
+    // Switching away from a custom make must not carry its typed name into a
+    // catalogue make, where it would match no model and mislabel the aircraft.
+    AIRCRAFT = { ...AIRCRAFT, model: isCustomMake(makeSel.value) ? AIRCRAFT.model : null };
     fillModelOptions(makeSel.value);
-    modelSel.value = Object.keys(AIRCRAFT_CATALOG[makeSel.value] || {})[0] || "";
+    if (!isCustomMake(makeSel.value)) {
+      modelSel.value = Object.keys(AIRCRAFT_CATALOG[makeSel.value] || {})[0] || "";
+    }
     syncTasFromModel();
   });
   modelSel.addEventListener("change", syncTasFromModel);
+  if (ownInput) {
+    // `input`, not `change`: the typed name is only a label - it moves no
+    // number - so there is nothing to debounce and nothing to re-derive.
+    ownInput.addEventListener("input", () => {
+      AIRCRAFT = { make: makeSel.value, model: modelValue() || null, tas: AIRCRAFT.tas };
+      saveAircraft();
+    });
+  }
   tasInput.addEventListener("change", () => {
     let v = Math.round(+tasInput.value);
     if (!Number.isFinite(v) || v <= 0) v = Math.round(CONFIG ? CONFIG.cruise_kt : 110);
     v = Math.max(40, Math.min(400, v));
     tasInput.value = v;
-    AIRCRAFT = { make: makeSel.value, model: modelSel.value || null, tas: v };
+    AIRCRAFT = { make: makeSel.value, model: modelValue() || null, tas: v };
     saveAircraft();
   });
 }
@@ -3183,13 +3291,66 @@ function renderMinimums() {
 function renderMyMinimumsSettings() {
   const body = $("#my-minimums-body");
   if (!body) return;
-  const makeField = (items, legend) =>
-    `<fieldset><legend>${legend}</legend>${items.map(({ id, label }) =>
-      `<label><input type="checkbox" class="mm-toggle" value="${id}"${enabledMM.has(id) ? " checked" : ""} /> ${label}</label>`
-    ).join("")}</fieldset>`;
+  // Built-in and custom rows are the same control; the custom ones carry a
+  // remove button because they are the only ones that can cease to exist.
+  const row = ({ id, label }, section) =>
+    `<label><input type="checkbox" class="mm-toggle" value="${escapeHtml(id)}"`
+    + `${enabledMM.has(id) ? " checked" : ""} /> ${escapeHtml(label)}`
+    + (section ? `<button type="button" class="mm-del" data-section="${section}"`
+      + ` data-id="${escapeHtml(id)}" aria-label="Remove &quot;${escapeHtml(label)}&quot;"`
+      + ` title="Remove this item">&#10005;</button>` : "")
+    + `</label>`;
+  const makeField = (items, section, legend) => {
+    const own = customItems[section];
+    const full = own.length >= CUSTOM_MAX_PER_SECTION;
+    return `<fieldset><legend>${legend}</legend>`
+      + items.map((i) => row(i, null)).join("")
+      + own.map((i) => row(i, section)).join("")
+      + `<div class="mm-add">
+           <input type="text" class="mm-add-text" data-section="${section}"
+                  maxlength="${CUSTOM_LABEL_MAX}" ${full ? "disabled" : ""}
+                  placeholder="${full ? "Limit reached" : "Add your own\u2026"}"
+                  aria-label="Add your own ${legend.split(" - ")[0].toLowerCase()} item" />
+           <button type="button" class="mm-add-btn" data-section="${section}"
+                   ${full ? "disabled" : ""}>Add</button>
+         </div></fieldset>`;
+  };
   body.innerHTML =
-    makeField(PILOT_FITNESS_ITEMS, "Pilot fitness - included in self-assessment if checked") +
-    makeField(EXTERNAL_PRESSURE_ITEMS, "External pressures - included in self-assessment if checked");
+    makeField(PILOT_FITNESS_ITEMS, "pf", "Pilot fitness - included in self-assessment if checked") +
+    makeField(EXTERNAL_PRESSURE_ITEMS, "ep", "External pressures - included in self-assessment if checked");
+
+  const refresh = () => {
+    renderMyMinimumsSettings();
+    renderSelfAssessment("route-self-check");
+    renderSelfAssessment("discovery-self-check");
+  };
+  const commit = (section, input) => {
+    if (addCustomItem(section, input.value)) refresh();
+    else input.value = "";   // blank, duplicate, or at the cap - say nothing, just clear
+  };
+
+  body.querySelectorAll(".mm-add-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const input = body.querySelector(`.mm-add-text[data-section="${btn.dataset.section}"]`);
+      if (input) commit(btn.dataset.section, input);
+    });
+  });
+  body.querySelectorAll(".mm-add-text").forEach((input) => {
+    // Enter is how anyone actually adds a list item; the panel sits inside no
+    // form, so nothing else would pick this up.
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      commit(input.dataset.section, input);
+    });
+  });
+  body.querySelectorAll(".mm-del").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();   // the button sits inside the label - do not toggle it
+      removeCustomItem(btn.dataset.section, btn.dataset.id);
+      refresh();
+    });
+  });
   body.querySelectorAll(".mm-toggle").forEach((cb) => {
     cb.addEventListener("change", () => {
       if (cb.checked) enabledMM.add(cb.value); else enabledMM.delete(cb.value);
@@ -3204,17 +3365,20 @@ function renderMyMinimumsSettings() {
 function renderSelfAssessment(containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
-  const activePF = PILOT_FITNESS_ITEMS.filter((i) => enabledMM.has(i.id));
-  const activeEP = EXTERNAL_PRESSURE_ITEMS.filter((i) => enabledMM.has(i.id));
+  // The pilot's own items sit after the built-in ones in the same list, so a
+  // rule they wrote gates the flight exactly as a standard one does.
+  const activePF = PILOT_FITNESS_ITEMS.concat(customItems.pf).filter((i) => enabledMM.has(i.id));
+  const activeEP = EXTERNAL_PRESSURE_ITEMS.concat(customItems.ep).filter((i) => enabledMM.has(i.id));
   const recMin = loadRecencyMin();
   if (!activePF.length && !activeEP.length) { container.innerHTML = ""; return; }
   const bannerId = `gate-banner-${containerId}`;
+  // escapeHtml because these labels are now partly the pilot's own words.
   const gates = (items) => items.map(({ label }) =>
-    `<label><input type="checkbox" class="gate" data-banner="${bannerId}" /> ${label}</label>`
+    `<label><input type="checkbox" class="gate" data-banner="${bannerId}" /> ${escapeHtml(label)}</label>`
   ).join("");
   const recencyGate = `<label><input type="checkbox" class="gate" data-banner="${bannerId}" /> Fewer than ${recMin} hours flown in last 30 days</label>`;
   container.innerHTML = `<div class="panel self-check-inline">
-    <h3>Preflight self-assessment <span class="hint">(personal hard limits - check before pulling weather)</span></h3>
+    <h3>Preflight self-assessment</h3>
     <div class="checks-grid">
       ${activePF.length ? `<fieldset><legend>Pilot fitness - do not fly if any apply</legend>${gates(activePF)}${recencyGate}</fieldset>` : ""}
       ${activeEP.length ? `<fieldset><legend>External pressure - pause &amp; reassess</legend>${gates(activeEP)}</fieldset>` : ""}
