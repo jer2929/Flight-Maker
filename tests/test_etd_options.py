@@ -15,12 +15,12 @@ BASE = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
 
 
 def _hour(h, verdict=Verdict.GO, headwind=None, ceiling=6000, hazards=(),
-          crosswind=None, daylight=True, runway="06"):
+          crosswind=None, daylight=True, runway="06", ident="CYFD"):
     return HourCondition(
         time=(BASE + timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M"),
         verdict=verdict, headwind_kt=headwind, ceiling_agl_ft=ceiling,
         hazards=list(hazards), crosswind_kt=crosswind, crosswind_runway=runway,
-        daylight=daylight, visibility_sm=15)
+        crosswind_ident=ident, daylight=daylight, visibility_sm=15)
 
 
 def _run(hours, **kw):
@@ -193,3 +193,67 @@ def test_hours_available_reports_the_usable_run():
             + [_hour(5, verdict=Verdict.NOGO)]
     opts = _run(hours)
     assert opts and opts[0].hours_available == 4
+
+
+# ---------------------------------------------------------------------------
+# Which aerodrome
+#
+# ``timeline.build_timeline`` picks each hour's runway from whichever END has the
+# stronger wind, so the winning field changes from hour to hour. The card printed
+# "on RWY 12" with no ident, sitting directly above a hard-limits row that reads
+# "7 kt on RWY 07 (CYQG)" - and, worse, it would happily subtract a departure
+# crosswind from a destination one and call the difference an improvement.
+# ---------------------------------------------------------------------------
+
+def test_a_crosswind_gain_names_the_aerodrome():
+    hours = [_hour(0, crosswind=12, runway="07", ident="CYQG")] + \
+            [_hour(h, crosswind=4, runway="12", ident="CYQG") for h in range(1, 6)]
+    imp = next(i for i in _run(hours)[0].improvements if i.kind == "crosswind")
+    assert "on RWY 12 (CYQG)" in imp.text
+
+
+def test_a_crosswind_at_a_different_aerodrome_is_not_an_improvement():
+    """Two unrelated numbers. The screenshot's 7 kt was CYQG RWY 07 and the 2 kt
+    was some RWY 12 - subtracting them is not a comparison."""
+    hours = [_hour(0, crosswind=12, ident="CYQG")] + \
+            [_hour(h, crosswind=4, ident="CYFD") for h in range(1, 6)]
+    assert not any(i.kind == "crosswind"
+                   for o in _run(hours) for i in o.improvements)
+
+
+def test_a_crosswind_rise_at_another_aerodrome_does_not_veto_a_real_gain():
+    """The same rule on the rejection side. A destination crosswind climbing
+    while the departure's falls is not a reason to withhold the tailwind."""
+    hours = [_hour(0, headwind=15, crosswind=4, ident="CYQG")] + \
+            [_hour(h, headwind=-5, crosswind=14, ident="CYFD") for h in range(1, 6)]
+    assert any(i.kind == "tailwind" for o in _run(hours) for i in o.improvements)
+
+
+def test_hours_with_no_ident_at_all_still_compare():
+    """The older data shape. Refusing here would switch the axis off silently."""
+    hours = [_hour(0, crosswind=12, ident=None)] + \
+            [_hour(h, crosswind=4, ident=None) for h in range(1, 6)]
+    assert any(i.kind == "crosswind" for o in _run(hours) for i in o.improvements)
+
+
+# --- The label owns the noun ------------------------------------------------
+#
+# `NUDGE_ICON` in web/app.js sets a condensed-caps label at the head of each
+# gain line. A text that restates it reads "Xwind crosswind 7 kt".
+
+def test_the_crosswind_text_does_not_restate_its_own_label():
+    hours = [_hour(0, crosswind=12)] + [_hour(h, crosswind=4) for h in range(1, 6)]
+    imp = next(i for i in _run(hours)[0].improvements if i.kind == "crosswind")
+    assert not imp.text.lower().startswith("crosswind")
+
+
+def test_the_ceiling_text_does_not_restate_its_own_label():
+    hours = [_hour(0, ceiling=2000)] + [_hour(h, ceiling=6000) for h in range(1, 6)]
+    imp = next(i for i in _run(hours)[0].improvements if i.kind == "ceiling")
+    assert not imp.text.lower().startswith("ceiling")
+
+
+def test_an_unlimited_ceiling_later_is_still_said_plainly():
+    hours = [_hour(0, ceiling=2000)] + [_hour(h, ceiling=None) for h in range(1, 6)]
+    imp = next(i for i in _run(hours)[0].improvements if i.kind == "ceiling")
+    assert "unlimited" in imp.text and not imp.text.lower().startswith("ceiling")

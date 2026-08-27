@@ -414,8 +414,10 @@ def build_timeline(
         tw = dest_cond.get("wind_kt") or 0
         if tw > dw:
             wind_src, rw, w_lat, w_lon = f"{dest_ident} (dest)", rw_dest, dest_lat, dest_lon
+            rw_ident = dest_ident
         else:
             wind_src, rw, w_lat, w_lon = f"{dep_ident} (dep)", rw_dep, dep_lat, dep_lon
+            rw_ident = dep_ident
 
         combined = _worse(dep_cond, dest_cond)
         # The PROB group, if either end has one over this hour. Its ceiling,
@@ -456,6 +458,7 @@ def build_timeline(
             wind_kt=ws.wind_kt, gust_kt=ws.gust_kt,
             crosswind_kt=(rw.crosswind_kt if rw else None),
             crosswind_runway=(rw.runway_ident if rw else None),
+            crosswind_ident=(rw_ident if rw else None),
             wind_source=wind_src,
             ceiling_agl_ft=ws.ceiling_agl_ft, visibility_sm=ws.visibility_sm,
             cloud_cover_pct=combined.get("cloud_cover_pct"),

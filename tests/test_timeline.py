@@ -465,3 +465,34 @@ def test_an_ifr_flight_gets_a_nudge_the_vfr_limits_would_have_hidden():
     assert nudge is not None
     assert nudge.verdict == Verdict.GO
     assert nudge.etd_utc == ifr[2].time
+
+
+# ---------------------------------------------------------------------------
+# Which aerodrome the hour's runway belongs to
+#
+# The runway is picked from whichever END has the stronger wind, so it can be
+# the departure in one hour and the destination in the next. Nothing recorded
+# which, so the wait advisory printed "on RWY 12" with no field and compared a
+# crosswind at one aerodrome against a crosswind at the other.
+# ---------------------------------------------------------------------------
+
+def test_the_hour_records_which_aerodrome_its_runway_is_at():
+    calm, blowing = _fc([(50, 5)] * 3, [1] * 3), _fc([(140, 25)] * 3, [1] * 3)
+
+    dest_wins = build_timeline(calm, blowing, [], [], RWY, RWY, hours=3,
+                               dep_ident="CYFD", dest_ident="CYQG")
+    assert all(h.crosswind_ident == "CYQG" for h in dest_wins)
+
+    dep_wins = build_timeline(blowing, calm, [], [], RWY, RWY, hours=3,
+                              dep_ident="CYFD", dest_ident="CYQG")
+    assert all(h.crosswind_ident == "CYFD" for h in dep_wins)
+
+
+def test_the_ident_follows_the_same_end_the_wind_source_names():
+    """They are read off the one branch, so they can never disagree - and the
+    card prints both."""
+    calm, blowing = _fc([(50, 5)] * 3, [1] * 3), _fc([(140, 25)] * 3, [1] * 3)
+    for h in build_timeline(calm, blowing, [], [], RWY, RWY, hours=3,
+                            dep_ident="CYFD", dest_ident="CYQG"):
+        assert h.crosswind_ident is not None
+        assert h.crosswind_ident in h.wind_source

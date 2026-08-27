@@ -520,6 +520,13 @@ class HourCondition(BaseModel):
     gust_kt: Optional[float] = None
     crosswind_kt: Optional[float] = None
     crosswind_runway: Optional[str] = None   # mag ident the xwind is on
+    # WHICH aerodrome that runway is at. The hour's runway is picked from
+    # whichever END has the stronger wind (``timeline.build_timeline``), so it can
+    # be the departure in one hour and the destination in the next - and without
+    # this the card printed "on RWY 12" with no way to tell which field, and the
+    # wait advisory compared a crosswind at one aerodrome against a crosswind at
+    # the other and called the difference an improvement.
+    crosswind_ident: Optional[str] = None
     wind_source: Optional[str] = None        # which airport drove the wind
     ceiling_agl_ft: Optional[float] = None
     visibility_sm: Optional[float] = None

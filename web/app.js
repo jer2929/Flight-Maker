@@ -2529,7 +2529,11 @@ function etdNudgeCard(s) {
 }
 
 /* Why waiting helps, named rather than pictured. These sit at the head of a
-   gain line, so they are set in the same condensed caps as every other label. */
+   gain line, so they are set in the same condensed caps as every other label.
+
+   The LABEL owns the noun, and the backend text must not restate it - two of
+   them used to, and the line read "Xwind crosswind 7 kt" and "Ceiling ceiling
+   2,000 ft". See the Improvement builders in ``services/etd_options.py``. */
 const NUDGE_ICON = { tailwind: "Wind", ceiling: "Ceiling", hazard: "Wx", crosswind: "Xwind" };
 
 // "Wait and it gets better" - offered even when the flight is already legal,
@@ -2550,9 +2554,12 @@ function etdOptionsCard(options, verdictNow) {
       <ul class="nudge-gains">${gains}</ul></div>`;
   }).join("");
   // On a GO the heading has to make clear this is an option, not a caveat.
+  // Plainly stated: the flight is fine, and here is what a later one would be
+  // like. "Waiting would buy you" reads as a price being quoted for something
+  // the pilot has not asked to buy.
   const head = verdictNow === "GO"
-    ? "Already good to go - waiting would buy you:"
-    : "Waiting would also improve:";
+    ? "Already good to go. Waiting improves:"
+    : "Waiting also improves:";
   return `<div class="etd-options"><small>${head}</small>${cards}</div>`;
 }
 
