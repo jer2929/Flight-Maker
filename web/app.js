@@ -1391,6 +1391,10 @@ function hazardPopup(p) {
   if (p.band_label && p.band_label !== "no altitude given") bits.push(p.band_label);
   if (p.distance_nm === 0) bits.push("on your route");
   else if (p.distance_nm > 0) bits.push(`${Math.round(p.distance_nm)} NM off track`);
+  // A hazard drawn as a LINE carries its width in the bulletin, and the line on
+  // the map is the centre of it - so without this the drawn shape understates
+  // the area by however many miles the forecaster put either side of it.
+  if (p.corridor_nm) bits.push(`${Math.round(p.corridor_nm)} NM either side`);
   const exp = expiryState(p.valid_from, p.valid_to);
   if (exp) bits.push(exp.text);
   if (!p.relevant && p.drop_label) bits.push(p.drop_label);
@@ -1430,6 +1434,10 @@ function hazardLayers(gj) {
                                                  { maxWidth: 360 }),
   });
   return {
+    // "not a Point" rather than "is a Polygon": an area written as "WI 30NM
+    // EITHER SIDE OF LINE ..." is drawn as a LineString, and belongs here with
+    // the polygons rather than with the point reports. `hazardStyle`'s fill
+    // values are simply inert on a line.
     areas: make((f) => f.geometry && f.geometry.type !== "Point", hazardStyle),
     pireps: make((f) => f.geometry && f.geometry.type === "Point", pirepStyle),
   };
@@ -2359,6 +2367,12 @@ function advisoryChips(a) {
   if (a.band_label && a.band_label !== "no altitude given") out.push(chip(a.band_label));
   if (a.distance_nm === 0) out.push(chip("on route"));
   else if (a.distance_nm > 0) out.push(chip(`${Math.round(a.distance_nm)} NM off track`));
+  // Why there is no distance beside it, and why it is not on the map: the
+  // bulletin describes its area in words, so all it committed to is the region.
+  // Without this the pilot reads an advisory with a blank where every other one
+  // carries a number, which looks like a fault rather than the honest answer.
+  // Such a product never gates a verdict - see `area_hazards.gating`.
+  else if (a.region_only) out.push(chip(`region-wide${a.fir ? ` (${a.fir})` : ""}`));
   // Green with the time remaining while it is actually running. Built as HTML
   // rather than escaped with the rest because it carries its own class, and
   // empty for a product with no validity - a PIREP, mostly.
@@ -2515,7 +2529,11 @@ function etdNudgeCard(s) {
 }
 
 /* Why waiting helps, named rather than pictured. These sit at the head of a
-   gain line, so they are set in the same condensed caps as every other label. */
+   gain line, so they are set in the same condensed caps as every other label.
+
+   The LABEL owns the noun, and the backend text must not restate it - two of
+   them used to, and the line read "Xwind crosswind 7 kt" and "Ceiling ceiling
+   2,000 ft". See the Improvement builders in ``services/etd_options.py``. */
 const NUDGE_ICON = { tailwind: "Wind", ceiling: "Ceiling", hazard: "Wx", crosswind: "Xwind" };
 
 // "Wait and it gets better" - offered even when the flight is already legal,
@@ -2536,9 +2554,12 @@ function etdOptionsCard(options, verdictNow) {
       <ul class="nudge-gains">${gains}</ul></div>`;
   }).join("");
   // On a GO the heading has to make clear this is an option, not a caveat.
+  // Plainly stated: the flight is fine, and here is what a later one would be
+  // like. "Waiting would buy you" reads as a price being quoted for something
+  // the pilot has not asked to buy.
   const head = verdictNow === "GO"
-    ? "Already good to go - waiting would buy you:"
-    : "Waiting would also improve:";
+    ? "Already good to go. Waiting improves:"
+    : "Waiting also improves:";
   return `<div class="etd-options"><small>${head}</small>${cards}</div>`;
 }
 

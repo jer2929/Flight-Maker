@@ -714,22 +714,6 @@ def _apply(ws: WeatherSummary, c: dict) -> None:
     ws.hazards = sorted(set(ws.hazards) | set(c.get("hazards", [])))
 
 
-def _merge_worse(ws: WeatherSummary, c: dict | None) -> None:
-    if not c:
-        return
-    if c.get("wind_kt") is not None and (ws.wind_kt is None or c["wind_kt"] > ws.wind_kt):
-        ws.wind_kt = c["wind_kt"]
-        if c.get("wind_dir_true") is not None:
-            ws.wind_dir_true = c["wind_dir_true"]
-    if c.get("gust_kt") is not None and (ws.gust_kt is None or c["gust_kt"] > ws.gust_kt):
-        ws.gust_kt = c["gust_kt"]
-    if c.get("visibility_sm") is not None and (ws.visibility_sm is None or c["visibility_sm"] < ws.visibility_sm):
-        ws.visibility_sm = c["visibility_sm"]
-    if c.get("ceiling_agl_ft") is not None and (ws.ceiling_agl_ft is None or c["ceiling_agl_ft"] < ws.ceiling_agl_ft):
-        ws.ceiling_agl_ft = c["ceiling_agl_ft"]
-    ws.hazards = sorted(set(ws.hazards) | set(c.get("hazards", [])))
-
-
 def _notams_for(ident: str, notams: dict) -> list[Notam]:
     out = []
     for n in notams.get(ident, [])[:25]:
@@ -1321,14 +1305,19 @@ def _area_advisory_check(relevant: list[ah.AreaHazard]) -> LimitCheck:
     A row either way, never an empty space: "nothing active over the field" is
     the answer a pilot came for, and it is not the same answer as a silent card.
     """
-    gating = [h for h in relevant if h.kind in ah.GATING_KINDS]
-    advisory_only = [h for h in relevant if h.kind not in ah.GATING_KINDS]
+    # ``positioned``, not just the kind: a SIGMET whose area we could not read
+    # names a FIR and nothing else, and a FIR is not "over this aerodrome". It
+    # still appears - on the advisory branch below, saying so.
+    gating = [h for h in relevant if h.kind in ah.GATING_KINDS and h.positioned]
+    advisory_only = [h for h in relevant
+                     if h.kind not in ah.GATING_KINDS or not h.positioned]
 
     def _names(items: list[ah.AreaHazard]) -> str:
         out: list[str] = []
         for h in items[:4]:
             label = ah.HAZARD_LABELS.get(h.hazard) or h.hazard or "advisory"
-            out.append(f"{h.kind} ({label})")
+            where = "" if h.positioned else f", {ah.REGION_ONLY_LABEL}"
+            out.append(f"{h.kind} ({label}){where}")
         extra = len(items) - len(out)
         return ", ".join(out) + (f" +{extra} more" if extra > 0 else "")
 
@@ -2155,7 +2144,20 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # forecaster's statement about the airspace; a PIREP is what one aeroplane
     # met at one moment, usually not an aeroplane like yours. Both belong on the
     # card - only the first belongs in the verdict.
-    area_text = "\n\n".join(h.text for h in relevant_haz if h.kind != "PIREP")
+    # Only the products whose area we could actually PLACE may gate a row. A
+    # bulletin that names its region in words rather than coordinates is kept and
+    # shown - it just cannot end the flight on the strength of naming a FIR the
+    # size of Alberta. See ``area_hazards.gating`` for the whole argument.
+    gating_haz = ah.gating(relevant_haz)
+    area_text = "\n\n".join(h.text for h in gating_haz)
+    region_text = "\n\n".join(h.text for h in ah.unplaced(relevant_haz))
+    # The same products, kept apart so the icing and turbulence rows can name the
+    # one that failed them and say how far off track it is. Joining them into
+    # ``area_text`` throws that away, and a row that stops a flight without
+    # saying which bulletin did it is a row the pilot cannot check.
+    area_reports = [{"id": h.product_id or f"{h.kind} {h.fir or ''}".strip(),
+                     "distance_nm": h.distance_nm, "text": h.text}
+                    for h in gating_haz]
     pirep_text = "\n\n".join(h.text for h in relevant_haz if h.kind == "PIREP")
     # Hazards are scoped to the flight window, from the parsed TAF segments -
     # NOT grepped out of the raw text. A TS group valid tomorrow used to fail
@@ -2172,6 +2174,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     weather_checks = hz.weather_checks(
         raw_text=area_text,
         area_text=area_text,
+        area_reports=area_reports,
+        region_text=region_text,
         pirep_text=pirep_text,
         hazards=set(route_ws.hazards),
         window_hazards=window_haz,

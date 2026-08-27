@@ -520,6 +520,13 @@ class HourCondition(BaseModel):
     gust_kt: Optional[float] = None
     crosswind_kt: Optional[float] = None
     crosswind_runway: Optional[str] = None   # mag ident the xwind is on
+    # WHICH aerodrome that runway is at. The hour's runway is picked from
+    # whichever END has the stronger wind (``timeline.build_timeline``), so it can
+    # be the departure in one hour and the destination in the next - and without
+    # this the card printed "on RWY 12" with no way to tell which field, and the
+    # wait advisory compared a crosswind at one aerodrome against a crosswind at
+    # the other and called the difference an improvement.
+    crosswind_ident: Optional[str] = None
     wind_source: Optional[str] = None        # which airport drove the wind
     ceiling_agl_ft: Optional[float] = None
     visibility_sm: Optional[float] = None
@@ -642,9 +649,16 @@ class Advisory(BaseModel):
     valid_to: Optional[str] = None
     distance_nm: Optional[float] = None   # 0 = the route goes through it
     product_id: Optional[str] = None      # "CZYZ SIGMET A1"
+    fir: Optional[str] = None             # "CZEG" - the region it was issued for
     # Set only on advisories that were fetched but set aside, saying why:
     # "outside your altitudes", "not on your route", ...
     drop_label: Optional[str] = None
+    # True when the bulletin was kept but never placed - its area is written in
+    # words rather than coordinates, so all we know is the region it names. The
+    # card chips it, because an advisory with no distance beside it otherwise
+    # reads as a rendering fault rather than as the honest answer it is. Such a
+    # product never gates a verdict (``area_hazards.gating``).
+    region_only: bool = False
 
 
 class EnrouteAirport(BaseModel):

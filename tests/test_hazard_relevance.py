@@ -87,10 +87,14 @@ def route(monkeypatch):
     for name in ("isigmets", "airsigmets", "cwas", "pireps", "gairmets"):
         monkeypatch.setattr(awc, name, empty_l)
 
-    def with_sigmets(items):
+    def with_sigmets(items, airmets=()):
         async def sigmets(*a, **k):
             return list(items)
+
+        async def airmets_(*a, **k):
+            return list(airmets)
         monkeypatch.setattr(cfps, "sigmets", sigmets)
+        monkeypatch.setattr(cfps, "airmets", airmets_)
         with fetch_health.collect():
             return asyncio.run(orchestrator.assess_route(CYFD, CYHM, "day", []))
 
@@ -191,3 +195,74 @@ def test_no_advisories_at_all_is_a_clean_result(route):
     assert r.sigmets == [] and r.nearby_advisories == []
     assert r.hazards_filtered == {}
     assert r.hazards_geojson == {"type": "FeatureCollection", "features": []}
+
+
+# ---------------------------------------------------------------------------
+# An advisory we could not place
+#
+# The reported bug, and the worst one in this file: a CFPS AIRMET that describes
+# its area in words rather than coordinates parses to no polygon at all. The only
+# thing left to judge it by was its FIR - and ``services.firs`` draws CZYZ as 41
+# to 62 degrees north, CZEG as 48 to 79. "Same FIR" is not "near you". So an icing
+# AIRMET for the far end of the region reached the icing hard-limit row, failed
+# it, NO-GO'd the flight, and - through ``static_hazards`` - turned every one of
+# the 48 timeline hours red as well.
+#
+# It is still fetched, still listed, still counted. It just cannot end a flight
+# on the strength of naming a region.
+# ---------------------------------------------------------------------------
+
+def _airmet(body: str, *, area: str = "", ident: str = "I1") -> dict:
+    """A live CZYZ AIRMET. With ``area`` empty it names no coordinates - which is
+    the ordinary way these are written, not a malformed one."""
+    now = datetime.now(timezone.utc)
+    stamp = lambda t: t.strftime("%d%H%M")  # noqa: E731
+    where = f" WI {area}" if area else " N OF LAKE SUPERIOR"
+    return {"location": "CZYZ",
+            "text": f"CZYZ AIRMET {ident} "
+                    f"VALID {stamp(now - timedelta(hours=1))}/"
+                    f"{stamp(now + timedelta(hours=6))} CZYZ-\n"
+                    f"CZYZ TORONTO FIR {body}{where} STNR NC="}
+
+
+def test_an_unplaced_airmet_in_your_own_fir_does_not_no_go_the_flight(route):
+    r = route([], airmets=[_airmet("MOD ICE SFC/100")])
+
+    icing = next(c for c in r.limit_checks if c.key == "icing")
+    assert icing.passed, "an advisory with no position must not fail a hard limit"
+    assert r.verdict_now != Verdict.NOGO
+
+
+def test_an_unplaced_airmet_is_still_shown_and_says_why_it_has_no_distance(route):
+    r = route([], airmets=[_airmet("MOD ICE SFC/100")])
+
+    assert len(r.airmets) == 1, "it must not disappear - it is a real forecast"
+    adv = r.airmets[0]
+    assert adv.region_only is True
+    assert adv.distance_nm is None
+    assert adv.fir == "CZYZ"
+    icing = next(c for c in r.limit_checks if c.key == "icing")
+    assert icing.advisory, "reported, so the pilot reads it before flying"
+    assert "region-wide" in icing.actual_text
+
+
+def test_an_unplaced_airmet_does_not_poison_the_timeline(route):
+    """The amplifier. ``orchestrator`` copies a failed icing row into
+    ``static_hazards``, which is applied to every hour of the 48-hour strip - so
+    one unreadable bulletin used to grey out two days of flying."""
+    r = route([], airmets=[_airmet("MOD ICE SFC/100")])
+
+    assert any(h.verdict == Verdict.GO for h in r.timeline), \
+        "no hour should be gated by an advisory that names no position"
+
+
+def test_a_placed_airmet_over_the_route_still_gates(route):
+    """The converse, and the reason this change is narrow: a bulletin whose area
+    we CAN read, and which the route goes through, fails the row exactly as it
+    always did."""
+    r = route([], airmets=[_airmet("MOD ICE SFC/100", area=ON_ROUTE_AREA)])
+
+    icing = next(c for c in r.limit_checks if c.key == "icing")
+    assert not icing.passed
+    assert len(r.airmets) == 1 and r.airmets[0].region_only is False
+    assert r.airmets[0].distance_nm == 0.0

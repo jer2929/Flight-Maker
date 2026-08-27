@@ -91,7 +91,7 @@ def _ceiling(base: HourCondition, cand: HourCondition, cfg: dict,
             return None
         return Improvement(
             kind="ceiling",
-            text=f"ceiling {_fmt_ft(base.ceiling_agl_ft)} → no ceiling",
+            text=f"{_fmt_ft(base.ceiling_agl_ft)} → unlimited",
             from_value=base.ceiling_agl_ft, to_value=None)
     if base.ceiling_agl_ft is None:
         return None          # already unlimited; nothing to gain
@@ -103,7 +103,7 @@ def _ceiling(base: HourCondition, cand: HourCondition, cfg: dict,
         return None
     return Improvement(
         kind="ceiling",
-        text=f"ceiling {_fmt_ft(base.ceiling_agl_ft)} → {_fmt_ft(cand.ceiling_agl_ft)}",
+        text=f"{_fmt_ft(base.ceiling_agl_ft)} → {_fmt_ft(cand.ceiling_agl_ft)}",
         from_value=base.ceiling_agl_ft, to_value=cand.ceiling_agl_ft)
 
 
@@ -132,16 +132,42 @@ def _hazards_worse(base: HourCondition, cand: HourCondition) -> bool:
     return bool((set(cand.hazards) & gating) - set(base.hazards))
 
 
+def _same_field(base: HourCondition, cand: HourCondition) -> bool:
+    """Are the two hours' crosswinds even about the same aerodrome?
+
+    ``timeline.build_timeline`` picks each hour's runway from whichever END has
+    the stronger wind, so the winning field can change from one hour to the next.
+    Subtracting a departure crosswind from a destination one and calling the
+    difference a gain is not a comparison at all - it is two unrelated numbers.
+
+    An hour with no ident on either side is the older data shape and is compared
+    as before; refusing there would silently switch the whole axis off.
+    """
+    if base.crosswind_ident is None and cand.crosswind_ident is None:
+        return True
+    return base.crosswind_ident == cand.crosswind_ident
+
+
 def _crosswind(base: HourCondition, cand: HourCondition, cfg: dict) -> Improvement | None:
     if base.crosswind_kt is None or cand.crosswind_kt is None:
+        return None
+    if not _same_field(base, cand):
         return None
     drop = base.crosswind_kt - cand.crosswind_kt
     if drop < cfg["crosswind_drop_kt"]:
         return None
+    # "on RWY 12 (CYQG)" - the same shape the Crosswind hard-limit row uses, and
+    # for the same reason: a runway number alone does not say which field, and
+    # this card sits directly above a row that names one.
+    #
+    # No leading "crosswind": the front end puts NUDGE_ICON["crosswind"] = "Xwind"
+    # at the head of the line, so the two together read "Xwind crosswind 7 kt".
     rw = f" on RWY {cand.crosswind_runway}" if cand.crosswind_runway else ""
+    if rw and cand.crosswind_ident:
+        rw += f" ({cand.crosswind_ident})"
     return Improvement(
         kind="crosswind",
-        text=(f"crosswind {round(base.crosswind_kt)} kt → "
+        text=(f"{round(base.crosswind_kt)} kt → "
               f"{round(cand.crosswind_kt)} kt{rw}"),
         from_value=round(base.crosswind_kt, 1), to_value=round(cand.crosswind_kt, 1))
 
@@ -149,6 +175,8 @@ def _crosswind(base: HourCondition, cand: HourCondition, cfg: dict) -> Improveme
 def _crosswind_worse(base: HourCondition, cand: HourCondition, cfg: dict) -> bool:
     if base.crosswind_kt is None or cand.crosswind_kt is None:
         return False
+    if not _same_field(base, cand):
+        return False       # not worse - not comparable. See ``_same_field``.
     return (cand.crosswind_kt - base.crosswind_kt) >= cfg["crosswind_drop_kt"]
 
 

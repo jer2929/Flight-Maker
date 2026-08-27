@@ -119,12 +119,52 @@
   --well: rgba(0,0,0,.18); --well-strong: rgba(0,0,0,.25);
   --shadow-pop: 0 12px 32px rgba(0,0,0,.5);   /* the one true drop shadow */
 
-  /* Page frame */
+  /* Page frame. --gutter is deliberately NOT on the --sp-* scale below: that
+     scale is spacing INSIDE a block, and this is the distance from the viewport
+     edge to the content column - a different quantity, and one that reflows
+     every page if it moves. One owner for it, so header, tabs, panes and footer
+     cannot drift apart along the left edge (see the `header` rule). */
   --page: 1000px;
   --gutter: 20px;
+  /* The x every page-width block's content sits on: the gutter, plus whatever
+     the centred column leaves over at this viewport width. `max()` is what makes
+     it degrade to a plain gutter once the viewport is narrower than --page. A
+     block already constrained to --page (a .tab-pane, the footer) gets this for
+     free from `margin: 0 auto` + `padding: 0 var(--gutter)`; this token is for
+     the full-bleed ones, which must not be constrained - the header's rule and
+     background span the whole width by design. */
+  --page-x: max(var(--gutter), calc((100% - var(--page)) / 2 + var(--gutter)));
 
-  /* Spacing scale */
+  /* Spacing scale, for the gaps between and inside blocks.
+
+     NOT yet the whole vocabulary, and the comment should say so rather than
+     imply it: the sheet still carries ~66 literal 6px and 10px values, which
+     between them outnumber every step here. Rounding those to 8 and 12 is a
+     ~25% loosening of nearly every internal gap in the app, and it cannot be
+     eyeballed without live weather in the cards - so it is deliberately left
+     for a pass that can be looked at. What IS pinned (tests/test_spacing.py) is
+     the part that made things fail to line up, which is a different problem
+     from the part that makes them uneven:
+
+       --page-x     one left edge for header, tabs, panes and footer
+       --row-inset  one left edge for every row nested inside a panel
+       --chip-pad-* one shape for every chip
+       --list-indent one indent for every bullet list
+
+     Those are about EDGES SHARED between separate blocks, where a 3px
+     difference reads as a mistake. A 6px gap next to an 8px one does not. */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+
+  /* A chip: .badge, .notam-status, .fc-tag, button.src-pop. They carried four
+     different paddings (2px 9px, 1px 7px, 1px 6px, 3px 8px) - four objects that
+     read as the same object and sit at four different heights, several of them
+     side by side on one card head. One pair now, with one documented exception:
+     button.src-pop is a touch target and takes a taller y, and says so.
+     (.taf-p looked like a fifth and is not - it is a row nested in a panel, so
+     it takes --row-pad-x with the others.) */
+  --chip-pad-y: 2px; --chip-pad-x: var(--sp-2);
+  /* Bullet-list indent, for the three lists that each hardcoded 18px. */
+  --list-indent: var(--sp-4);
 
   /* One text-x for every block. --pad-x is the total distance from a block's
      border box to its text, so each block subtracts whatever left border it
@@ -211,8 +251,18 @@ body {
   margin: 0; font-family: var(--f-ui);
   background: var(--bg); color: var(--ink); line-height: 1.45; overflow-x: clip;
 }
+/* The bar is full-bleed - its rule and gradient span the viewport, which is what
+   makes it a header rather than a card. Its CONTENTS are not: they sit on the
+   same x as .tab-pane, body > .panel and the footer, via --page-x.
+
+   They used not to. This rule carried a literal `20px`, which happens to equal
+   --gutter and so lined up in the one band between 480px and 1000px - and
+   nowhere else. Above 1000px the content column is centred and the logo stayed
+   pinned ~200px to the left of every panel on the page; below 480px the phone
+   rule cut the padding to 12px and put it 8px to their left. The footer has been
+   constrained to the column all along, so the header was the odd one out. */
 header {
-  padding: 14px 20px; border-bottom: 1px solid var(--line);
+  padding: var(--sp-3) var(--page-x); border-bottom: 1px solid var(--line);
   background: linear-gradient(180deg, var(--head-top), var(--bg));
   /* Frozen at the top so the logo + Data/Current time stay visible on scroll. */
   position: sticky; top: 0; z-index: 1000;
@@ -232,7 +282,9 @@ header p { margin: 4px 0 0; color: var(--muted); }
   .clock-val { font-size: .78rem; }
 }
 @media (max-width: 480px) {
-  header { padding: 8px 12px; gap: 8px; }
+  /* Block padding only. The inline padding is --page-x at every width, or the
+     header stops sharing a left edge with the content under it. */
+  header { padding-block: var(--sp-2); gap: var(--sp-2); }
   .logo { height: 32px; }
   .clock-label { font-size: .58rem; }
   .clock-val { font-size: .72rem; }
@@ -409,7 +461,7 @@ select, input[type=text], .route-inputs input {
   box-shadow: var(--shadow-pop);
   max-height: 260px; overflow-y: auto; margin-top: 2px;
 }
-.ac-item { padding: 8px 10px; cursor: pointer; font-size: .88rem; }
+.ac-item { padding: var(--sp-2) var(--sp-3); cursor: pointer; font-size: .88rem; }
 .ac-item:hover { background: var(--accent); color: var(--on-accent); }
 .ac-item .id { font-weight: 700; }
 .ac-item .nm { color: var(--muted); font-size: .8rem; }
@@ -452,7 +504,8 @@ select, input[type=text], .route-inputs input {
 .badge {
   font-family: var(--f-cond); font-weight: 700; font-size: .76rem;
   text-transform: uppercase; letter-spacing: .1em;
-  padding: 2px 9px; border: 1.5px solid var(--muted); border-radius: 0;
+  padding: var(--chip-pad-y) var(--chip-pad-x);
+  border: 1.5px solid var(--muted); border-radius: 0;
   color: var(--ink); white-space: nowrap;
 }
 .badge.GO { border-color: var(--go); color: var(--go-ink); }
@@ -468,25 +521,25 @@ select, input[type=text], .route-inputs input {
 .mk {
   font-family: var(--f-cond); font-weight: 600; font-size: var(--fs-2xs);
   text-transform: uppercase; letter-spacing: .1em; color: var(--muted);
-  margin-right: 5px;
+  margin-right: var(--sp-1);
 }
 /* On a line that is already --muted, the label has to step back further still
    or it competes with the number it introduces. */
 .meta .mk { opacity: .85; }
-.reasons { margin: 4px 0 0; padding-left: 18px; font-size: .86rem; }
+.reasons { margin: var(--sp-1) 0 0; padding-left: var(--list-indent); font-size: .86rem; }
 .reasons li { margin: 2px 0; }
 
 /* Why a discovery card is not a plain GO. Sits directly under the card head, so
    the badge and its explanation are read together rather than a screen apart. */
 .why {
-  margin: var(--sp-2) 0 2px; border-radius: var(--r-md);
+  margin: var(--sp-2) 0 var(--sp-1); border-radius: var(--r-md);
   padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--row-pad-x);
   background: var(--scrim); border-left: var(--state-bar) solid var(--line);
 }
 .why.MITIGATE { border-left-color: var(--mitigate); }
 .why.NOGO { border-left-color: var(--nogo); }
 .why-title { font-weight: 700; font-size: .84rem; margin-bottom: 2px; }
-.why-group + .why-group { margin-top: 6px; }
+.why-group + .why-group { margin-top: var(--sp-2); }
 .why-h { font-size: .78rem; color: var(--muted); }
 /* Provenance under a failing line: which source, which TAF group, and the group
    as it reads in the raw TAF - so a number on the card can be traced to the line
@@ -494,7 +547,8 @@ select, input[type=text], .route-inputs input {
 .why-src { font-size: .76rem; color: var(--muted); margin-top: 1px; }
 .why-raw {
   font-family: var(--f-mono); font-size: .72rem; color: var(--muted);
-  margin-top: 5px; padding-left: 18px; word-break: break-word; opacity: .85;
+  margin-top: var(--sp-1); padding-left: var(--list-indent);
+  word-break: break-word; opacity: .85;
 }
 .why-raw-tag { font-family: var(--font, inherit); font-style: italic; margin-right: 6px; }
 .raw { color: var(--muted); font-family: var(--f-mono); font-size: .76rem; margin-top: 8px; word-break: break-word; }
@@ -570,7 +624,8 @@ select, input[type=text], .route-inputs input {
 /* The second and last box. Same reasoning as .badge: a NOTAM being live or
    lapsed is a state, so it keeps an object's outline - without the fill. */
 .notam-status { font-family: var(--f-cond); font-size: var(--fs-2xs); font-weight: 700;
-  padding: 1px 7px; border-radius: 0; text-transform: uppercase; letter-spacing: .1em; }
+  padding: var(--chip-pad-y) var(--chip-pad-x); border-radius: 0;
+  text-transform: uppercase; letter-spacing: .1em; }
 .notam-status.active { color: var(--go-ink); border: 1px solid var(--go); }
 .notam-status.upcoming { color: var(--mit-ink); border: 1px solid var(--mitigate); }
 .notam-status.expired { color: var(--muted); border: 1px solid var(--line); }
@@ -622,8 +677,10 @@ button.src-pop {
   border: 0; color: inherit;
   display: inline-flex; align-items: center; gap: 3px;
   /* Fingers are wider than 12px of chip. Padding grows the hit area without
-     growing the pill, so a phone can hit it without magnifying the row. */
-  padding: 3px 8px;
+     growing the pill, so a phone can hit it without magnifying the row.
+     The one chip that does NOT take --chip-pad-y: it is a control, and 2px of
+     vertical padding is not a target a thumb can find. */
+  padding: var(--sp-1) var(--chip-pad-x);
 }
 button.src-pop:hover, button.src-pop[aria-expanded="true"] { filter: brightness(1.25); }
 button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -655,11 +712,18 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
      not a single ceiling height, so it flexes and the fixed columns keep their
      width. minmax(0, ...) is what lets it shrink instead of forcing the row wide. */
   display: grid; grid-template-columns: 46px 88px minmax(0, 1.7fr) 58px minmax(0, 1fr);
-  gap: 6px; padding: 3px 5px; border-radius: var(--r-sm); align-items: baseline;
+  /* 6px, not a scale step: .wx-h-x below is positioned with a hand-measured
+     42px indent to sit under this grid's third column, and that number is
+     calibrated against this gap. Moving one without the other breaks the
+     alignment this whole block is about. */
+  gap: 6px; padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--row-pad-x);
+  border-left: var(--state-bar) solid transparent;
+  border-radius: var(--r-sm); align-items: baseline;
   font-variant-numeric: tabular-nums;
 }
 .wx-h-hd { color: var(--muted); font-family: var(--f-cond); font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: .1em; }
-.wx-h.in { background: color-mix(in srgb, var(--go) 16%, transparent); border-left: 3px solid var(--go); padding-left: 5px; }
+.wx-h.in { background: color-mix(in srgb, var(--go) 16%, transparent);
+  border-left-color: var(--go); }
 .wx-h.in span { color: var(--go-ink); }
 .wx-h-x { color: var(--muted); }
 /* A stack can run past its column; wrapping is better than clipping a layer. */
@@ -691,7 +755,7 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 /* The ETD this card was assessed for. Was an outlined pill; it is a timing
    note on a heading, so it is set as one - mono, because it is a clock time. */
 .planned-etd {
-  margin-left: 10px; font-family: var(--f-mono); font-size: .74rem; font-weight: 500;
+  margin-left: var(--sp-3); font-family: var(--f-mono); font-size: .74rem; font-weight: 500;
   white-space: nowrap; color: var(--taf-ink); vertical-align: middle;
 }
 .planned-etd .pe-arrow { opacity: .7; }
@@ -789,10 +853,11 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .etd-options > small { color: var(--muted); font-size: .8rem; }
 .etd-option {
   background: var(--scrim); border-color: var(--scrim-line);
-  margin-top: 6px;
+  margin-top: var(--sp-2);
 }
 .etd-option .nudge-gains {
-  margin: 6px 0 0; padding-left: 18px; font-size: .84rem; color: var(--muted);
+  margin: var(--sp-2) 0 0; padding-left: var(--list-indent);
+  font-size: .84rem; color: var(--muted);
 }
 .etd-option .nudge-gains li { margin: 2px 0; }
 .legend { font-family: var(--f-cond); font-size: .74rem; letter-spacing: .07em;
@@ -862,7 +927,7 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .rwy-offsurface-tag {
   font-family: var(--f-cond); font-size: .72rem; text-transform: uppercase;
   letter-spacing: .06em; color: var(--muted);
-  border: 1px solid var(--muted); border-radius: 3px; padding: 0 4px;
+  border: 1px solid var(--muted); border-radius: var(--r-sm); padding: 0 var(--sp-1);
   white-space: nowrap;
 }
 .wr { display: block; width: 156px; height: 156px; overflow: visible; }
@@ -922,7 +987,10 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .nearby-caveat { margin-top: 4px; font-style: italic; }
 .advisories { font-size: .84rem; }
 .advisories summary { cursor: pointer; font-weight: 600; }
-.adv { margin: 6px 0; padding: 6px 8px; background: color-mix(in srgb, var(--mitigate) 8%, transparent); border-left: 3px solid var(--mitigate);
+.adv { margin: var(--sp-2) 0;
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--row-pad-x);
+  background: color-mix(in srgb, var(--mitigate) 8%, transparent);
+  border-left: var(--state-bar) solid var(--mitigate);
   border-radius: var(--r-sm); font-family: var(--f-mono); font-size: .78rem; word-break: break-word; }
 .adv-k { font-weight: 700; color: var(--mit-ink); margin-right: 6px; }
 .adv > summary { cursor: pointer; list-style: revert; }
@@ -948,15 +1016,19 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .adv-aside > summary { cursor: pointer; color: var(--muted); }
 .adv-aside .adv { background: var(--scrim-soft); border-left-color: var(--line); opacity: .85; }
 .adv-aside .adv-k { color: var(--muted); }
-.trends { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--taf-ink);
+.trends { margin: var(--sp-2) 0;
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--row-pad-x);
+  border-left: var(--state-bar) solid var(--taf-ink);
   background: color-mix(in srgb, var(--taf-ink) 8%, transparent); border-radius: var(--r-sm); }
 .trend { font-size: .86rem; margin: 2px 0; }
 details.trends summary { cursor: pointer; color: var(--accent); font-family: var(--f-cond); font-size: .8rem; text-transform: uppercase; letter-spacing: .1em; }
 .age { font-family: var(--f-mono); font-size: .72rem; color: var(--muted); white-space: nowrap; }
 /* Upstream did not answer - distinct from "nothing is trending", which renders
    nothing at all. */
-.trends-na { margin: 8px 0; padding: 6px 10px; font-size: .8rem; color: var(--muted);
-             border-left: 3px solid var(--line); border-radius: var(--r-sm); }
+.trends-na { margin: var(--sp-2) 0;
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--row-pad-x);
+  font-size: .8rem; color: var(--muted);
+  border-left: var(--state-bar) solid var(--line); border-radius: var(--r-sm); }
 
 /* An upstream that did not answer at all. Loud on purpose: `.trends-na` is muted
    because a missing trend costs you a nicety, while a missing forecast makes the
@@ -970,12 +1042,13 @@ details.trends summary { cursor: pointer; color: var(--accent); font-family: var
 }
 .fetch-fail-title { font-weight: 700; color: var(--nogo-ink); margin-bottom: 4px; }
 .fetch-fail p { margin: 0; font-size: .88rem; }
-.fetch-fail .reasons { margin: 6px 0 0; font-size: .86rem; }
-.fetch-detail { margin-top: 6px; font-size: .8rem; }
+.fetch-fail .reasons { margin: var(--sp-2) 0 0; font-size: .86rem; }
+.fetch-detail { margin-top: var(--sp-2); font-size: .8rem; }
 .fetch-detail > summary { cursor: pointer; color: var(--muted); }
 .fetch-fail-detail { color: var(--muted); font-family: var(--f-mono); font-size: .8rem; }
 .fetch-retry {
-  margin-top: 10px; padding: 8px 14px; border-radius: var(--r-md); cursor: pointer;
+  margin-top: var(--sp-3); padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--r-md); cursor: pointer;
   border: 1px solid var(--nogo); background: var(--nogo); color: var(--on-accent);
   font-size: .88rem; font-weight: 600;
 }
@@ -1035,22 +1108,25 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 .set-status { color: var(--go-ink); font-size: .85rem; }
 
 /* VFR/IFR weather-minimums card - tabs stick out of the top of the bubble */
-.rule-card { margin-bottom: 16px; }
-.rule-tabs { display: flex; gap: 4px; padding-left: 10px; }
+.rule-card { margin-bottom: var(--sp-4); }
+.rule-tabs { display: flex; gap: var(--sp-1); padding-left: var(--sp-3); }
 .rule-tab {
   background: var(--bg); color: var(--muted); cursor: pointer;
   border: 1px solid var(--line); border-bottom: none;
-  border-radius: 8px 8px 0 0; padding: 7px 18px; font-size: .9rem; font-weight: 600;
+  border-radius: var(--r-md) var(--r-md) 0 0; padding: var(--sp-2) var(--sp-4);
+  font-size: .9rem; font-weight: 600;
   position: relative; top: 1px;
 }
 .rule-tab.active { background: var(--panel); color: var(--ink); border-color: var(--accent); border-bottom: 1px solid var(--panel); }
-.rule-bubble { border: 1px solid var(--accent); border-radius: 0 10px 10px 10px; padding: 14px; background: var(--panel); }
+.rule-bubble { border: 1px solid var(--accent);
+  border-radius: 0 var(--r-md) var(--r-md) var(--r-md);
+  padding: var(--pad-y) var(--pad-x-hair); background: var(--panel); }
 .rule-pane > .set-group:last-child { margin-bottom: 0; }
 .imc-opt { border-style: dashed; }
 .imc-opt label { color: var(--ink); font-weight: 600; }
 
 /* Home base picker */
-.base-pick { max-width: 300px; margin-bottom: 16px; }
+.base-pick { max-width: 300px; margin-bottom: var(--sp-4); }
 
 /* Slider grid - used inside settings fieldsets */
 .slider-grid { display: grid; gap: 8px; }
@@ -1085,7 +1161,7 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 /* Hazard overlay: legend under the map, popups over it. */
 .hz-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: .74rem; color: var(--muted); }
 .hz-key { display: inline-flex; align-items: center; gap: 5px; }
-.hz-key i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; opacity: .75; }
+.hz-key i { width: 12px; height: 12px; border-radius: var(--r-sm); display: inline-block; opacity: .75; }
 .hz-key-dash i { background: transparent; border: 1px dashed var(--muted); }
 .hz-key-dot i { background: var(--muted); border-radius: 50%; }
 /* The legend container is now always in the markup, because the flight category
@@ -1097,7 +1173,8 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 /* The category chip in a station popup. Geometry only: it is painted over its
    own category colour, which is one of the theme-independent map hexes, so both
    its background and its text colour are set inline where those live. */
-.fc-tag { display: inline-block; padding: 1px 6px; border-radius: var(--r-sm);
+.fc-tag { display: inline-block; padding: var(--chip-pad-y) var(--chip-pad-x);
+  border-radius: var(--r-sm);
   font-size: .68rem; font-weight: 600; letter-spacing: .02em; }
 .hz-pop pre { margin: 6px 0; padding: 6px; max-height: 180px; overflow: auto;
   white-space: pre-wrap; word-break: break-word; font-size: .72rem;
@@ -1176,7 +1253,8 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 .mm-add { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; }
 .mm-add-text {
   flex: 1 1 auto; min-width: 0; font: inherit; font-size: .87rem;
-  padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: var(--sp-1) var(--sp-2); border: 1px solid var(--line);
+  border-radius: var(--r-md);
   background: var(--bg); color: var(--ink);
 }
 .mm-add-text::placeholder { color: var(--muted); }
@@ -1184,7 +1262,7 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 .mm-add-btn {
   flex: none; background: transparent; color: var(--muted);
   border: 1px solid var(--line); border-radius: var(--r-md);
-  padding: 5px 12px; font-size: .85rem; cursor: pointer;
+  padding: var(--sp-1) var(--sp-3); font-size: .85rem; cursor: pointer;
 }
 .mm-add-btn:hover:not(:disabled) { border-color: var(--ink); color: var(--ink); }
 .mm-add-btn:disabled { opacity: .55; cursor: not-allowed; }
@@ -1217,8 +1295,9 @@ details.taf { margin: 8px 0 0; font-size: .8rem; }
 details.taf summary { cursor: pointer; color: var(--accent); }
 .taf-p {
   display: grid; grid-template-columns: 62px 104px 1fr; gap: 8px;
-  padding: 2px 6px; font-family: var(--f-mono); font-size: .76rem;
-  border-left: 3px solid transparent; opacity: .45;
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--row-pad-x);
+  font-family: var(--f-mono); font-size: .76rem;
+  border-left: var(--state-bar) solid transparent; opacity: .45;
 }
 /* Anything you fly through is green - whatever kind of group it is. */
 .taf-p.in {

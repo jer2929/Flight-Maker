@@ -161,6 +161,40 @@ def find_hazard(text: str, kind: str, low_ft: float, high_ft: float) -> Optional
     return best
 
 
+def find_hazard_in(products: list[dict], kind: str,
+                   low_ft: float, high_ft: float) -> Optional[dict]:
+    """:func:`find_hazard` over separate products, keeping track of WHICH one.
+
+    ``products`` is ``[{"id", "distance_nm", "text"}, ...]``. The blob form above
+    cannot answer "which bulletin, and how far off track" - it has already thrown
+    the identity away - so the icing row could say ``MOD icing FL040-FL100`` and
+    nothing about where that came from or whether it was anywhere near you. On a
+    row that stops a flight, that is the first thing a pilot asks.
+
+    Worst severity wins, and among equals the nearest: the product cited should
+    be the one that most nearly applies to this flight, not whichever the feed
+    happened to list first.
+    """
+    best: Optional[dict] = None
+    for prod in products:
+        rpt = find_hazard(prod.get("text") or "", kind, low_ft, high_ft)
+        if rpt is None:
+            continue
+        cand = {**rpt, "product_id": prod.get("id"),
+                "distance_nm": prod.get("distance_nm")}
+        if best is None or _worse_report(cand, best):
+            best = cand
+    return best
+
+
+def _worse_report(cand: dict, best: dict) -> bool:
+    rank = SEVERITY_RANK[cand["severity"]] - SEVERITY_RANK[best["severity"]]
+    if rank:
+        return rank > 0
+    far = lambda r: r["distance_nm"] if r.get("distance_nm") is not None else 1e9  # noqa: E731
+    return far(cand) < far(best)
+
+
 # ---------------------------------------------------------------------------
 # Where and when - the two things the text carries that nothing else does.
 #
@@ -208,6 +242,54 @@ def parse_icao_polygon(text: str) -> list[tuple[float, float]]:
     if len(ring) < 3:
         return []
     return ring + [ring[0]]
+
+
+# A hazard drawn as a LINE with a width either side of it, which is the other
+# ordinary way these areas are written:
+#
+#   WI 30NM EITHER SIDE OF LINE N5000 W11400 - N5200 W11000
+#   WITHIN 25 NM OF A LINE 4900N 11000W - 5100N 10800W
+#
+# ``parse_icao_polygon`` above discards these, because two coordinates are not a
+# ring - and a bulletin it cannot place is one nothing downstream can test against
+# the route. They are common enough in the Canadian AIRMET feed to be worth
+# reading, and a two-point line is something ``geometry`` already handles: see
+# ``polyline_polygon_distance_nm``, which measures against a ring of two points as
+# a line rather than an area.
+#
+# Deliberately keyed on the word LINE. A bare pair of coordinates with no such
+# marker stays unplaced: it is as likely to be a truncated polygon as a corridor,
+# and placing a bulletin WRONGLY is worse than leaving it unplaced - an unplaced
+# one is shown and advises, where a misplaced one can gate the wrong flight or
+# fail to gate the right one.
+_LINE_MARK = re.compile(r"\bLINE\b")
+_LINE_WIDTH = re.compile(r"\b(\d{1,3})\s?NM\b(?=[^.]{0,30}?\bLINE\b)")
+
+
+def parse_icao_corridor(text: str) -> tuple[list[tuple[float, float]], Optional[float]]:
+    """A line-and-width area as ``([(lat, lon), ...], half_width_nm)``.
+
+    ``([], None)`` when the text names no line, which is the common case and not
+    an error. The width is the distance *either side* of the line as the bulletin
+    states it; ``None`` means it named a line but no width, and the caller should
+    fall back to its own corridor rather than inventing one.
+    """
+    up = text.upper()
+    mark = _LINE_MARK.search(up)
+    if not mark:
+        return [], None
+    pts: list[tuple[float, float]] = []
+    for m in _COORD.finditer(up[mark.end():]):
+        lat = _dm(m.group(2) or m.group(4), m.group(3) or m.group(5),
+                  m.group(1) or m.group(6))
+        lon = _dm(m.group(8) or m.group(10), m.group(9) or m.group(11),
+                  m.group(7) or m.group(12))
+        if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0 and (not pts or pts[-1] != (lat, lon)):
+            pts.append((lat, lon))
+    if len(pts) < 2:
+        return [], None
+    w = _LINE_WIDTH.search(up)
+    return pts, (float(w.group(1)) if w else None)
 
 
 # The three forms a PIREP gives its position in, in the order they are tried:

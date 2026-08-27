@@ -97,7 +97,6 @@ async def probe(lat: float, lon: float, models: list[str]) -> int:
 
     resp = data[0] if isinstance(data, list) else data
     h = resp.get("hourly", {})
-    served = set(h.keys())
     elev = resp.get("elevation")
     print(f"model grid elevation: {_fmt(elev)} m"
           f"{f' ({elev * 3.28084:.0f} ft)' if elev is not None else ''}")

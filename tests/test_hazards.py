@@ -490,3 +490,102 @@ def test_embedded_convective_reads_cvctv_cld_embd():
 
 def test_quiet_air_leaves_the_embedded_row_alone():
     assert _run()["embedded_ts"].passed
+
+
+# ---------------------------------------------------------------------------
+# region_text - a forecast we could not place
+#
+# A CFPS bulletin whose area is written in words ("N OF FORT MCMURRAY", or
+# nothing but the FIR) has no polygon to test against the route. It used to ride
+# in with ``area_text`` and NO-GO the flight, because the only thing left judging
+# it was whether the FIR it named was on the route - and CZEG spans 48 to 79
+# degrees north. It is reported here, at any severity, and never gates.
+# ---------------------------------------------------------------------------
+
+def test_region_wide_icing_is_reported_but_never_gates():
+    c = _run(region_text="CZEG AIRMET I1 MOD ICE SFC/100")["icing"]
+    assert c.passed, "a bulletin with no position must not fail a hard limit"
+    assert c.advisory, "but the pilot must still be told it was forecast"
+    assert "MOD icing" in c.actual_text and "region-wide" in c.actual_text
+
+
+def test_region_wide_turbulence_is_reported_but_never_gates():
+    c = _run(region_text="CZEG AIRMET T1 SEV TURB SFC/100")["turbulence"]
+    assert c.passed and c.advisory
+    assert "SEV turbulence" in c.actual_text and "region-wide" in c.actual_text
+
+
+def test_the_region_wide_note_does_not_contradict_the_row_it_sits_in():
+    # "no AIRMET/SIGMET icing - MOD icing SFC-FL100" is a row arguing with
+    # itself. The phrase is scoped to what it actually means.
+    c = _run(region_text="CZEG AIRMET I1 MOD ICE SFC/100")["icing"]
+    assert "no AIRMET/SIGMET icing on your route" in c.actual_text
+
+
+def test_a_region_wide_convective_product_advises_rather_than_failing():
+    c = _run(region_text="CZEG AIRMET: CONVECTIVE TSRA")["convective"]
+    assert c.passed and c.advisory
+    assert "no position stated" in c.actual_text
+
+
+def test_a_placed_product_still_gates_alongside_a_region_wide_one():
+    # The narrowness of the change: region_text softens nothing about area_text.
+    c = _run(raw_text="AIRMET MOD ICG 020/080",
+             region_text="CZEG AIRMET I1 SEV ICE SFC/100")["icing"]
+    assert not c.passed
+    assert "region-wide" in c.actual_text, "and the second one is still named"
+
+
+# ---------------------------------------------------------------------------
+# Which bulletin, and how far off track
+#
+# The row used to read "MOD icing FL040-FL100 (AIRMET/SIGMET), overlaps your
+# 0-8,500 ft" and stop the flight. It named no product and gave no distance, so
+# a pilot looking at a NO-GO had nothing to go and check it against - which is
+# how an advisory 350 nm away went unnoticed for as long as it did.
+# ---------------------------------------------------------------------------
+
+def test_the_icing_row_names_the_bulletin_that_failed_it():
+    c = _run(area_reports=[{"id": "CZYZ AIRMET I1", "distance_nm": 12.0,
+                            "text": "CZYZ AIRMET I1 MOD ICG 020/080"}])["icing"]
+    assert not c.passed
+    assert "CZYZ AIRMET I1" in c.actual_text
+    assert "12 nm off track" in c.actual_text
+
+
+def test_a_bulletin_the_route_goes_through_says_so():
+    # Worded exactly as the SIGMET reason in the orchestrator words it, so one
+    # advisory is not described two ways on the same card.
+    c = _run(area_reports=[{"id": "CZYZ AIRMET I1", "distance_nm": 0.0,
+                            "text": "CZYZ AIRMET I1 MOD ICG 020/080"}])["icing"]
+    assert "on your route" in c.actual_text
+
+
+def test_the_worst_bulletin_is_the_one_cited():
+    c = _run(area_reports=[
+        {"id": "NEAR LGT", "distance_nm": 2.0, "text": "AIRMET LGT ICG 020/080"},
+        {"id": "FAR SEV", "distance_nm": 20.0, "text": "AIRMET SEV ICG 020/080"},
+    ])["icing"]
+    assert not c.passed and "FAR SEV" in c.actual_text
+
+
+def test_among_equal_severities_the_nearest_is_cited():
+    c = _run(area_reports=[
+        {"id": "FAR", "distance_nm": 20.0, "text": "AIRMET MOD ICG 020/080"},
+        {"id": "NEAR", "distance_nm": 2.0, "text": "AIRMET MOD ICG 020/080"},
+    ])["icing"]
+    assert "NEAR" in c.actual_text and "FAR" not in c.actual_text
+
+
+def test_the_turbulence_row_names_its_bulletin_too():
+    c = _run(area_reports=[{"id": "CZYZ SIGMET A1", "distance_nm": 5.0,
+                            "text": "CZYZ SIGMET A1 SEV TURB SFC/FL180"}])["turbulence"]
+    assert not c.passed and "CZYZ SIGMET A1" in c.actual_text
+
+
+def test_raw_text_is_still_the_fallback():
+    # Every caller that passes only a blob keeps working, and reads exactly as
+    # it did - no identity to state, so none is stated.
+    c = _run(raw_text="AIRMET MOD ICG 020/080")["icing"]
+    assert not c.passed
+    assert "(AIRMET/SIGMET)" in c.actual_text

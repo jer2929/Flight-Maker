@@ -146,13 +146,6 @@ class Station:
     raw: str = ""
     hazards: list[str] = field(default_factory=list)
 
-    @property
-    def age_min(self) -> Optional[float]:
-        if self.obs_time is None:
-            return None
-        return max(0.0, (datetime.now(timezone.utc)
-                         - self.obs_time).total_seconds() / 60.0)
-
 
 def _row_position(row: dict, ident: str) -> Optional[Point]:
     """Where the station is: the feed's own coordinates, else our table.
