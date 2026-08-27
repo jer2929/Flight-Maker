@@ -14,6 +14,7 @@ import pytest
 
 from app import orchestrator
 from app.models import Verdict
+from app.services import weather as wx
 from app.sources import awc, cfps, openmeteo
 
 NOW = datetime.now(timezone.utc)
@@ -130,7 +131,13 @@ def test_the_out_of_window_storm_is_still_shown(upstreams):
     row = _check(r, "hazard_out_of_window")
     assert row is not None and row.advisory and row.passed
     assert "thunderstorm" in row.actual_text
-    assert f"{TS_FROM:%H%M}Z-{TS_TO:%H%M}Z" in row.actual_text
+    # Ask the one range formatter what this span looks like rather than
+    # re-deriving it here. ``zulu_range`` anchors its ``+N`` day markers to the
+    # ETD, so a storm 6-9 h out renders "0200Z+1-0500Z+1" whenever those hours
+    # land on the next Zulu day - which depends on the time of day the suite
+    # runs. Hand-formatting the bare hours made this assertion pass all morning
+    # and fail all evening.
+    assert wx.zulu_range(TS_FROM, TS_TO, CLEAR_ETD) in row.actual_text
 
 
 def test_evening_etd_inside_the_storm_is_nogo(upstreams):

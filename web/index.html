@@ -112,6 +112,11 @@
         <label class="aircraft-label" for="ac-make">Aircraft</label>
         <select id="ac-make" class="aircraft-sel" aria-label="Aircraft manufacturer"></select>
         <select id="ac-model" class="aircraft-sel" aria-label="Aircraft model"></select>
+        <!-- Shown in place of the model dropdown when the make is "Custom", so a
+             type the catalogue does not carry can still be named and remembered. -->
+        <input id="ac-model-custom" class="aircraft-sel aircraft-custom" type="text"
+               maxlength="40" placeholder="Type / model" hidden
+               aria-label="Custom aircraft type" />
       </div>
       <div class="aircraft-row">
         <label class="aircraft-label" for="ac-tas">TAS</label>

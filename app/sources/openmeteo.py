@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.config import get_settings
 from app.sources import _http, cache
@@ -776,12 +776,20 @@ def _current_index(hourly: dict, utc_offset_seconds: int) -> int:
     """Index of the current hour in an hourly ``time`` array.
 
     The offset is 0 for the UTC series we request; the parameter stays so a
-    response carrying a real offset is still indexed correctly."""
+    response carrying a real offset is still indexed correctly.
+
+    Both conversions are timezone-aware on purpose. ``datetime.utcnow()`` hands
+    back a *naive* datetime holding UTC wall-clock, and ``.timestamp()`` on a
+    naive value reads it as LOCAL time - so on any host not set to UTC this
+    picked the wrong hour, by exactly the host's offset, and the ensemble wind
+    blend was read from it. It is right on the Fly.io container only because
+    that container runs UTC, which is why it never surfaced.
+    """
     times = hourly.get("time", [])
     if not times:
         return 0
-    now_local = datetime.utcnow().timestamp() + utc_offset_seconds
-    target = datetime.utcfromtimestamp(now_local).strftime("%Y-%m-%dT%H:00")
+    now_local = datetime.now(timezone.utc).timestamp() + utc_offset_seconds
+    target = datetime.fromtimestamp(now_local, timezone.utc).strftime("%Y-%m-%dT%H:00")
     for i, t in enumerate(times):
         if t >= target:
             return i

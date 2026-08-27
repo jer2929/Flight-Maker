@@ -15,13 +15,17 @@
    Symbols the latin subset does not carry - the arrows, checks and
    inequality signs the app draws - fall through to the system stack after
    each family, which is why every stack below ends in a real fallback. */
+/* Plex Sans is a VARIABLE font (wght 100-700), which is why it is one face and
+   not one per weight. It used to be declared twice, at 400 and at 600, pointing
+   at two files - and those two files were byte-identical copies of this same
+   variable font, so the shell shipped and precached 45.7 KB twice. Declaring
+   the axis range instead also makes the five `font-weight: 500` rules render a
+   real 500 rather than snapping to the nearer of two declared faces.
+   The filename says `var` so the next person does not "add the missing weight"
+   by copying it again. */
 @font-face {
-  font-family: "Plex Sans"; font-style: normal; font-weight: 400;
-  font-display: swap; src: url(/fonts/plex-sans-400.woff2) format("woff2");
-}
-@font-face {
-  font-family: "Plex Sans"; font-style: normal; font-weight: 600;
-  font-display: swap; src: url(/fonts/plex-sans-600.woff2) format("woff2");
+  font-family: "Plex Sans"; font-style: normal; font-weight: 100 700;
+  font-display: swap; src: url(/fonts/plex-sans-var.woff2) format("woff2");
 }
 @font-face {
   font-family: "Plex Cond"; font-style: normal; font-weight: 600;
@@ -272,6 +276,10 @@ header p { margin: 4px 0 0; color: var(--muted); }
 }
 .aircraft-sel { max-width: 130px; }
 .aircraft-tas { width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+/* The free-text type name, which stands in for the model dropdown on
+   "Custom". Sized like the select it replaces so the row does not jump. */
+.aircraft-custom { max-width: 130px; }
+.aircraft-custom::placeholder { color: var(--muted); }
 .aircraft-unit { color: var(--muted); font-size: .78rem; }
 @media (max-width: 560px) {
   .aircraft-label { min-width: 0; }
@@ -1144,6 +1152,31 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 .checks-grid fieldset { border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; }
 .checks-grid fieldset legend { color: var(--muted); font-size: .82rem; padding: 0 6px; }
 .checks-grid label { display: flex; align-items: center; gap: 6px; font-size: .87rem; margin: 5px 0; cursor: pointer; }
+
+/* A pilot's own self-assessment items. The remove button sits at the end of the
+   row rather than beside the text so the labels stay on one left edge however
+   long the wording is - the ticks are what you read down, not the controls. */
+.mm-del {
+  margin-left: auto; flex: none; background: transparent; border: 0; padding: 0 2px;
+  color: var(--muted); cursor: pointer; font-size: .8rem; line-height: 1;
+}
+.mm-del:hover { color: var(--nogo-ink); }
+.mm-del:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mm-add { display: flex; align-items: center; gap: 6px; margin: 8px 0 2px; }
+.mm-add-text {
+  flex: 1 1 auto; min-width: 0; font: inherit; font-size: .87rem;
+  padding: 5px 8px; border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--bg); color: var(--ink);
+}
+.mm-add-text::placeholder { color: var(--muted); }
+.mm-add-text:disabled { opacity: .55; cursor: not-allowed; }
+.mm-add-btn {
+  flex: none; background: transparent; color: var(--muted);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 5px 12px; font-size: .85rem; cursor: pointer;
+}
+.mm-add-btn:hover:not(:disabled) { border-color: var(--ink); color: var(--ink); }
+.mm-add-btn:disabled { opacity: .55; cursor: not-allowed; }
 
 .hidden { display: none !important; }
 /* Outside .tab-pane, so this one keeps its own frame. */
