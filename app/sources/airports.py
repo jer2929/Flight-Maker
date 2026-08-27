@@ -7,6 +7,7 @@ the app works out of the box, even offline. Both use the same reduced schema.
 from __future__ import annotations
 
 import csv
+import math
 from functools import lru_cache
 from pathlib import Path
 
@@ -182,10 +183,35 @@ def search_airports(query: str, limit: int = 20) -> list[Airport]:
 
 def nearest_airports(lat: float, lon: float, exclude: set[str] = frozenset(),
                      max_nm: float = 120.0, limit: int = 10) -> list[tuple[Airport, float]]:
-    """Airports nearest a coordinate, sorted by distance."""
+    """Airports nearest a coordinate, sorted by distance.
+
+    A route calls this eight times - both ends, three midpoints, and the label
+    lookup per midpoint - and each call used to run a haversine over every row
+    in the table. The box below is the same cheap reject
+    ``orchestrator._corridor_airports`` uses, and it is a strict superset of the
+    circle, so the surviving set is unchanged: the latitude pad is exact, and
+    the longitude pad is sized at the most poleward latitude the circle reaches,
+    where a degree of longitude is at its narrowest.
+    """
+    lat_pad = max_nm / 60.0
+    lat_lo, lat_hi = lat - lat_pad, lat + lat_pad
+    # A circle that reaches over a pole spans every longitude, so there is no
+    # longitude to reject on. Clamping the edge latitude instead would size the
+    # pad off a smaller circle of latitude than the one the search really covers
+    # and drop genuine neighbours.
+    edge = abs(lat) + lat_pad
+    lon_pad = (180.0 if edge >= 89.9
+               else min(180.0, lat_pad / math.cos(math.radians(edge))))
+
     res: list[tuple[Airport, float]] = []
     for ident, ap in load_airports().items():
         if ident in exclude:
+            continue
+        if not (lat_lo <= ap.lat <= lat_hi):
+            continue
+        # Wrap-safe longitude separation, so a box straddling the antimeridian
+        # rejects on the short way round rather than the long one.
+        if abs(((ap.lon - lon + 180.0) % 360.0) - 180.0) > lon_pad:
             continue
         d = haversine_nm(lat, lon, ap.lat, ap.lon)
         if d <= max_nm:

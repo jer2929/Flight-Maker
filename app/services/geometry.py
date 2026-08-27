@@ -27,8 +27,7 @@ from __future__ import annotations
 
 import math
 
-from app.services.geo import (EARTH_RADIUS_NM, along_track_nm, cross_track_nm,
-                              haversine_nm)
+from app.services.geo import EARTH_RADIUS_NM, along_and_cross_nm, haversine_nm
 
 Point = tuple[float, float]   # (lat, lon)
 Ring = list[Point]
@@ -171,9 +170,10 @@ def segment_distance_nm(a: Point, b: Point, p: Point) -> float:
     leg = haversine_nm(a[0], a[1], b[0], b[1])
     if leg < 1e-6:
         return haversine_nm(a[0], a[1], p[0], p[1])
-    along = along_track_nm(a[0], a[1], b[0], b[1], p[0], p[1])
+    # Both from one great-circle solution - see ``geo.along_and_cross_nm``.
+    along, cross = along_and_cross_nm(a[0], a[1], b[0], b[1], p[0], p[1])
     if 0.0 <= along <= leg:
-        return abs(cross_track_nm(a[0], a[1], b[0], b[1], p[0], p[1]))
+        return abs(cross)
     return min(haversine_nm(a[0], a[1], p[0], p[1]),
                haversine_nm(b[0], b[1], p[0], p[1]))
 

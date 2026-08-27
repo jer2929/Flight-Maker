@@ -11,6 +11,7 @@ import hashlib
 import json
 
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, Query
@@ -457,9 +458,38 @@ async def airport_detail(ident: str):
     }
 
 
+def _stat_key(paths: list) -> tuple:
+    """A cheap fingerprint of some files: (mtime_ns, size) each, missing as None.
+
+    Nine ``stat()`` calls stand in for re-reading and re-hashing ~440 KB of shell
+    on every navigation, while still noticing an edit the moment it lands - so
+    the content-addressed cache version keeps its contract in a live process,
+    not only across a redeploy.
+    """
+    out = []
+    for p in paths:
+        try:
+            st = p.stat()
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+@lru_cache(maxsize=8)
+def _shell_source_cached(name: str, _stat: tuple) -> str:
+    """``_shell_source``'s memo. ``_stat`` is the cache key, not an argument."""
+    return (WEB_DIR / name).read_text(encoding="utf-8")
+
+
+def _shell_source(name: str) -> str:
+    """A shell file's text, re-read only when the file itself changes."""
+    return _shell_source_cached(name, _stat_key([WEB_DIR / name]))
+
+
 def _stamped(name: str, media_type: str) -> Response:
     """A shell file with its ``__SHELL_VERSION__`` placeholders filled in."""
-    src = (WEB_DIR / name).read_text(encoding="utf-8")
+    src = _shell_source(name)
     return Response(content=src.replace("__SHELL_VERSION__", shell_version()),
                     media_type=media_type)
 
@@ -513,9 +543,24 @@ def shell_version() -> str:
     Hashing the content means a deploy that changes the shell always ships a
     new worker, and one that doesn't never churns the cache - no discipline
     required from whoever writes the next change.
+
+    Memoised on the files' own mtime and size: this used to re-read and re-hash
+    ~440 KB on the event loop for every "/" and every "/sw.js" - roughly 900 KB
+    of synchronous file I/O per page load on a box that scales to zero. Keying
+    on stat rather than caching outright keeps the contract intact: an edited
+    shell still retires the old version immediately, in a live process and not
+    only across a redeploy.
     """
+    paths = _shell_paths()
+    return _shell_version_cached(tuple(paths), _stat_key(paths))
+
+
+@lru_cache(maxsize=4)
+def _shell_version_cached(paths: tuple, _stat: tuple) -> str:
+    """:func:`shell_version`'s memo. ``_stat`` is the cache key, not an argument:
+    the digest is recomputed exactly when one of the files changes on disk."""
     h = hashlib.sha256()
-    for p in _shell_paths():
+    for p in paths:
         if p.exists():
             h.update(p.read_bytes())
     return f"minima-{h.hexdigest()[:16]}"
@@ -526,8 +571,7 @@ async def service_worker():
     # Served from the root so the worker's scope covers the whole origin.
     # ``no-cache`` ensures a new deploy's worker is picked up promptly rather
     # than a stale copy lingering in the browser's HTTP cache.
-    src = (WEB_DIR / "sw.js").read_text(encoding="utf-8")
-    src = src.replace("__SHELL_VERSION__", shell_version())
+    src = _shell_source("sw.js").replace("__SHELL_VERSION__", shell_version())
     return Response(
         content=src,
         media_type="text/javascript",

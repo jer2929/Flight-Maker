@@ -96,7 +96,6 @@
   /* Text on a saturated accent / nogo fill. Night's accent is the LIGHT
      magenta, so this inverts: white on #c9639f is 2.6:1, the ground is 8:1. */
   --on-accent: #13110d;
-  --on-accent-dim: #4a3540; /* its quieter second line, on that same fill */
   --wind: #7ba9d6;          /* wind vectors in the runway diagrams */
   --fresh: #7dbe8c;         /* "this data is current" - .age.fresh, .adv-chip.live */
   /* The logo is pinned, not themed: it keeps the blue it was drawn with in
@@ -184,7 +183,6 @@
   --ink-hi: #000000;
   --head-top: #e5ddc9;
   --on-accent: #f4f0e4;     /* day's accent is the DARK magenta - paper on it */
-  --on-accent-dim: #e3c2d5;
   --wind: #2c5c8a;
   --fresh: #24552f;
   --scrim:      color-mix(in srgb, var(--ink) 6%,  transparent);
@@ -404,10 +402,9 @@ select, input[type=text], .route-inputs input {
   max-height: 260px; overflow-y: auto; margin-top: 2px;
 }
 .ac-item { padding: 8px 10px; cursor: pointer; font-size: .88rem; }
-.ac-item:hover, .ac-item.active { background: var(--accent); color: var(--on-accent); }
+.ac-item:hover { background: var(--accent); color: var(--on-accent); }
 .ac-item .id { font-weight: 700; }
 .ac-item .nm { color: var(--muted); font-size: .8rem; }
-.ac-item.active .nm { color: var(--on-accent-dim); }
 
 /* No margin of its own - both users (#route-endpoints, #discovery-results) are
    pane children, and the pane owns the gaps between blocks. */
@@ -934,7 +931,6 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .adv-aside .adv-k { color: var(--muted); }
 .trends { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--taf-ink);
   background: color-mix(in srgb, var(--taf-ink) 8%, transparent); border-radius: var(--r-sm); }
-.trends-h { font-family: var(--f-cond); font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin-bottom: 4px; }
 .trend { font-size: .86rem; margin: 2px 0; }
 details.trends summary { cursor: pointer; color: var(--accent); font-family: var(--f-cond); font-size: .8rem; text-transform: uppercase; letter-spacing: .1em; }
 .age { font-family: var(--f-mono); font-size: .72rem; color: var(--muted); white-space: nowrap; }
@@ -974,17 +970,6 @@ details.mhist { margin: 6px 0; font-size: .82rem; }
 details.mhist summary { cursor: pointer; color: var(--accent); }
 .links { font-size: .82rem; }
 .links a { color: var(--accent); }
-.nogo-reasons li { color: var(--nogo-ink); }
-
-/* My Minimums configuration panel */
-details.mm-panel > summary {
-  cursor: pointer; list-style: none; font-size: 1rem; font-weight: 600;
-  padding: 2px 0;
-}
-details.mm-panel > summary::-webkit-details-marker { display: none; }
-details.mm-panel > summary::before { content: "▶ "; font-size: .75em; color: var(--muted); }
-details.mm-panel[open] > summary::before { content: "▼ "; }
-.mm-desc { margin: 10px 0 14px; }
 
 /* Self-assessment embedded under route / discovery results */
 .self-check-inline h3 { font-size: .95rem; margin: 0 0 10px; }
@@ -997,14 +982,6 @@ details.mm-panel[open] > summary::before { content: "▼ "; }
 .mit-label { font-weight: 600; color: var(--mit-ink); font-size: .85rem; margin-bottom: 6px; }
 .mit-list { margin: 0; padding-left: 16px; font-size: .83rem; color: var(--ink); }
 .mit-list li { margin: 3px 0; }
-
-/* Recency slider in My Minimums */
-.mm-recency { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
-.mm-recency-label { font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
-.mm-recency-row { display: flex; align-items: center; gap: 12px; }
-.mm-recency-row input[type=range] { width: 160px; }
-.mm-recency-row span { font-size: .9rem; font-weight: 600; min-width: 90px; }
-.mm-recency-hint { margin: 8px 0 0; }
 
 /* SVG logo */
 .brand { font-size: 0; line-height: 1; }

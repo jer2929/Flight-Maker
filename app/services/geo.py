@@ -42,6 +42,23 @@ def _track_angles(lat1: float, lon1: float, lat2: float, lon2: float,
     return d13, dt
 
 
+def along_and_cross_nm(lat1: float, lon1: float, lat2: float, lon2: float,
+                       latp: float, lonp: float) -> tuple[float, float]:
+    """(:func:`along_track_nm`, :func:`cross_track_nm`) from one solution.
+
+    Callers that want both - clamping a perpendicular distance to the segment is
+    the standing example - would otherwise pay for ``_track_angles`` twice, and
+    with it two ``initial_bearing_true`` calls and a haversine. This is the
+    innermost loop of ``geometry.polyline_polygon_distance_nm``, which runs it
+    |ring| x |path| times in each direction for every advisory in the feed.
+    """
+    if haversine_nm(lat1, lon1, lat2, lon2) < 1e-6:
+        return 0.0, 0.0
+    d13, dt = _track_angles(lat1, lon1, lat2, lon2, latp, lonp)
+    return (math.atan2(math.sin(d13) * math.cos(dt), math.cos(d13)) * EARTH_RADIUS_NM,
+            math.asin(math.sin(d13) * math.sin(dt)) * EARTH_RADIUS_NM)
+
+
 def cross_track_nm(lat1: float, lon1: float, lat2: float, lon2: float,
                    latp: float, lonp: float) -> float:
     """Signed perpendicular distance (nm) of P from the great circle 1→2.

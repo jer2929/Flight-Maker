@@ -32,6 +32,14 @@ from typing import Optional
 
 from app.sources.openmeteo import BKN_COVER_PCT, PRESSURE_CLOUD_LEVELS_FT, PRESSURE_LEVELS_FT
 
+# Both scans walk their levels lowest first, and both used to re-sort a module
+# constant on every call - once per route point for ``icing_bands``, once per
+# hour for ``_wind_profile``. The order cannot change at runtime; derive it once.
+_CLOUD_LEVELS_ORDERED: tuple[tuple[str, float], ...] = tuple(
+    sorted(PRESSURE_CLOUD_LEVELS_FT.items(), key=lambda kv: kv[1]))
+_WIND_LEVELS_ORDERED: tuple[tuple[str, float], ...] = tuple(
+    sorted(PRESSURE_LEVELS_FT.items(), key=lambda kv: kv[1]))
+
 # --- Icing ------------------------------------------------------------------
 # Airframe icing needs liquid water that is already below freezing. Above 0 C
 # there is no ice; below about -20 C the cloud is essentially all ice crystals,
@@ -96,7 +104,7 @@ def icing_bands(hourly: dict, i: int) -> list[dict]:
     Returns ``[]`` when nothing qualifies, which is the common case and the whole
     point: on a clear cold day this says nothing at all.
     """
-    ordered = sorted(PRESSURE_CLOUD_LEVELS_FT.items(), key=lambda kv: kv[1])
+    ordered = _CLOUD_LEVELS_ORDERED
     bands: list[dict] = []
     current: Optional[dict] = None
     for lvl, msl_ft in ordered:
@@ -152,7 +160,7 @@ def _wind_profile(hourly: dict, i: int, elevation_ft: Optional[float]) -> list[t
     drc = _at(hourly, "winddirection_10m", i)
     if spd is not None and drc is not None and elevation_ft is not None:
         out.append((elevation_ft + 33.0, spd, drc))   # 10 m above the field
-    for lvl, msl_ft in sorted(PRESSURE_LEVELS_FT.items(), key=lambda kv: kv[1]):
+    for lvl, msl_ft in _WIND_LEVELS_ORDERED:
         s = _at(hourly, f"windspeed_{lvl}", i)
         d = _at(hourly, f"winddirection_{lvl}", i)
         if s is not None and d is not None:

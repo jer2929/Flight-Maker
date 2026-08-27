@@ -383,15 +383,3 @@ async def gfa(site: str, debug: bool = False) -> dict:
 
     return await cache.once(key, settings.cfps_cache_ttl, parsed)
 
-
-async def upperwind_raw(sites: list[str]) -> dict[str, str]:
-    """Raw FD upper-wind bulletin text per site (for display/reference)."""
-    out: dict[str, str] = {}
-    try:
-        for item in await _fetch("upperwind", sites):
-            loc = _location(item)
-            if loc:
-                out[loc] = _text(item)
-    except Exception:
-        pass  # upper-wind product is best-effort
-    return out
