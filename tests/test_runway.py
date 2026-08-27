@@ -116,3 +116,89 @@ def test_fill_headings_skips_non_numeric():
                 le_heading_true=None, he_heading_true=None)
     out = fill_headings([rw], 43.0, -80.0)[0]
     assert out.le_heading_true is None
+
+
+# ---------------------------------------------------------------------------
+# The surface filter and the headline runway pick
+#
+# A field with a paved strip and a grass one headlines whichever the wind
+# favours, and that pick is what the crosswind limit row, the discovery
+# crosswind filters and the crosswind sort all read. So a scan filtered to hard
+# pavement used to recommend grass - and pass a crosswind limit on the grass
+# strip's zero, while the only paved option had a full 15 kt across it.
+#
+# The geometry below is CYFD's, from ``data/runways_seed.csv``: ASP 05/23 at
+# 040/220 true, TURF 14/32 at 130/310 true, wind from 130 at 15 kt.
+# ---------------------------------------------------------------------------
+def _paved_and_grass():
+    return [
+        Runway(airport_ident="CYFD", length_ft=5046, width_ft=100, surface="ASP",
+               le_ident="05", le_heading_true=40, he_ident="23", he_heading_true=220),
+        Runway(airport_ident="CYFD", length_ft=2649, width_ft=100, surface="TURF",
+               le_ident="14", le_heading_true=130, he_ident="32", he_heading_true=310),
+    ]
+
+
+def test_best_runway_hard_filter_skips_grass():
+    rws = _paved_and_grass()
+    # Unfiltered, the grass strip is straight into wind and wins.
+    assert best_runway(rws, 130, 15).runway_ident == "14"
+    # Filtered to pavement, the pick is the paved end - and it carries the
+    # crosswind that end actually has, not the grass strip's zero.
+    sol = best_runway(rws, 130, 15, surface="hard")
+    assert sol.runway_ident == "05"
+    assert sol.surface == "ASP"
+    assert sol.crosswind_kt == 15.0
+
+
+def test_best_runway_soft_filter_picks_grass():
+    """The mirror case: a soft-field scan must not headline the pavement."""
+    rws = _paved_and_grass()
+    sol = best_runway(rws, 40, 15, surface="soft")
+    assert sol.runway_ident in {"14", "32"}
+    assert sol.surface == "TURF"
+
+
+def test_best_runway_surface_filter_falls_back_when_no_match():
+    """A field with nothing of the requested surface still names a runway.
+
+    Naming the only runway there is beats a card that says "runway data
+    unavailable" at a field whose runways are perfectly well known.
+    """
+    grass_only = [Runway(airport_ident="X", length_ft=2000, surface="TURF",
+                         le_ident="14", le_heading_true=140,
+                         he_ident="32", he_heading_true=320)]
+    sol = best_runway(grass_only, 140, 12, surface="hard")
+    assert sol is not None and sol.runway_ident == "14"
+
+
+def test_best_runway_calm_picks_longest_of_requested_surface():
+    """Calm wind falls back to the longest runway - of the surface asked for."""
+    rws = [
+        Runway(airport_ident="X", length_ft=6000, surface="TURF",
+               le_ident="09", le_heading_true=90, he_ident="27", he_heading_true=270),
+        Runway(airport_ident="X", length_ft=3000, surface="ASP",
+               le_ident="18", le_heading_true=180, he_ident="36", he_heading_true=360),
+    ]
+    assert best_runway(rws, None, None).length_ft == 6000
+    assert best_runway(rws, None, None, surface="hard").length_ft == 3000
+
+
+def test_surface_filter_leaves_the_runway_list_alone():
+    """The card's dropdown is built from every end, filter or no filter - the
+    pilot should still see the grass strip is there."""
+    comps = all_runway_components(_paved_and_grass(), 130, 15)
+    assert {c.ident for c in comps} == {"05", "23", "14", "32"}
+
+
+def test_components_carry_the_hard_soft_tristate():
+    """What the browser marks off-surface ends from. ``None`` means unknown, and
+    an unknown surface is never marked - "we don't know" is not "wrong for you"."""
+    comps = {c.ident: c for c in all_runway_components(_paved_and_grass(), 130, 15)}
+    assert comps["05"].is_hard is True
+    assert comps["14"].is_hard is False
+    assert best_runway(_paved_and_grass(), 130, 15, surface="hard").is_hard is True
+    unknown = [Runway(airport_ident="X", surface=None,
+                      le_ident="09", le_heading_true=90,
+                      he_ident="27", he_heading_true=270)]
+    assert all_runway_components(unknown, 90, 10)[0].is_hard is None

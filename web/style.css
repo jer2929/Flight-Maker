@@ -854,6 +854,17 @@ details.runways summary { cursor: pointer; color: var(--accent); }
 .rwy-comp-row { display: flex; align-items: center; gap: 8px; }
 .rwy-comp-row .rwy-comp { padding: 3px 0; flex: 1 1 auto; min-width: 0; }
 .rwy-diag-sm { flex: 0 0 auto; }
+/* A runway end that does not match the surface the scan was filtered to. It
+   stays in the list - the pilot should know the strip is there - but it is
+   dimmed and tagged so it cannot be mistaken for the runway the card is
+   recommending. Both tokens are theme-defined, so this resolves in either. */
+.rwy-comp-row.rwy-offsurface { opacity: .58; }
+.rwy-offsurface-tag {
+  font-family: var(--f-cond); font-size: .72rem; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--muted);
+  border: 1px solid var(--muted); border-radius: 3px; padding: 0 4px;
+  white-space: nowrap;
+}
 .wr { display: block; width: 156px; height: 156px; overflow: visible; }
 .wr.wr-sm { width: 108px; height: 108px; }
 .wr-strip-line { stroke: var(--muted); fill: none; stroke-linecap: butt; opacity: .55; }

@@ -60,6 +60,20 @@ def surface_is_hard(surface: Optional[str]) -> Optional[bool]:
     return False
 
 
+def surface_matches(surface: Optional[str], want: str) -> bool:
+    """Does this runway satisfy a discovery surface filter?
+
+    Same tri-state reading as ``_runways_pass_filters``, which is what gated the
+    aerodrome into the scan in the first place: an unrecognised surface reads as
+    soft, so "hard" never promises pavement it cannot vouch for.
+    """
+    if want == "hard":
+        return surface_is_hard(surface) is True
+    if want == "soft":
+        return surface_is_hard(surface) is False
+    return True
+
+
 def surface_label(surface: Optional[str]) -> Optional[str]:
     """Readable surface, e.g. 'Asphalt (hard)' / 'Grass (soft)'."""
     if not surface:
@@ -107,14 +121,28 @@ def best_runway(
     wind_dir_true: Optional[float],
     wind_kt: Optional[float],
     gust_kt: Optional[float] = None,
+    surface: str = "any",
 ) -> Optional[RunwayWind]:
     """The runway end most into wind (max headwind = min crosswind).
 
     Calm/unknown wind -> longest runway, zero components.
+
+    ``surface`` ("any" / "hard" / "soft") narrows the pick to runways the pilot
+    would actually use. Without it, a field with a paved strip and a grass one
+    headlines whichever the wind happens to favour - so a scan filtered to hard
+    pavement produced cards whose "best runway into wind" was grass, and whose
+    crosswind (the one the limit row, the crosswind filters and the crosswind
+    sort all read) belonged to a runway the pilot had excluded.
     """
     ends = _ends(runways)
     if not ends:
         return None
+    if surface != "any":
+        matching = [e for e in ends if surface_matches(e[2].surface, surface)]
+        # Fall back to every end when nothing of the requested surface has a
+        # usable heading. Naming the only runway there is beats naming none.
+        if matching:
+            ends = matching
 
     def mk(ident, hdg, rw, hw, xw, hwg=None, xwg=None):
         return RunwayWind(
@@ -123,6 +151,7 @@ def best_runway(
             crosswind_kt=round(xw, 1), crosswind_kt_gust=(round(xwg, 1) if xwg is not None else None),
             length_ft=rw.length_ft, width_ft=rw.width_ft,
             surface=rw.surface, surface_label=surface_label(rw.surface),
+            is_hard=surface_is_hard(rw.surface),
         )
 
     if wind_dir_true is None or wind_kt is None or wind_kt <= 0:
@@ -147,7 +176,12 @@ def all_runway_components(
     wind_kt: Optional[float],
     gust_kt: Optional[float] = None,
 ) -> list[RunwayComponent]:
-    """Head/cross/tail components for every runway end (true headings)."""
+    """Head/cross/tail components for every runway end (true headings).
+
+    Deliberately never narrowed by surface, unlike ``best_runway``: this is what
+    the card's runway dropdown renders, and a pilot filtering for pavement still
+    wants to see that the grass strip exists - just not billed as the main one.
+    """
     out: list[RunwayComponent] = []
     calm = wind_dir_true is None or wind_kt is None or wind_kt <= 0
     gust_speed = (wind_kt + 0.5 * (gust_kt - wind_kt)
@@ -162,6 +196,7 @@ def all_runway_components(
         out.append(RunwayComponent(
             ident=ident, heading_true=hdg, length_ft=rw.length_ft, width_ft=rw.width_ft,
             surface=rw.surface, surface_label=surface_label(rw.surface),
+            is_hard=surface_is_hard(rw.surface),
             headwind_kt=round(hw, 1), headwind_kt_gust=(round(hwg, 1) if hwg is not None else None),
             crosswind_kt=round(xw, 1), crosswind_kt_gust=(round(xwg, 1) if xwg is not None else None),
             tailwind_kt=round(-hw, 1) if hw < 0 else 0.0,

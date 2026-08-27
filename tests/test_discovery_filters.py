@@ -48,6 +48,22 @@ def test_min_length_filter():
     assert not _runways_pass_filters("CYHM", "any", min_length_ft=50000)
 
 
+def test_runways_pass_filters_hard_and_soft():
+    """CYFD has both an asphalt runway and a grass one, so it passes either way.
+
+    Worth pinning because this is an *airport*-level gate: passing it says the
+    field has a runway of that surface somewhere, not that the runway the card
+    goes on to headline is one. ``best_runway(surface=...)`` is what makes the
+    headline match, and ``test_runway.py`` covers that end.
+    """
+    assert _runways_pass_filters("CYFD", "hard")
+    assert _runways_pass_filters("CYFD", "soft")
+    assert _runways_pass_filters("CYFD", "any")
+    # CYHM is paved throughout, so a soft-field scan has nothing for it.
+    assert _runways_pass_filters("CYHM", "hard")
+    assert not _runways_pass_filters("CYHM", "soft")
+
+
 def test_discovery_recenters_on_home_base():
     # Discovery centres on the pilot's base: a shared candidate sits at a
     # different distance depending on which base we search from.

@@ -92,3 +92,43 @@ def test_the_clip_that_makes_all_of_this_matter_is_still_there():
     # an overflow becomes a scrollbar instead of a silent truncation. Worth
     # knowing about, because it would also let the sticky header scroll away.
     assert re.search(r"^html \{[^}]*overflow-x: clip", CSS, re.M | re.S)
+
+
+# ---------------------------------------------------------------------------
+# The off-surface marker on runway rows
+#
+# A hard-paved scan no longer *headlines* a grass strip, but the dropdown still
+# lists it, so the row has to say why it is there without reading as the
+# recommendation. These pin the two halves of that, in the same string-assert
+# shape as the rest of this file.
+# ---------------------------------------------------------------------------
+def test_the_off_surface_tag_stays_on_one_line():
+    # It is a two-word caps run inside a row that already carries a diagram and
+    # a numbers line. Broken across lines it reads as two stray words.
+    assert "white-space: nowrap" in _rule(".rwy-offsurface-tag")
+
+
+def test_the_off_surface_marker_uses_theme_tokens():
+    # Both themes define --muted; a literal colour here would be invisible in
+    # one of them. Same reason every other muted rule in the sheet uses it.
+    assert "var(--muted)" in _rule(".rwy-offsurface-tag")
+    assert "opacity" in _rule(".rwy-comp-row.rwy-offsurface")
+
+
+def test_the_runway_block_is_told_which_surface_was_scanned():
+    # It must not read #f-surface itself: the control can be changed without
+    # re-running, and the cards on screen are still answers to the old scan.
+    # It is also shared with the route page, which has no filter at all.
+    fn = APP_JS[APP_JS.index("function runwaysBlock("):]
+    fn = fn[: fn.index("\n}")]
+    assert "function runwaysBlock(a, surface)" in APP_JS
+    assert "f-surface" not in fn, "runwaysBlock must be given the filter, not read it"
+    assert "${runwaysBlock(a, DISCOVERY_SURFACE)}" in APP_JS
+
+
+def test_an_unknown_surface_is_never_marked_off_surface():
+    # is_hard is a tri-state and null means "we don't know", which is not the
+    # same as "wrong for you" - marking it would invent a fact about the field.
+    fn = APP_JS[APP_JS.index("function offSurface("):]
+    fn = fn[: fn.index("\n}")]
+    assert "c.is_hard == null" in fn and "return false" in fn
