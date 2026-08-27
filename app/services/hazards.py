@@ -90,13 +90,37 @@ def _gates(report: dict) -> bool:
         area_products.SEVERITY_RANK["moderate"]
 
 
+def _which(report: dict, source: str) -> str:
+    """Which bulletin said so, and how far off track it is.
+
+    ``CZYZ AIRMET I1, 12 nm off track`` where the report came through
+    ``area_products.find_hazard_in`` and so kept its identity; the bare source
+    name otherwise - a PIREP note, a region-wide one, or any caller still passing
+    a blob of text. On a row that stops a flight, "which one, and is it anywhere
+    near me" is the first question, and the row could not answer either.
+
+    The distance is worded exactly as the SIGMET reason in ``orchestrator`` words
+    it, so the two lines on the same card do not describe one advisory in two
+    different ways.
+    """
+    pid = report.get("product_id")
+    dist = report.get("distance_nm")
+    if not pid and dist is None:
+        return source
+    bits = [pid or source]
+    if dist is not None:
+        bits.append("on your route" if dist <= 1 else f"{dist:.0f} nm off track")
+    return ", ".join(bits)
+
+
 def _report_text(report: dict, kind: str, alt_phrase: str,
                  source: str = "AIRMET/SIGMET") -> str:
     """An area report written back with its severity and band, e.g.
-    ``MOD icing FL040-FL100 (AIRMET/SIGMET), overlaps your 500-6,500 ft``."""
+    ``MOD icing FL040-FL100 (CZYZ AIRMET I1, 12 nm off track), overlaps your
+    500-6,500 ft``."""
     sev = {"severe": "SEV", "moderate": "MOD", "light": "LGT"}[report["severity"]]
     band = area_products.band_text(report["base_ft"], report["top_ft"])
-    return (f"{sev} {kind} {band} ({source})"
+    return (f"{sev} {kind} {band} ({_which(report, source)})"
             f"{f', overlaps your {alt_phrase}' if alt_phrase else ''}")
 
 
@@ -146,6 +170,13 @@ def weather_checks(
     # failed row then propagated into all 48 hours of the timeline strip. It is
     # reported here, at any severity, and it never fails a row.
     region_text: str = "",
+    # The same placed products as ``area_text``, but kept apart rather than
+    # joined into a blob: ``[{"id", "distance_nm", "text"}, ...]``. A blob cannot
+    # say WHICH bulletin failed the icing row or how far off track it was, and
+    # those are the two things a pilot checks first. Optional - ``raw_text``
+    # remains the fallback, so every other caller and every existing test keeps
+    # working unchanged. See ``area_products.find_hazard_in``.
+    area_reports: list[dict] = (),
     # --- model-derived air mass (never gates; see ``services.airmass``) -------
     icing_bands: list[dict] = (),       # cloud-below-freezing bands, ft MSL
     turbulence: Optional[dict] = None,  # shear / gust / low-level-jet index
@@ -376,7 +407,18 @@ def weather_checks(
             return ""
         return _report_text(rpt, kind, "", source="AIRMET/SIGMET, region-wide")
 
-    icing_rpt = area_products.find_hazard(raw_text, "icing", planned_low_ft, planned_high_ft)
+    def _area_report(kind: str) -> Optional[dict]:
+        """The worst placed report of ``kind`` in the flight's altitude band.
+
+        Prefers the structured products, which carry their identity; falls back
+        to the joined text for callers that pass only ``raw_text``.
+        """
+        if area_reports:
+            return area_products.find_hazard_in(list(area_reports), kind,
+                                                planned_low_ft, planned_high_ft)
+        return area_products.find_hazard(raw_text, kind, planned_low_ft, planned_high_ft)
+
+    icing_rpt = _area_report("icing")
     icing_pirep = _pirep_note("icing")
     icing_region = _region_note("icing")
     frz = (f"freezing level ~{round(freezing_level_ft):,} ft"
@@ -412,7 +454,7 @@ def weather_checks(
             advisory=bool(icing_pirep or icing_region))
 
     # 5. Moderate turbulence at low level, same two-source treatment.
-    turb_rpt = area_products.find_hazard(raw_text, "turbulence", planned_low_ft, planned_high_ft)
+    turb_rpt = _area_report("turbulence")
     turb_pirep = _pirep_note("turbulence")
     turb_region = _region_note("turbulence")
     turb = turbulence or {}

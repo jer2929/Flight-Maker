@@ -161,6 +161,40 @@ def find_hazard(text: str, kind: str, low_ft: float, high_ft: float) -> Optional
     return best
 
 
+def find_hazard_in(products: list[dict], kind: str,
+                   low_ft: float, high_ft: float) -> Optional[dict]:
+    """:func:`find_hazard` over separate products, keeping track of WHICH one.
+
+    ``products`` is ``[{"id", "distance_nm", "text"}, ...]``. The blob form above
+    cannot answer "which bulletin, and how far off track" - it has already thrown
+    the identity away - so the icing row could say ``MOD icing FL040-FL100`` and
+    nothing about where that came from or whether it was anywhere near you. On a
+    row that stops a flight, that is the first thing a pilot asks.
+
+    Worst severity wins, and among equals the nearest: the product cited should
+    be the one that most nearly applies to this flight, not whichever the feed
+    happened to list first.
+    """
+    best: Optional[dict] = None
+    for prod in products:
+        rpt = find_hazard(prod.get("text") or "", kind, low_ft, high_ft)
+        if rpt is None:
+            continue
+        cand = {**rpt, "product_id": prod.get("id"),
+                "distance_nm": prod.get("distance_nm")}
+        if best is None or _worse_report(cand, best):
+            best = cand
+    return best
+
+
+def _worse_report(cand: dict, best: dict) -> bool:
+    rank = SEVERITY_RANK[cand["severity"]] - SEVERITY_RANK[best["severity"]]
+    if rank:
+        return rank > 0
+    far = lambda r: r["distance_nm"] if r.get("distance_nm") is not None else 1e9  # noqa: E731
+    return far(cand) < far(best)
+
+
 # ---------------------------------------------------------------------------
 # Where and when - the two things the text carries that nothing else does.
 #

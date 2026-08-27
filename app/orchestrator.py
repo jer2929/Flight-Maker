@@ -2164,8 +2164,16 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # bulletin that names its region in words rather than coordinates is kept and
     # shown - it just cannot end the flight on the strength of naming a FIR the
     # size of Alberta. See ``area_hazards.gating`` for the whole argument.
-    area_text = "\n\n".join(h.text for h in ah.gating(relevant_haz))
+    gating_haz = ah.gating(relevant_haz)
+    area_text = "\n\n".join(h.text for h in gating_haz)
     region_text = "\n\n".join(h.text for h in ah.unplaced(relevant_haz))
+    # The same products, kept apart so the icing and turbulence rows can name the
+    # one that failed them and say how far off track it is. Joining them into
+    # ``area_text`` throws that away, and a row that stops a flight without
+    # saying which bulletin did it is a row the pilot cannot check.
+    area_reports = [{"id": h.product_id or f"{h.kind} {h.fir or ''}".strip(),
+                     "distance_nm": h.distance_nm, "text": h.text}
+                    for h in gating_haz]
     pirep_text = "\n\n".join(h.text for h in relevant_haz if h.kind == "PIREP")
     # Hazards are scoped to the flight window, from the parsed TAF segments -
     # NOT grepped out of the raw text. A TS group valid tomorrow used to fail
@@ -2182,6 +2190,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     weather_checks = hz.weather_checks(
         raw_text=area_text,
         area_text=area_text,
+        area_reports=area_reports,
         region_text=region_text,
         pirep_text=pirep_text,
         hazards=set(route_ws.hazards),
