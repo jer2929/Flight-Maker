@@ -210,6 +210,54 @@ def parse_icao_polygon(text: str) -> list[tuple[float, float]]:
     return ring + [ring[0]]
 
 
+# A hazard drawn as a LINE with a width either side of it, which is the other
+# ordinary way these areas are written:
+#
+#   WI 30NM EITHER SIDE OF LINE N5000 W11400 - N5200 W11000
+#   WITHIN 25 NM OF A LINE 4900N 11000W - 5100N 10800W
+#
+# ``parse_icao_polygon`` above discards these, because two coordinates are not a
+# ring - and a bulletin it cannot place is one nothing downstream can test against
+# the route. They are common enough in the Canadian AIRMET feed to be worth
+# reading, and a two-point line is something ``geometry`` already handles: see
+# ``polyline_polygon_distance_nm``, which measures against a ring of two points as
+# a line rather than an area.
+#
+# Deliberately keyed on the word LINE. A bare pair of coordinates with no such
+# marker stays unplaced: it is as likely to be a truncated polygon as a corridor,
+# and placing a bulletin WRONGLY is worse than leaving it unplaced - an unplaced
+# one is shown and advises, where a misplaced one can gate the wrong flight or
+# fail to gate the right one.
+_LINE_MARK = re.compile(r"\bLINE\b")
+_LINE_WIDTH = re.compile(r"\b(\d{1,3})\s?NM\b(?=[^.]{0,30}?\bLINE\b)")
+
+
+def parse_icao_corridor(text: str) -> tuple[list[tuple[float, float]], Optional[float]]:
+    """A line-and-width area as ``([(lat, lon), ...], half_width_nm)``.
+
+    ``([], None)`` when the text names no line, which is the common case and not
+    an error. The width is the distance *either side* of the line as the bulletin
+    states it; ``None`` means it named a line but no width, and the caller should
+    fall back to its own corridor rather than inventing one.
+    """
+    up = text.upper()
+    mark = _LINE_MARK.search(up)
+    if not mark:
+        return [], None
+    pts: list[tuple[float, float]] = []
+    for m in _COORD.finditer(up[mark.end():]):
+        lat = _dm(m.group(2) or m.group(4), m.group(3) or m.group(5),
+                  m.group(1) or m.group(6))
+        lon = _dm(m.group(8) or m.group(10), m.group(9) or m.group(11),
+                  m.group(7) or m.group(12))
+        if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0 and (not pts or pts[-1] != (lat, lon)):
+            pts.append((lat, lon))
+    if len(pts) < 2:
+        return [], None
+    w = _LINE_WIDTH.search(up)
+    return pts, (float(w.group(1)) if w else None)
+
+
 # The three forms a PIREP gives its position in, in the order they are tried:
 #
 #   /OV YYZ180020   20 nm on the 180 radial off Toronto

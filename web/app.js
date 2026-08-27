@@ -1391,6 +1391,10 @@ function hazardPopup(p) {
   if (p.band_label && p.band_label !== "no altitude given") bits.push(p.band_label);
   if (p.distance_nm === 0) bits.push("on your route");
   else if (p.distance_nm > 0) bits.push(`${Math.round(p.distance_nm)} NM off track`);
+  // A hazard drawn as a LINE carries its width in the bulletin, and the line on
+  // the map is the centre of it - so without this the drawn shape understates
+  // the area by however many miles the forecaster put either side of it.
+  if (p.corridor_nm) bits.push(`${Math.round(p.corridor_nm)} NM either side`);
   const exp = expiryState(p.valid_from, p.valid_to);
   if (exp) bits.push(exp.text);
   if (!p.relevant && p.drop_label) bits.push(p.drop_label);
@@ -1430,6 +1434,10 @@ function hazardLayers(gj) {
                                                  { maxWidth: 360 }),
   });
   return {
+    // "not a Point" rather than "is a Polygon": an area written as "WI 30NM
+    // EITHER SIDE OF LINE ..." is drawn as a LineString, and belongs here with
+    // the polygons rather than with the point reports. `hazardStyle`'s fill
+    // values are simply inert on a line.
     areas: make((f) => f.geometry && f.geometry.type !== "Point", hazardStyle),
     pireps: make((f) => f.geometry && f.geometry.type === "Point", pirepStyle),
   };

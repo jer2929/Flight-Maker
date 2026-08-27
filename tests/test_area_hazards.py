@@ -556,3 +556,120 @@ def test_a_pirep_that_reports_no_cloud_says_nothing_about_it():
     h = ah.from_cfps_item("pirep", {"location": "CYYZ",
                                     "text": "UA /OV YYZ /FL050 /TB MOD"})
     assert h.cloud_top_ft is None and h.cloud_top_cover is None
+
+
+# ---------------------------------------------------------------------------
+# Placing the bulletins that used to arrive unplaced
+#
+# An unplaced advisory is now shown and never gates (see ``gating``), which is
+# the right answer to "we do not know where this is" - but the better answer is
+# to know. These are the two readings that were being thrown away.
+# ---------------------------------------------------------------------------
+
+def test_a_line_and_width_is_read_as_a_corridor():
+    pts, width = apr.parse_icao_corridor(
+        "MOD ICE FCST WI 30NM EITHER SIDE OF LINE N5000 W11400 - N5200 W11000")
+    assert pts == [(50.0, -114.0), (52.0, -110.0)]
+    assert width == 30.0
+
+
+def test_a_line_with_no_stated_width_reads_as_a_line_with_no_width():
+    """``None`` is not zero. The caller falls back to its own corridor rather
+    than inventing a number the forecaster never wrote."""
+    pts, width = apr.parse_icao_corridor("WI LINE N5000 W11400 - N5200 W11000")
+    assert len(pts) == 2 and width is None
+
+
+def test_two_bare_coordinates_are_still_not_an_area():
+    """Keyed on the word LINE on purpose. A stray pair is as likely to be a
+    truncated polygon as a corridor, and placing a bulletin WRONGLY is worse than
+    leaving it unplaced - an unplaced one is shown and advises, where a misplaced
+    one can gate the wrong flight or fail to gate the right one."""
+    assert apr.parse_icao_corridor("N4200 W08100 - N4400 W08100") == ([], None)
+    assert apr.parse_icao_polygon("N4200 W08100 - N4400 W08100") == []
+
+
+def test_a_corridor_bulletin_is_placed_and_carries_its_width():
+    h = ah.from_cfps_item(
+        "airmet",
+        {"location": "CZYZ",
+         "text": "CZYZ AIRMET I1 MOD ICE FCST WI 30NM EITHER SIDE OF "
+                 "LINE N4300 W08100 - N4300 W07900 SFC/100"},
+        now=NOW)
+    assert len(h.geometry) == 2
+    assert h.corridor_nm == 30.0
+
+
+def test_the_stated_width_widens_the_corridor_the_route_is_tested_against():
+    # The line runs ~50 nm south of CYFD-CYHM. Inside the bulletin's own 60 nm
+    # either side; outside our 25 nm default.
+    line = [(42.3, -81.0), (42.3, -79.5)]
+    narrow, _ = _filter([_haz(geometry=line, base_ft=0, top_ft=18000)])
+    wide, _ = _filter([_haz(geometry=line, base_ft=0, top_ft=18000,
+                            corridor_nm=60.0)])
+    assert not narrow, "our own 25 nm corridor does not reach it"
+    assert len(wide) == 1, "the forecaster's 60 nm does"
+
+
+def test_a_corridor_reaches_the_map_as_a_line_not_a_polygon():
+    """A two-point Polygon is invalid GeoJSON and Leaflet drops it without a
+    word - which is how one of these would vanish off the map."""
+    keep, _ = _filter([_haz(geometry=[(43.0, -81.0), (43.3, -79.5)],
+                            base_ft=0, top_ft=18000, corridor_nm=30.0)])
+    fc = ah.to_feature_collection(keep)
+    assert fc["features"][0]["geometry"]["type"] == "LineString"
+    assert fc["features"][0]["properties"]["corridor_nm"] == 30.0
+
+
+# --- the polygon CFPS may attach itself --------------------------------------
+#
+# Unverified against a live response - see ``area_hazards._cfps_geometry``. These
+# pin the contract it is written to: when the key is there in any of its
+# plausible shapes it wins, and when it is absent or unreadable nothing changes.
+
+_CFPS_RING = [[-81.0, 42.5], [-81.0, 43.6], [-79.5, 43.6], [-79.5, 42.5],
+              [-81.0, 42.5]]
+
+
+def _cfps_airmet(**kw) -> dict:
+    base = {"location": "CZYZ",
+            "text": "CZYZ AIRMET I1 MOD ICE FCST OVER THE FIR SFC/100"}
+    base.update(kw)
+    return base
+
+
+def test_a_cfps_polygon_is_used_when_the_feed_sends_one():
+    h = ah.from_cfps_item("airmet", _cfps_airmet(
+        geometry={"type": "Polygon", "coordinates": [_CFPS_RING]}), now=NOW)
+    assert h.geometry[0] == (42.5, -81.0), "lat/lon, not GeoJSON's lon/lat"
+    keep, _ = _filter([h])
+    assert len(keep) == 1 and keep[0].positioned
+
+
+def test_a_cfps_polygon_sent_as_a_json_string_is_read_too():
+    """CFPS hands other payloads back as JSON strings - see ``cfps._notam_text``
+    and ``cfps._gfa_parse``, which both cope with exactly that."""
+    import json
+    h = ah.from_cfps_item("airmet", _cfps_airmet(
+        geometry=json.dumps({"type": "Polygon", "coordinates": [_CFPS_RING]})),
+        now=NOW)
+    assert len(h.geometry) == 5
+
+
+def test_a_cfps_geometry_collection_is_unwrapped():
+    h = ah.from_cfps_item("airmet", _cfps_airmet(geometry={
+        "type": "GeometryCollection",
+        "geometries": [{"type": "Polygon", "coordinates": [_CFPS_RING]}]}), now=NOW)
+    assert len(h.geometry) == 5
+
+
+@pytest.mark.parametrize("geom", [None, "", "not json", "{", 42, {"type": "Nope"}])
+def test_an_absent_or_unreadable_cfps_geometry_costs_nothing(geom):
+    """The whole reason this is safe to ship unverified: the text parse below it
+    runs exactly as it did before."""
+    item = _cfps_airmet()
+    if geom is not None:
+        item["geometry"] = geom
+    h = ah.from_cfps_item("airmet", item, now=NOW)
+    assert h.geometry == [], "no polygon in the prose either, so still unplaced"
+    assert h.hazard == "ice", "and everything else was read as normal"

@@ -23,6 +23,7 @@ Two rules run through the whole module:
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -109,6 +110,11 @@ class AreaHazard:
     cloud_top_cover: Optional[str] = None       # SCT | BKN | OVC | ...
     cloud_base_ft: Optional[float] = None
     geometry: list[Point] = field(default_factory=list)   # 1 point = PIREP
+    # Half-width of a hazard drawn as a LINE rather than an area, in nm - "WI
+    # 30NM EITHER SIDE OF LINE ...". ``None`` for an ordinary polygon, and for a
+    # line whose bulletin named no width; either way the caller falls back to its
+    # own corridor rather than inventing one.
+    corridor_nm: Optional[float] = None
     # Filled by ``filter_relevant``.
     relevant: bool = True
     drop_reason: Optional[str] = None
@@ -198,6 +204,55 @@ _PRODUCT_ID = re.compile(r"\b([A-Z]{4})\s+(SIGMET|AIRMET)\s+([A-Z]\s?\d{1,2})\b"
 _FIR = re.compile(r"\b(C[YZ][A-Z]{2})\b")
 
 
+def _place(text: str) -> tuple[list[Point], Optional[float]]:
+    """The area a bulletin describes: a polygon, else a line-and-width, else none.
+
+    Polygon first because it is the more specific reading - a bulletin that gives
+    three or more corners has drawn an area, whatever else its wording contains.
+    """
+    ring = area_products.parse_icao_polygon(text)
+    if ring:
+        return ring, None
+    return area_products.parse_icao_corridor(text)
+
+
+def _cfps_geometry(item: dict) -> list[Point]:
+    """The polygon CFPS itself attached to a bulletin, if it attaches one.
+
+    Read defensively and preferred when present: it is the area the forecaster
+    actually drew, where everything else here is this module guessing at prose.
+    CFPS hands other payloads back as JSON strings (see ``cfps._notam_text`` and
+    ``cfps._gfa_parse``, which both cope with exactly that), so both forms are
+    accepted.
+
+    NOT VERIFIED against a live response - ``plan.navcanada.ca`` was unreachable
+    from where this was written, so whether the area products carry this key at
+    all is unconfirmed. That is why it is written to cost nothing when it is
+    absent: no key, or an unreadable one, returns ``[]`` and the text parse below
+    runs exactly as before. ``scripts/probe_area_products.py`` prints it, so it
+    can be confirmed from a machine with egress.
+    """
+    raw = item.get("geometry")
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            return []
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return []
+    if not isinstance(raw, dict):
+        return []
+    # A GeometryCollection is one plausible shape for this field, and
+    # ``_ring_from_geojson`` does not read one - so unwrap it to the largest
+    # member first rather than silently returning nothing.
+    if raw.get("type") == "GeometryCollection":
+        members = [g for g in (raw.get("geometries") or []) if isinstance(g, dict)]
+        rings = [r for r in (_ring_from_geojson(g) for g in members) if r]
+        return max(rings, key=len) if rings else []
+    return _ring_from_geojson(raw)
+
+
 def from_cfps_item(alpha: str, item: dict, *, now: Optional[datetime] = None,
                    resolve_station: Optional[Callable] = None) -> Optional[AreaHazard]:
     """One CFPS ``data`` entry as an :class:`AreaHazard`, or ``None`` if empty."""
@@ -216,11 +271,14 @@ def from_cfps_item(alpha: str, item: dict, *, now: Optional[datetime] = None,
         m = _FIR.search(up)
         fir = m.group(1) if m else None
 
+    corridor_nm = None
     if kind == "PIREP":
         pos = area_products.parse_pirep_position(text, resolve_station)
         geom = [pos] if pos else []
     else:
-        geom = area_products.parse_icao_polygon(text)
+        geom = _cfps_geometry(item)
+        if not geom:
+            geom, corridor_nm = _place(text)
 
     base, top = _band_for(kind, text, up)
     v_from = _iso(item.get("startValidity"))
@@ -239,7 +297,7 @@ def from_cfps_item(alpha: str, item: dict, *, now: Optional[datetime] = None,
                     f"{pid.group(3).replace(' ', '')}" if pid else None),
         fir=fir, base_ft=base, top_ft=top,
         **_cloud_layer(text if kind == "PIREP" else ""),
-        valid_from=v_from, valid_to=v_to, geometry=geom,
+        valid_from=v_from, valid_to=v_to, geometry=geom, corridor_nm=corridor_nm,
     )
 
 
@@ -472,12 +530,13 @@ def from_awc_feature(product: str, feature: dict) -> Optional[AreaHazard]:
         fir = m.group(1) if m else None
 
     geom = _ring_from_geojson(feature.get("geometry") or {})
+    corridor_nm = None
     if not geom:
         lat, lon = props.get("lat"), props.get("lon")
         if lat is not None and lon is not None:
             geom = [(float(lat), float(lon))]
         else:
-            geom = area_products.parse_icao_polygon(up)
+            geom, corridor_nm = _place(up)
 
     return AreaHazard(
         kind=kind, text=text, source=AWC, source_url=AWC_URL,
@@ -488,7 +547,7 @@ def from_awc_feature(product: str, feature: dict) -> Optional[AreaHazard]:
         **(_awc_cloud_layer(props) or _cloud_layer(text if kind == "PIREP" else "")),
         valid_from=_epoch_iso(_first(props, _FROM_KEYS)),
         valid_to=_epoch_iso(_first(props, _TO_KEYS)),
-        geometry=geom,
+        geometry=geom, corridor_nm=corridor_nm,
     )
 
 
@@ -571,7 +630,11 @@ def _merge(a: AreaHazard, b: AreaHazard) -> AreaHazard:
                        else other.cloud_base_ft),
         valid_from=_earlier(a.valid_from, b.valid_from),
         valid_to=_later(a.valid_to, b.valid_to),
+        # The corridor belongs to the geometry, so it has to follow the same half
+        # ``geom`` came from - a width off one bulletin applied to the other's
+        # polygon would widen an area nobody drew that way.
         geometry=geom,
+        corridor_nm=(keep.corridor_nm if keep.geometry else other.corridor_nm),
     )
 
 
@@ -706,6 +769,11 @@ def _drop_reason(h: AreaHazard, *, path, buffer_nm, low_ft, high_ft,
         near = buffer_nm
         if h.kind == "PIREP" and pirep_buffer_nm is not None:
             near = pirep_buffer_nm
+        # A line the bulletin drew a width around is an AREA that wide, not a
+        # line the route happens to pass near - so the forecaster's number wins
+        # when it is larger than our own corridor.
+        if h.corridor_nm:
+            near = max(near, h.corridor_nm)
         hit, dist = geometry.polyline_intersects_polygon(path, h.geometry, near)
         h.distance_nm = None if dist == float("inf") else dist
         # The test ran, so the answer below - hit or miss - is about this route.
@@ -813,6 +881,12 @@ def to_feature_collection(hazards: Iterable[AreaHazard]) -> dict:
         if len(h.geometry) == 1:
             geom = {"type": "Point",
                     "coordinates": [h.geometry[0][1], h.geometry[0][0]]}
+        elif len(h.geometry) == 2:
+            # A hazard drawn as a line with a width either side of it. A
+            # two-point Polygon is invalid GeoJSON and Leaflet drops it without
+            # a word, which is how one of these would vanish off the map.
+            geom = {"type": "LineString",
+                    "coordinates": [[lon, lat] for lat, lon in h.geometry]}
         else:
             ring = h.geometry if h.geometry[0] == h.geometry[-1] \
                 else h.geometry + [h.geometry[0]]
@@ -835,6 +909,7 @@ def to_feature_collection(hazards: Iterable[AreaHazard]) -> dict:
                 "drop_label": DROP_LABELS.get(h.drop_reason or "") or None,
                 "distance_nm": (round(h.distance_nm, 1)
                                 if h.distance_nm is not None else None),
+                "corridor_nm": h.corridor_nm,
                 "source": h.source,
                 "source_url": h.source_url,
                 "text": h.text,

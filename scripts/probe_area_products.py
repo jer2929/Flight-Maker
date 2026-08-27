@@ -110,6 +110,17 @@ async def probe_cfps(client, dep_sites: list[str], point: tuple[float, float],
                 text = rows[0].get("text")
                 if isinstance(text, str) and text.strip():
                     print(f"           sample text: {text.strip()[:160]}")
+                # The open question this probe exists to answer for CFPS:
+                # does an area product carry the polygon the forecaster drew,
+                # or only the prose? ``area_hazards._cfps_geometry`` reads this
+                # key defensively because nobody has been able to look.
+                geom = rows[0].get("geometry")
+                if geom is not None:
+                    shown = geom if isinstance(geom, str) else json.dumps(geom)
+                    print(f"           geometry:    {type(geom).__name__} "
+                          f"{shown[:160]}")
+                else:
+                    print("           geometry:    (absent)")
 
 
 AWC_PRODUCTS = {
