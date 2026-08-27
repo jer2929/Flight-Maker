@@ -32,8 +32,11 @@ jobs:
       # pilot looking at the app. These two steps run before anything touches
       # Fly, so a red main fails the job instead of deploying.
       #
-      # Scoped to app/ because that is what the container runs; scripts/ holds
-      # one-off probes that are never imported at runtime.
+      # app/ is what the container runs, so it is the part that must be clean.
+      # scripts/ and tests/ are linted too: they are not shipped, but an unused
+      # import or a dead local there is the same signal that something was
+      # removed and its scaffolding left behind - and a probe script that has
+      # rotted is one nobody can use on the day they need it.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"      # matches the Dockerfile's base image
@@ -43,7 +46,7 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Lint (undefined names, dead imports)
-        run: python -m pyflakes app/
+        run: python -m pyflakes app/ scripts/ tests/
 
       # test_live_smoke.py auto-skips when the network is unavailable, so it
       # runs here and nowhere else - pointing eleven tests at the real NAV

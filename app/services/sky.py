@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from app.models import Sky, SkyLayer, Source
 from app.services import weather as wx
-from app.sources import openmeteo
 
 # Amounts that make a ceiling. ``VV`` is an indefinite ceiling - vertical
 # visibility into an obscuration - and counts, which is the same rule
@@ -76,12 +75,6 @@ def from_metar(text: str | None, source: Source = Source.OBSERVED) -> Sky:
     if not text:
         return _rendered(Sky(state="unsampled", source=source))
     return from_layers(wx.observed_sky(text), source)
-
-
-def from_hourly(hourly: dict, i: int, elevation_ft: float | None,
-                source: Source = Source.MODEL) -> Sky:
-    """Convenience: the model's sky at one hour, straight off the raw series."""
-    return from_stack(openmeteo.cloud_stack(hourly, i, elevation_ft), source)
 
 
 def with_ceiling(sky: Sky | None, ceiling: float | None,

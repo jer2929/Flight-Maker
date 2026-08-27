@@ -11,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app import orchestrator
-from app.sources import airports as ap
 from app.sources import cache, cfps, openmeteo
 
 NOW = datetime.now(timezone.utc)

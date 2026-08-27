@@ -10,7 +10,6 @@ import pytest
 
 from app import orchestrator
 from app.models import Source
-from app.sources import airports as ap
 from app.sources import cfps, openmeteo
 
 NOW = datetime.now(timezone.utc)

@@ -714,22 +714,6 @@ def _apply(ws: WeatherSummary, c: dict) -> None:
     ws.hazards = sorted(set(ws.hazards) | set(c.get("hazards", [])))
 
 
-def _merge_worse(ws: WeatherSummary, c: dict | None) -> None:
-    if not c:
-        return
-    if c.get("wind_kt") is not None and (ws.wind_kt is None or c["wind_kt"] > ws.wind_kt):
-        ws.wind_kt = c["wind_kt"]
-        if c.get("wind_dir_true") is not None:
-            ws.wind_dir_true = c["wind_dir_true"]
-    if c.get("gust_kt") is not None and (ws.gust_kt is None or c["gust_kt"] > ws.gust_kt):
-        ws.gust_kt = c["gust_kt"]
-    if c.get("visibility_sm") is not None and (ws.visibility_sm is None or c["visibility_sm"] < ws.visibility_sm):
-        ws.visibility_sm = c["visibility_sm"]
-    if c.get("ceiling_agl_ft") is not None and (ws.ceiling_agl_ft is None or c["ceiling_agl_ft"] < ws.ceiling_agl_ft):
-        ws.ceiling_agl_ft = c["ceiling_agl_ft"]
-    ws.hazards = sorted(set(ws.hazards) | set(c.get("hazards", [])))
-
-
 def _notams_for(ident: str, notams: dict) -> list[Notam]:
     out = []
     for n in notams.get(ident, [])[:25]:
