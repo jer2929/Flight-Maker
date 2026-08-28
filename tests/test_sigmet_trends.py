@@ -36,12 +36,12 @@ def test_display_text_is_just_the_text_when_nothing_is_parsed():
 def test_trend_wind_veer_and_gusts():
     hist = [o(wind_dir_true=240, wind_kt=10), o(wind_dir_true=270, wind_kt=14),
             o(wind_dir_true=300, wind_kt=18, gust_kt=28)]
-    notes, _ = analyze(hist)
+    notes, _, _note = analyze(hist)
     assert any("veering" in n for n in notes)
     assert any("Gust" in n for n in notes)
 
 
 def test_trend_pressure_rising():
     hist = [o(altimeter_inhg=29.80), o(altimeter_inhg=29.92)]
-    notes, _ = analyze(hist)
+    notes, _, _note = analyze(hist)
     assert any("rising" in n.lower() for n in notes)

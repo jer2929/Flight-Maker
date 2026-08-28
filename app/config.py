@@ -89,6 +89,25 @@ class Settings(BaseSettings):
     # transcontinental route pads out to most of a hemisphere.
     flight_category_max_span_deg: float = 30.0
 
+    # Isobar map layer (MSL pressure contours at the ETD).
+    #
+    # The same 150 nm the flight category layer pads by, for the same reason:
+    # the map opens at ``fitBounds(view, {maxZoom: 8})``, so this fills the view
+    # and a little beyond. It matters more here than there - a contour that
+    # stops at the edge of the fetched box looks like a contour that ends, and
+    # isobars do not end.
+    isobar_corridor_nm: float = 150.0
+    # Grid points per side. A fixed budget, not a fixed spacing: n^2 points
+    # whatever the box, so a long route and a circuit cost the same four
+    # ``forecast_many`` chunks. See ``services.isobars.DEFAULT_GRID_N``.
+    isobar_grid_n: int = 12
+    # 4 hPa is what surface analysis charts are drawn at, and matching the chart
+    # a pilot already knows how to read is most of what makes this legible.
+    isobar_interval_hpa: float = 4.0
+    # Same clamp as the flight category box, and the same reason: without it a
+    # transcontinental route asks for a hemisphere.
+    isobar_max_span_deg: float = 30.0
+
     # Route timeline horizon (hours)
     timeline_hours: int = 48
 

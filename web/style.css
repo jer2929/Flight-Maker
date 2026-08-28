@@ -1071,13 +1071,34 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 /* Radar panel (Leaflet + GeoMet WMS) */
 .radar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .radar-panel h3 { margin: 0 0 10px; font-size: .95rem; }
-.radar-types { display: flex; gap: 6px; }
-/* .radar-fit is the hazard framing toggle. It shares the pill, but keeps its own
-   class: the Rain/Snow handler selects on .radar-type and would otherwise wire a
-   layer switch onto it and strip its active state. */
-.radar-type, .radar-fit { background: var(--bg); color: var(--muted); border: 1px solid var(--line);
+.radar-types { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* .radar-fit is the hazard framing toggle and .sat-type the Visible/Infrared
+   pair. All three share the pill, and all three keep their own class: the
+   Rain/Snow handler selects on .radar-type and would otherwise wire a radar
+   layer switch onto them and strip their active state. */
+.radar-type, .radar-fit, .sat-type { background: var(--bg); color: var(--muted); border: 1px solid var(--line);
   border-radius: var(--r-md); padding: 6px 12px; cursor: pointer; font-size: .82rem; }
-.radar-type.active, .radar-fit.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.radar-type.active, .radar-fit.active, .sat-type.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+/* Divider between the radar products and the satellite ones - they are two
+   different pickers sharing a row, and without it they read as one set of four
+   mutually exclusive choices. */
+.pill-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--line); }
+/* The layer names are GeoMet's and can move under us. A pill that cannot draw
+   anything says so rather than sitting there looking clickable. */
+.sat-type.unavailable { opacity: .45; cursor: not-allowed; text-decoration: line-through; }
+/* Isobar labels and pressure centres. LAYOUT AND TYPE ONLY - every colour on
+   these is set inline by isobarLayer() in app.js, because they are painted over
+   OSM tiles and the radar/satellite rasters rather than over app chrome, and so
+   must NOT follow the theme tokens. Same rule as HAZARD_COLORS. */
+.iso-label { display: flex; align-items: center; justify-content: center;
+  font-size: .64rem; font-weight: 600; font-variant-numeric: tabular-nums;
+  letter-spacing: .02em; pointer-events: none; }
+.iso-label span { padding: 0 3px; border-radius: 2px; line-height: 1.25; }
+.iso-centre { display: flex; flex-direction: column; align-items: center;
+  line-height: 1; pointer-events: none; }
+.iso-centre b { font-size: 1.15rem; font-weight: 700; }
+.iso-centre span { margin-top: 1px; padding: 0 3px; border-radius: 2px;
+  font-size: .6rem; font-variant-numeric: tabular-nums; }
 /* position+z-index makes the map its own stacking context so Leaflet's internal
    panes/controls (z-index up to ~1000) stay trapped below the sticky header. */
 .radar-map { height: 380px; width: 100%; border-radius: var(--r-md); border: 1px solid var(--line);
@@ -1088,6 +1109,10 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 .hz-key i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; opacity: .75; }
 .hz-key-dash i { background: transparent; border: 1px dashed var(--muted); }
 .hz-key-dot i { background: var(--muted); border-radius: 50%; }
+/* An isobar is a line, so its key is a line - a 12px square would read as an
+   area fill like the hazard keys above it. The colour comes inline from
+   isobarLegend(), which is why there is none here. */
+.hz-key-iso i { height: 2px; border-radius: 1px; opacity: 1; }
 /* The legend container is now always in the markup, because the flight category
    keys append into it once their fetch lands - so it has to collapse when a
    clear day leaves it with nothing to say. */

@@ -1,8 +1,13 @@
 """Infer aviation-pertinent trends from a short METAR history.
 
 Input is a list of parsed METAR dicts (see ``weather.parse_metar``) in
-chronological order (oldest first). Output is a list of short human notes plus a
-``ceiling_lowering`` flag the route logic can fold into the hard-limit check.
+chronological order (oldest first). Output is a list of short human notes, a
+``ceiling_lowering`` flag the route logic can fold into the hard-limit check,
+and *the note that raised that flag* - so the row reporting it quotes the
+sentence that actually gated rather than guessing which of the notes it was.
+
+Reporting a fall and stopping a flight for one are separate bars here: see
+``LOWERING_NOTE_FT`` and the gate constants beside it.
 
 Developing trends carry a ``· ~last N h`` suffix computed from the METAR
 timestamps (``time_z``), so it reflects how long the trend has actually been
@@ -91,6 +96,23 @@ COVER_CHANGE_COST = 0.5
 # Once the ceiling drops to a different, lower layer, it counts as a developing
 # deterioration for this long - after that it is simply the ceiling.
 FRESH_SWITCH_H = 2
+
+# Reporting a fall and *stopping the flight* for one are two different bars, and
+# for a long time this module only had the lower of them: any 800 ft drop ending
+# at or below 6,000 ft, over however many hours the history happened to span, set
+# the flag that fails the "Rapidly lowering ceilings" check - a hard NO-GO on any
+# non-IFR flight. A deck settling from 6,500 ft to 5,500 ft across an afternoon
+# met all of that, and there is nothing rapid, low or hazardous about it.
+#
+# The gate below is deliberately the *same three numbers* the model side already
+# uses - ``orchestrator._ceiling_dropping`` reads five hourly samples and wants a
+# fall of more than 1,500 ft ending below 5,000 ft. One row must not mean two
+# different things depending on which of its two sources happened to fill it.
+# Change these and change that function with them.
+LOWERING_NOTE_FT = 800      # a fall worth telling the pilot about
+LOWERING_GATE_FT = 1500     # a fall worth stopping the flight for
+LOWERING_GATE_CEIL_FT = 5000   # ...and only once it is down in the way
+LOWERING_WINDOW_H = 4       # "rapidly": the model looks four hours ahead
 
 
 def _layers(h: dict) -> list[dict] | None:
@@ -192,25 +214,35 @@ def _deck_step(prev: dict, cur: dict) -> dict | None:
     return step
 
 
-def _ceiling_trend(obs: list[dict], times: list[datetime | None]) -> tuple[list[str], bool]:
-    """Ceiling notes plus the lowering flag.
+def _ceiling_trend(obs: list[dict],
+                   times: list[datetime | None]) -> tuple[list[str], str | None]:
+    """Ceiling notes, plus *the note that gates* - or None when nothing does.
 
     The history is cut at the point where the ceiling last changed layers, so a
     reported ``A → B`` is always one layer moving. The change of layer itself
     gets a note describing what happened rather than a height comparison across
-    two different clouds."""
+    two different clouds.
+
+    Returning the gating note rather than a bare ``True`` is what stops the row
+    from quoting the wrong sentence. Several notes can come out of one history,
+    only some of them gate, and the caller used to pick the one to show by
+    scanning for the substring "eiling" - which matched "Lower deck **cleared**:
+    **ceiling** now 5,500 ft (was 1,500 ft)" and printed a *clearing* as the
+    reason a flight was stopped. The branch that raises the flag is the only
+    thing that knows why, so it hands over the note itself.
+    """
     notes: list[str] = []
-    lowering = False
+    gating: str | None = None
     idx = [i for i, h in enumerate(obs) if h.get("ceiling_agl_ft") is not None]
     if not idx:
-        return notes, lowering
+        return notes, gating
     if _reported_no_ceiling(obs[-1]):
         # Nothing to trend: the sky is ceiling-free now, so an earlier deck is
         # gone. Report that rather than quoting its stale height as "current".
         gone = obs[idx[-1]]["ceiling_agl_ft"]
         if gone <= 6000:
             notes.append(f"Ceiling cleared: was {_ft(gone)}{_suffix(_span_h(times[idx[-1]], times[-1]))}")
-        return notes, False
+        return notes, None
 
     # Walk back from the newest ceiling while each step stays on the same layer.
     last = idx[-1]
@@ -230,10 +262,18 @@ def _ceiling_trend(obs: list[dict], times: list[datetime | None]) -> tuple[list[
     since = _span_h(times[first], times[last])  # how long this layer has been the ceiling
 
     if len(seg) >= 2:
-        if c1 < c0 - 800 and c1 <= 6000:
-            notes.append(f"Ceilings lowering: {_ft(c0)} → {_ft(c1)}{_suffix(_run_h(stamps, vals, rising=False))}")
-            lowering = True
-        elif c1 > c0 + 800:
+        run = _run_h(stamps, vals, rising=False)
+        if c1 < c0 - LOWERING_NOTE_FT and c1 <= 6000:
+            note = f"Ceilings lowering: {_ft(c0)} → {_ft(c1)}{_suffix(run)}"
+            notes.append(note)
+            # Said always, gated only when it is the model's kind of fall. A run
+            # of ``None`` is a history with no usable timestamps, which cannot
+            # disprove "rapid" - it passes, the same way ``since is None`` does
+            # for the fresh-switch branch below.
+            if (c0 - c1 > LOWERING_GATE_FT and c1 < LOWERING_GATE_CEIL_FT
+                    and (run is None or run <= LOWERING_WINDOW_H)):
+                gating = note
+        elif c1 > c0 + LOWERING_NOTE_FT:
             notes.append(f"Ceilings lifting: {_ft(c0)} → {_ft(c1)}{_suffix(_run_h(stamps, vals, rising=True))}")
 
     # What the current ceiling layer took over from. This happened before the
@@ -256,17 +296,29 @@ def _ceiling_trend(obs: list[dict], times: list[datetime | None]) -> tuple[list[
             else:
                 deck.append(f"Ceiling formed: {_ft(c1)}{sfx}")
             # A ceiling that has only just dropped to a lower layer is still a
-            # developing deterioration; one that settled hours ago is not.
-            lowering = lowering or (c1 <= 5000 and (since is None or since <= FRESH_SWITCH_H))
-    return deck + notes, lowering
+            # developing deterioration; one that settled hours ago is not. This
+            # branch gates on its own terms - no height *change* to measure, so
+            # the drop threshold above has nothing to say about it - and the note
+            # it just wrote is the one that explains the flag.
+            if (c1 <= LOWERING_GATE_CEIL_FT
+                    and (since is None or since <= FRESH_SWITCH_H)):
+                gating = gating or deck[-1]
+    return deck + notes, gating
 
 
-def analyze(history: list[dict]) -> tuple[list[str], bool]:
+def analyze(history: list[dict]) -> tuple[list[str], bool, str | None]:
+    """Human notes, the ceiling-lowering flag, and the note that raised it.
+
+    The third element is what the "Rapidly lowering ceilings" row prints as its
+    evidence. It is returned rather than recovered from ``notes`` by matching on
+    words, because several of these notes talk about ceilings and only one of
+    them is the reason the flag is set.
+    """
     notes: list[str] = []
-    ceiling_lowering = False
+    lowering_note: str | None = None
     obs = [h for h in history if h]
     if len(obs) < 2:
-        return notes, ceiling_lowering
+        return notes, False, None
     span_h = max(1, len(obs) - 1)
     ref = datetime.now(timezone.utc)
     times = [_obs_dt(h.get("time_z"), ref) for h in obs]
@@ -278,7 +330,7 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
         return _run_h([t for t, _ in pairs], [v for _, v in pairs], rising)
 
     # Ceiling trend (layer-aware: only ever compares one deck against itself)
-    cnotes, ceiling_lowering = _ceiling_trend(obs, times)
+    cnotes, lowering_note = _ceiling_trend(obs, times)
     notes.extend(cnotes)
 
     # Temperature / dew-point spread (humidity → fog & low cloud)
@@ -355,4 +407,4 @@ def analyze(history: list[dict]) -> tuple[list[str], bool]:
         elif alts[-1] >= alts[0] + 0.06:
             notes.append(f"Pressure rising: {alts[0]:.2f} → {alts[-1]:.2f} inHg - improving{_suffix(run_h('altimeter_inhg', rising=True))}")
 
-    return notes, ceiling_lowering
+    return notes, lowering_note is not None, lowering_note
