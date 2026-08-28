@@ -356,15 +356,22 @@ async def gfa(
     return JSONResponse(result)
 
 
-@app.get("/api/radar_times")
-async def radar_times(layer: str = Query(default="RADAR_1KM_RRAI")):
-    """Animation time extent for a GeoMet radar layer (start/end/interval).
+@app.get("/api/wms_times")
+async def wms_times(layer: str = Query(default="RADAR_1KM_RRAI")):
+    """Animation time extent for a GeoMet layer (start/end/interval).
 
-    The browser draws the radar tiles directly from GeoMet; this only supplies
-    the time dimension so the frontend can build the animation frames."""
+    Serves the radar and satellite map layers alike - the browser draws the
+    tiles directly from GeoMet, and this only supplies the time dimension so the
+    frontend can build the animation frames.
+
+    An unknown layer is an error, not a silent substitution: asking for
+    satellite and being handed radar's timestamps is how a map ends up animating
+    the wrong thing without saying so."""
     from app.sources import geomet
+    if layer not in geomet.WMS_LAYERS:
+        return JSONResponse({"error": f"unknown layer {layer}"})
     try:
-        result = await geomet.radar_times(layer)
+        result = await geomet.layer_times(layer)
     except Exception as e:
         return JSONResponse({"error": str(e)})
     if not result:
@@ -407,6 +414,46 @@ async def flight_category(dep: str = Query(...), dest: str = Query(default=None)
     except Exception as e:
         return JSONResponse({"error": str(e), "geojson": _EMPTY_FC})
     return JSONResponse({"geojson": fc.to_feature_collection(stations), **meta})
+
+
+@app.get("/api/isobars")
+async def isobars(dep: str = Query(...), dest: str = Query(default=None),
+                  etd: str = Query(default=None)):
+    """MSL pressure contours over the route, as GeoJSON for the map.
+
+    Same shape as ``/api/flight_category``: ``dep`` alone is a circuit, ``dep`` +
+    ``dest`` a route, loaded lazily after the map has drawn, and an upstream
+    failure returns 200 with an ``error`` and an empty collection rather than
+    taking the panel down with it.
+
+    ``etd`` is the flight's departure time - the pressure pattern is a forecast
+    field, and drawing this morning's for an afternoon flight would be the one
+    thing the layer must not do. Omitted, it falls back to the first hour
+    available."""
+    from app.services import geometry
+    from app.services import isobars as iso
+
+    a = ap.get_airport(dep)
+    if a is None:
+        return JSONResponse({"error": "unknown departure",
+                             "geojson": iso.EMPTY}, status_code=404)
+    b = ap.get_airport(dest) if dest else None
+    if dest and b is None:
+        return JSONResponse({"error": "unknown destination",
+                             "geojson": iso.EMPTY}, status_code=404)
+
+    s = get_settings()
+    path = (geometry.route_path((a.lat, a.lon), (b.lat, b.lon),
+                                s.hazard_route_sample_nm)
+            if b else [(a.lat, a.lon)])
+    try:
+        geojson, meta = await iso.collect(
+            path, etd,
+            pad_nm=s.isobar_corridor_nm, max_span_deg=s.isobar_max_span_deg,
+            n=s.isobar_grid_n, interval=s.isobar_interval_hpa)
+    except Exception as e:
+        return JSONResponse({"error": str(e), "geojson": iso.EMPTY})
+    return JSONResponse({"geojson": geojson, **meta})
 
 
 @app.get("/api/suggest")

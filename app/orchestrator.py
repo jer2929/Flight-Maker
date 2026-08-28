@@ -811,7 +811,7 @@ def _assess_endpoint(
     trend_notes: list[str] = []
     if history and show_obs:
         parsed = [wx.parse_metar(r) for r in reversed(history)]  # oldest first
-        trend_notes, _low = trends.analyze(parsed)
+        trend_notes, _low, _note = trends.analyze(parsed)
     if not show_obs:
         # The forecast path still carries the raw METAR for reference; drop it so
         # a card for a departure hours away shows no observation at all.
@@ -2048,10 +2048,16 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         h = metar_hist.get(ident, [])
         if not h:
             return None
-        notes, low = trends.analyze([wx.parse_metar(r) for r in reversed(h)])
+        notes, low, note = trends.analyze([wx.parse_metar(r) for r in reversed(h)])
         if not low:
             return None
-        note = next((n for n in notes if "eiling" in n), "ceiling lowering")
+        # The note the trend itself says gated. This used to be recovered from
+        # ``notes`` with ``next(n for n in notes if "eiling" in n)``, which is a
+        # guess: "Lower deck **cleared**: **ceiling** now 5,500 ft (was 1,500
+        # ft)" matches it, leads the list, and never gates - so a row failing on
+        # a fall somewhere else in the history printed a *clearing* as its
+        # evidence.
+        note = note or "ceiling lowering"
         return {"location": ident, "source": "METAR trend",
                 "text": note.strip(),
                 "detail": "recent observations",

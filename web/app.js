@@ -1165,19 +1165,99 @@ function drawGfa() {
   host.querySelectorAll(".gfa-frame").forEach((b) => b.addEventListener("click", () => { GFA.frame = +b.dataset.frame; drawGfa(); }));
 }
 
-// ---------- Radar (Environment Canada GeoMet WMS, animated) ----------
+// ---------- Radar & satellite (Environment Canada GeoMet WMS, animated) -----
 const GEOMET_WMS = "https://geo.weather.gc.ca/geomet";
 const RADAR_LABELS = { RADAR_1KM_RRAI: "Rain", RADAR_1KM_RSNO: "Snow" };
+// Must match ``geomet.SATELLITE_LAYERS`` / ``SATELLITE_LABELS`` server-side -
+// the backend refuses any layer not on its own whitelist, so a name drifting
+// here shows up as a disabled toggle rather than as wrong imagery.
+const SATELLITE_LABELS = {
+  "GOES-East_1km_DayVisible": "Visible",
+  "GOES-East_2km_NightMicrophysics": "Infrared",
+};
+const SATELLITE_VISIBLE = "GOES-East_1km_DayVisible";
+const SATELLITE_INFRARED = "GOES-East_2km_NightMicrophysics";
+const SATELLITE_OVERLAY = "Satellite";
+const SATELLITE_KEY = "minima.satellite.v1";
+const SATELLITE_PRODUCT_KEY = "minima.satproduct.v1";
+// Radar joins the layer control now that something can sit under it. It was
+// always added straight to the map with no way off, which was fine while it was
+// the only raster - but "show me the cloud without the rain on top of it" is a
+// real question, and it had no answer.
+const RADAR_OVERLAY = "Radar";
+const RADAR_KEY = "minima.radar.v1";
+
+// One object per map, built here so `destroyRadar` cannot drift from the
+// declaration. It used to be a literal written out twice, which is a standing
+// invitation for a new field to be added in one place and left undefined in the
+// other on the second assessment of the session.
+//
 // ``routeView`` / ``hazardView`` are the two framings the fit button swaps
 // between: the route as it has always been drawn, and that widened to take in
-// the off-route areas as well.
-let RADAR = { map: null, wms: null, frames: [], idx: 0, layer: "RADAR_1KM_RRAI",
-              timer: null, routeView: null, hazardView: null,
-              layerControl: null, pirepLayer: null };
+// the off-route areas as well. ``frames`` is the master timeline the slider
+// indexes; ``satFrames`` is satellite's own, which is coarser - see
+// ``frameAtOrBefore``.
+// ``idx`` starts at -1 meaning "never placed" - 0 is a real position (the
+// oldest frame), so it cannot double as the sentinel that means "open on the
+// newest".
+const newRadarState = (layer, satLayer) => ({
+  map: null, wms: null, frames: [], master: [], idx: -1,
+  layer: layer || "RADAR_1KM_RRAI",
+  sat: null, satLayer: satLayer || SATELLITE_VISIBLE, satFrames: [],
+  satOk: true, satRegistered: false,
+  timer: null, routeView: null, hazardView: null,
+  layerControl: null, pirepLayer: null, isoLayer: null,
+});
+let RADAR = newRadarState();
 
 const radarFallback = () => `<div class="panel radar-panel"><h3>Radar</h3>
   <p class="hint">Radar map couldn't load.
   <a href="https://weather.gc.ca/radar/index_e.html" target="_blank" rel="noopener">Open Environment Canada radar ↗</a></p></div>`;
+
+// Radar keeps the standing it has always had - on unless you say otherwise.
+function radarOn() {
+  try { return localStorage.getItem(RADAR_KEY) !== "0"; } catch (_) { return true; }
+}
+function setRadarOn(on) {
+  try { localStorage.setItem(RADAR_KEY, on ? "1" : "0"); } catch (_) {}
+}
+
+// Satellite is default-OFF, unlike the flight category layer: the map already
+// works, and a pilot who has never asked for satellite should not find their
+// radar dimmed under something they did not turn on. Once turned on the choice
+// sticks, the same way the theme does.
+function satelliteOn() {
+  try { return localStorage.getItem(SATELLITE_KEY) === "1"; } catch (_) { return false; }
+}
+function setSatelliteOn(on) {
+  try { localStorage.setItem(SATELLITE_KEY, on ? "1" : "0"); } catch (_) {}
+}
+function savedSatelliteProduct() {
+  try { return localStorage.getItem(SATELLITE_PRODUCT_KEY); } catch (_) { return null; }
+}
+function setSatelliteProduct(id) {
+  try { localStorage.setItem(SATELLITE_PRODUCT_KEY, id); } catch (_) {}
+}
+
+// Two 70%-opacity rasters stacked on each other is mush, and the pilot loses
+// both. So satellite yields to radar when radar is actually on the map, and
+// takes the full picture back when it isn't - which is the case where satellite
+// is the layer being read, not the backdrop.
+function satelliteOpacity() {
+  const radarOn = !!(RADAR.map && RADAR.wms && RADAR.map.hasLayer(RADAR.wms));
+  return radarOn ? 0.45 : 0.85;
+}
+
+// Visible imagery is black at night, so a night flight that opened on the
+// visible product would open on an empty rectangle - which on a weather map
+// reads as "nothing there" rather than "nothing to see". Honour an explicit
+// choice; otherwise follow the flight's own day/night, which the app has
+// already worked out for every other night-sensitive row on the page.
+function defaultSatelliteProduct() {
+  const saved = savedSatelliteProduct();
+  if (saved && SATELLITE_LABELS[saved]) return saved;
+  return currentMode() === "night" ? SATELLITE_INFRARED : SATELLITE_VISIBLE;
+}
 
 // ---------- Area hazards drawn on the same map ----------
 // The polygons a SIGMET or AIRMET is actually drawn as. A bulletin's "WI N4200
@@ -1320,6 +1400,136 @@ function flightCategoryNote(meta, etdUtc) {
     bits.push(`your ETD is +${ahead >= 120 ? `${Math.round(ahead / 60)} h` : `${ahead} min`}`);
   }
   return bits.join(" · ");
+}
+
+// ---------- Isobars (MSL pressure contours, computed server-side) ----------
+const ISOBAR_OVERLAY = "Isobars (MSL)";
+const ISOBAR_KEY = "minima.isobars.v1";
+// Default off, like satellite: the map works without it, and a pilot who has
+// not asked for a pressure chart should not have lines drawn across theirs.
+function isobarsOn() {
+  try { return localStorage.getItem(ISOBAR_KEY) === "1"; } catch (_) { return false; }
+}
+function setIsobarsOn(on) {
+  try { localStorage.setItem(ISOBAR_KEY, on ? "1" : "0"); } catch (_) {}
+}
+
+// Theme-independent hex, for the reason given above HAZARD_COLORS: these are
+// painted over OSM raster tiles, a 70%-opacity radar layer and possibly
+// satellite imagery, and that substrate is light-to-anything in both themes.
+//
+// A thin dark line alone disappears into that. The casing is what makes it
+// readable - a wider pale line drawn underneath, so the isobar carries its own
+// contrast wherever it happens to cross. Same trick a printed chart gets for
+// free from white paper.
+// These live in JS rather than in style.css for the same reason: a CSS rule
+// would have to reference a theme token (test_theme.py enforces that), and
+// tokens flip with the theme while the map substrate underneath does not.
+// Inline styles on the divIcons keep the chart's colours out of the token
+// system entirely, which is where they belong.
+const ISOBAR_LINE = "#1b2733";
+const ISOBAR_CASING = "#f4f7fb";
+const ISOBAR_CHIP = `background:${ISOBAR_CASING};color:${ISOBAR_LINE};`;
+// A low is what you route around and a high is what you route through, so the
+// two must not read alike at a glance. Blue and red are the convention.
+const ISOBAR_LOW = "#2f6fd1";
+const ISOBAR_HIGH = "#c0392b";
+
+function isobarLayer(gj) {
+  const group = L.layerGroup([], { pane: "isobarPane" });
+  const lines = (gj.features || []).filter((f) => f.geometry && f.geometry.type === "LineString");
+  const centres = (gj.features || []).filter((f) => f.geometry && f.geometry.type === "Point");
+
+  lines.forEach((f) => {
+    const latlngs = f.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+    const hpa = (f.properties || {}).hpa;
+    L.polyline(latlngs, { pane: "isobarPane", color: ISOBAR_CASING, weight: 3.5,
+                          opacity: 0.85, interactive: false }).addTo(group);
+    L.polyline(latlngs, { pane: "isobarPane", color: ISOBAR_LINE, weight: 1.5,
+                          opacity: 0.95 })
+      .bindTooltip(`${Math.round(hpa)} hPa`, { sticky: true })
+      .addTo(group);
+    // Leaflet has no contour labels, and a permanent tooltip anchors to the
+    // centre of the line's *bounding box* - which for a curved isobar sits off
+    // the line entirely, sometimes on a different isobar. Pin the value to a
+    // real vertex instead.
+    if (latlngs.length > 4) {
+      L.marker(latlngs[Math.floor(latlngs.length / 2)], {
+        pane: "isobarPane", interactive: false,
+        icon: L.divIcon({
+          className: "iso-label",
+          html: `<span style="${ISOBAR_CHIP}">${Math.round(hpa)}</span>`,
+          iconSize: [34, 14], iconAnchor: [17, 7],
+        }),
+      }).addTo(group);
+    }
+  });
+
+  centres.forEach((f) => {
+    const [lon, lat] = f.geometry.coordinates;
+    const p = f.properties || {};
+    // The H and L a surface chart is actually read from - the lines tell you
+    // the gradient, these tell you what you are going around.
+    const ink = p.kind === "H" ? ISOBAR_HIGH : ISOBAR_LOW;
+    L.marker([lat, lon], {
+      pane: "isobarPane", interactive: false,
+      icon: L.divIcon({
+        className: "iso-centre",
+        html: `<b style="color:${ink};-webkit-text-stroke:2px ${ISOBAR_CASING};paint-order:stroke fill">${escapeHtml(p.kind || "")}</b>`
+            + `<span style="${ISOBAR_CHIP}">${Math.round(p.hpa)}</span>`,
+        iconSize: [34, 34], iconAnchor: [17, 12],
+      }),
+    }).addTo(group);
+  });
+  return group;
+}
+
+function isobarLegend(gj, meta) {
+  const n = (gj.features || []).filter((f) => f.geometry.type === "LineString").length;
+  if (!n) return "";
+  // Every other layer on this map is observations or an advisory. This one is a
+  // model forecast for a specific hour, and saying which hour is the whole
+  // difference between a chart and a decoration.
+  // "(your ETD)" only when it really is: an ETD past the forecast horizon is
+  // clamped to the closest hour held, and a label claiming otherwise would be
+  // the one lie this layer must not tell.
+  const asked = (meta || {}).requested_utc;
+  const got = (meta || {}).valid_utc;
+  const atEtd = asked && got && String(asked).slice(0, 13) === String(got).slice(0, 13);
+  const valid = got
+    ? `valid ${zHM(got)}${atEtd ? " (your ETD)" : asked ? " (nearest to your ETD)" : ""}`
+    : "valid now";
+  const step = (meta && meta.interval_hpa) || 4;
+  // Inline colour, like the hazard and flight-category keys: the swatch has to
+  // match the line on the map, and the line is deliberately outside the theme.
+  return `<span class="hz-key hz-key-iso"><i style="background:${ISOBAR_LINE}"></i>`
+       + `isobars ${step} hPa · MSL pressure · forecast ${escapeHtml(valid)}</span>`;
+}
+
+async function loadIsobars(pts, etdUtc) {
+  if (!RADAR.map || !pts.length || !pts[0].ident) return;
+  // Same staleness guard as loadFlightCategory: the pilot can run another
+  // assessment while this is in flight, and adding a layer to the replacement
+  // map would draw one route's pressure pattern over another route's flight.
+  const map = RADAR.map;
+  const params = new URLSearchParams({ dep: pts[0].ident });
+  if (pts.length > 1 && pts[1] && pts[1].ident && pts[1].ident !== pts[0].ident) {
+    params.set("dest", pts[1].ident);
+  }
+  if (etdUtc) params.set("etd", etdUtc);
+  let data;
+  try {
+    data = await fetch(`/api/isobars?${params}`).then((r) => r.json());
+  } catch (_) { return; }
+  if (RADAR.map !== map) return;
+  const gj = data && data.geojson;
+  if (!gj || !(gj.features || []).length) return;
+
+  RADAR.isoLayer = isobarLayer(gj);
+  addRadarOverlay(RADAR.isoLayer, ISOBAR_OVERLAY);
+  if (isobarsOn()) RADAR.isoLayer.addTo(RADAR.map);
+  const legend = $("#radar-legend");
+  if (legend) legend.insertAdjacentHTML("beforeend", isobarLegend(gj, data));
 }
 
 // The layer control, created on first use rather than up front. It used to live
@@ -1508,6 +1718,29 @@ const radarTimeLabel = (iso) => {
   return isNaN(d) ? iso : `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}Z`;
 };
 
+// One slider, two layers that do not tick together. Radar composites land every
+// ~6 minutes and GOES every ~10, on their own extents, so an index into one
+// list means nothing in the other. The slider therefore indexes ONE master
+// timeline (radar's, or satellite's when there is no radar) and every other
+// timed layer is snapped to its own newest frame at or before that moment.
+//
+// At-or-before rather than nearest: showing satellite imagery from after the
+// radar sweep next to it would be putting the future beside the present, and on
+// a rewind you would see cloud arrive before the rain that is under it.
+function frameAtOrBefore(frames, iso) {
+  if (!frames || !frames.length) return null;
+  const t = Date.parse(iso);
+  if (isNaN(t)) return frames[frames.length - 1];
+  let best = null;
+  for (const f of frames) {
+    if (Date.parse(f) <= t) best = f; else break;
+  }
+  // Nothing old enough: the pilot has wound back past this layer's extent.
+  // Clamp to its oldest rather than blanking it - a missing satellite frame
+  // reads as clear sky, and the honest answer is "this is the oldest I have".
+  return best || frames[0];
+}
+
 function stopRadar() {
   if (RADAR.timer) { clearInterval(RADAR.timer); RADAR.timer = null; }
   const b = $("#radar-play"); if (b) b.textContent = "▶";
@@ -1515,9 +1748,9 @@ function stopRadar() {
 function destroyRadar() {
   stopRadar();
   if (RADAR.map) { try { RADAR.map.remove(); } catch (_) {} }
-  RADAR = { map: null, wms: null, frames: [], idx: 0, layer: RADAR.layer || "RADAR_1KM_RRAI",
-            timer: null, routeView: null, hazardView: null,
-            layerControl: null, pirepLayer: null };
+  // The product choices survive the teardown - they are the pilot's, not the
+  // map's - and everything else starts clean.
+  RADAR = newRadarState(RADAR.layer, RADAR.satLayer);
 }
 
 // The map takes a list of aerodromes rather than a route result, because a
@@ -1541,12 +1774,17 @@ async function loadRadar(r, stops) {
   const midLon = pts.reduce((s, p) => s + p.lon, 0) / pts.length;
   const hazardsGeo = r.hazards_geojson && (r.hazards_geojson.features || []).length
     ? r.hazards_geojson : null;
+  const satProduct = defaultSatelliteProduct();
   host.innerHTML = `<div class="panel radar-panel">
     <div class="radar-head">
-      <h3>Radar${hazardsGeo ? " &amp; hazards" : ""} <span class="hint">Environment Canada · last 3 h</span></h3>
+      <h3 id="radar-title" data-tail="${hazardsGeo ? " &amp; hazards" : ""}">Radar, satellite${hazardsGeo ? " &amp; hazards" : ""} <span class="hint">Environment Canada · last 3 h</span></h3>
       <div class="radar-types">
         ${Object.entries(RADAR_LABELS).map(([k, v]) =>
           `<button class="radar-type ${k === RADAR.layer ? "active" : ""}" data-layer="${k}">${v}</button>`).join("")}
+        <span class="pill-sep" aria-hidden="true"></span>
+        ${Object.entries(SATELLITE_LABELS).map(([k, v]) =>
+          `<button class="sat-type ${k === satProduct ? "active" : ""}" data-sat="${k}"
+             title="Satellite: ${v}">${v}</button>`).join("")}
       </div>
     </div>
     <div id="radar-map" class="radar-map"></div>
@@ -1558,7 +1796,19 @@ async function loadRadar(r, stops) {
     </div>
   </div>`;
   destroyRadar();
+  RADAR.satLayer = satProduct;
   RADAR.map = L.map("radar-map", { scrollWheelZoom: false }).setView([midLat, midLon], 7);
+  // Explicit panes, because there are now four things stacked over the base
+  // tiles and "whichever was added last" is not an ordering. Leaflet's own are
+  // tilePane 200, overlayPane 400, markerPane 600; these slot between them.
+  // Satellite goes UNDER radar - precipitation is the thing you are looking for
+  // and cloud is the context around it, never the other way up.
+  RADAR.map.createPane("satellitePane").style.zIndex = 250;
+  RADAR.map.createPane("radarPane").style.zIndex = 260;
+  // Above the hazard fills rather than below: an isobar is a thin line, and a
+  // SIGMET polygon at 0.6 fill would swallow it exactly where the pressure
+  // pattern is most worth reading.
+  RADAR.map.createPane("isobarPane").style.zIndex = 410;
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
     { maxZoom: 11, attribution: "© OpenStreetMap" }).addTo(RADAR.map);
   const seen = new Set();
@@ -1568,8 +1818,14 @@ async function loadRadar(r, stops) {
     L.marker([p.lat, p.lon]).addTo(RADAR.map).bindTooltip(p.ident, { permanent: false });
   });
   RADAR.wms = L.tileLayer.wms(GEOMET_WMS, {
-    layers: RADAR.layer, format: "image/png", transparent: true, version: "1.3.0", opacity: 0.7,
-  }).addTo(RADAR.map);
+    layers: RADAR.layer, format: "image/png", transparent: true, version: "1.3.0",
+    opacity: 0.7, pane: "radarPane",
+  });
+  if (radarOn()) RADAR.wms.addTo(RADAR.map);
+  RADAR.sat = L.tileLayer.wms(GEOMET_WMS, {
+    layers: RADAR.satLayer, format: "image/png", transparent: true, version: "1.3.0",
+    opacity: satelliteOpacity(), pane: "satellitePane",
+  });
   // The course line. A hazard polygon means nothing without the track it does
   // or does not cross, and the map used to show only the two end markers. A
   // circuit has no track to draw - the single marker is the whole flight.
@@ -1577,14 +1833,42 @@ async function loadRadar(r, stops) {
     L.polyline(pts.map((p) => [p.lat, p.lon]),
       { color: "#e8eef7", weight: 2, opacity: 0.8, dashArray: "6 4" }).addTo(RADAR.map);
   }
+  // Which overlays remember being turned off, and how. This used to be a single
+  // early-return on the flight-category name; a table scales to the three
+  // layers that now persist without each one growing its own branch.
+  const OVERLAY_PREFS = {
+    [RADAR_OVERLAY]: setRadarOn,
+    [FLIGHT_CATEGORY_OVERLAY]: setFlightCategoryOn,
+    [SATELLITE_OVERLAY]: setSatelliteOn,
+    [ISOBAR_OVERLAY]: setIsobarsOn,
+  };
   RADAR.map.on("overlayadd overlayremove", (e) => {
-    if (e.name !== FLIGHT_CATEGORY_OVERLAY) return;
-    setFlightCategoryOn(e.type === "overlayadd");
+    const save = OVERLAY_PREFS[e.name];
+    const on = e.type === "overlayadd";
+    if (save) save(on);
     // The stations arrive after the PIREPs and are added on top of them. One
     // aircraft's report of moderate icing must not end up underneath a dot
     // saying the field below it is VFR.
-    if (e.type === "overlayadd" && RADAR.pirepLayer) RADAR.pirepLayer.bringToFront();
+    if (on && e.name === FLIGHT_CATEGORY_OVERLAY && RADAR.pirepLayer) {
+      RADAR.pirepLayer.bringToFront();
+    }
+    // Radar coming or going changes what satellite is competing with, and a
+    // layer left at backdrop opacity once it is the only raster on the map is a
+    // layer nobody can read.
+    if ((e.name === RADAR_OVERLAY || e.name === SATELLITE_OVERLAY) && RADAR.sat) {
+      RADAR.sat.setOpacity(satelliteOpacity());
+    }
+    if (e.name === SATELLITE_OVERLAY && on) {
+      // Turned on mid-session: it has no frames yet and no place on the
+      // timeline. Both are fixed by loading them now.
+      if (!RADAR.satFrames.length) loadSatelliteFrames();
+      else setRadarFrame(RADAR.idx);
+    }
+    // Radar leaving must not leave the slider indexing a list that is no longer
+    // the master timeline - satellite's extent takes over.
+    if (e.name === RADAR_OVERLAY) rebuildMasterTimeline();
   });
+  addRadarOverlay(RADAR.wms, RADAR_OVERLAY);
   if (hazardsGeo) {
     const layers = hazardLayers(hazardsGeo);
     layers.areas.addTo(RADAR.map);
@@ -1639,37 +1923,144 @@ async function loadRadar(r, stops) {
     if (RADAR.wms) RADAR.wms.setParams({ layers: RADAR.layer });
     loadRadarFrames();
   }));
+  // Its own class and its own handler: the one above selects on `.radar-type`
+  // and would otherwise treat a satellite pill as a radar product. See the
+  // note on `.radar-type, .radar-fit` in style.css.
+  $$("#route-radar .sat-type").forEach((b) => b.addEventListener("click", () => {
+    if (b.disabled) return;
+    RADAR.satLayer = b.dataset.sat;
+    setSatelliteProduct(RADAR.satLayer);
+    $$("#route-radar .sat-type").forEach((x) => x.classList.toggle("active", x === b));
+    if (RADAR.sat) RADAR.sat.setParams({ layers: RADAR.satLayer });
+    // Each product has its own time extent, so the frames have to be re-read -
+    // exactly as switching rain for snow does.
+    loadSatelliteFrames();
+  }));
   $("#radar-play").addEventListener("click", toggleRadarPlay);
   $("#radar-slider").addEventListener("input", (e) => { stopRadar(); setRadarFrame(+e.target.value); });
   await loadRadarFrames();
+  // Not awaited, and deliberately after the radar frames: radar owns the master
+  // timeline when it has one, so letting satellite land second means it snaps
+  // onto a timeline that already exists rather than briefly defining its own.
+  loadSatelliteFrames();
+  loadIsobars(pts, (r.window || {}).etd_utc);
+}
+
+async function wmsFrames(layer) {
+  const caps = await fetch(`/api/wms_times?layer=${encodeURIComponent(layer)}`)
+    .then((r) => r.json());
+  if (caps.error) throw new Error(caps.error);
+  return radarFrameTimes(caps);
 }
 
 async function loadRadarFrames() {
   try {
-    const caps = await fetch(`/api/radar_times?layer=${RADAR.layer}`).then((r) => r.json());
-    if (caps.error) throw new Error(caps.error);
-    RADAR.frames = radarFrameTimes(caps);
+    RADAR.frames = await wmsFrames(RADAR.layer);
   } catch (e) { RADAR.frames = []; }
+  rebuildMasterTimeline();
+}
+
+// Satellite's own extent, kept separate from the master timeline because the
+// two do not tick together - see `frameAtOrBefore`.
+async function loadSatelliteFrames() {
+  const map = RADAR.map;
+  try {
+    const frames = await wmsFrames(RADAR.satLayer);
+    if (RADAR.map !== map) return;   // another assessment replaced the map
+    RADAR.satFrames = frames;
+    RADAR.satOk = frames.length > 0;
+  } catch (e) {
+    if (RADAR.map !== map) return;
+    RADAR.satFrames = [];
+    // The layer name may simply be wrong (they are GeoMet's, and they move).
+    // Say so on the pills rather than offering a toggle that draws nothing:
+    // a blank satellite layer over a weather map reads as "clear".
+    RADAR.satOk = false;
+  }
+  markSatelliteAvailability();
+  if (!RADAR.satOk) {
+    if (RADAR.sat && RADAR.map && RADAR.map.hasLayer(RADAR.sat)) RADAR.map.removeLayer(RADAR.sat);
+    return;
+  }
+  if (RADAR.sat && !RADAR.satRegistered) {
+    addRadarOverlay(RADAR.sat, SATELLITE_OVERLAY);
+    RADAR.satRegistered = true;
+  }
+  if (satelliteOn() && RADAR.map && !RADAR.map.hasLayer(RADAR.sat)) RADAR.sat.addTo(RADAR.map);
+  rebuildMasterTimeline();
+}
+
+function markSatelliteAvailability() {
+  $$("#route-radar .sat-type").forEach((b) => {
+    b.disabled = !RADAR.satOk;
+    b.classList.toggle("unavailable", !RADAR.satOk);
+    if (!RADAR.satOk) b.title = "Satellite imagery unavailable right now";
+  });
+  // And stop the heading claiming a layer the panel does not have. A title is
+  // a promise about what is on the map.
+  const h = $("#radar-title");
+  if (h && !RADAR.satOk) {
+    h.innerHTML = `Radar${h.dataset.tail || ""} <span class="hint">Environment Canada · last 3 h</span>`;
+  }
+}
+
+// The slider indexes one list. Radar owns it when radar has frames, because it
+// is the denser of the two (~6 min against GOES' ~10) and the finer grid is the
+// one worth stepping through; satellite takes over only when radar has nothing,
+// so the control keeps working on a day the radar feed is down.
+function rebuildMasterTimeline() {
+  const drawn = (layer) => !!(RADAR.map && layer && RADAR.map.hasLayer(layer));
+  // Prefer the timeline of a layer actually on the map, radar first - it is the
+  // denser of the two (~6 min against GOES' ~10) and the finer grid is the one
+  // worth stepping through. Falling back to a layer that is switched off would
+  // hand the pilot a slider whose steps move nothing they can see.
+  const master =
+      (drawn(RADAR.wms) && RADAR.frames.length) ? RADAR.frames
+    : (drawn(RADAR.sat) && RADAR.satFrames.length) ? RADAR.satFrames
+    : (RADAR.frames.length ? RADAR.frames : RADAR.satFrames);
   const slider = $("#radar-slider");
-  if (!RADAR.frames.length) { if ($("#radar-time")) $("#radar-time").textContent = "no radar frames"; return; }
-  slider.max = String(RADAR.frames.length - 1);
-  setRadarFrame(RADAR.frames.length - 1); // newest first
+  const label = $("#radar-time");
+  const play = $("#radar-play");
+  if (!master.length) {
+    // Nothing to animate. Say so and stop offering controls that cannot do
+    // anything - a slider that moves and changes nothing is worse than none.
+    if (label) label.textContent = "no frames";
+    if (slider) { slider.max = "0"; slider.disabled = true; }
+    if (play) play.disabled = true;
+    stopRadar();
+    return;
+  }
+  if (slider) { slider.disabled = false; slider.max = String(master.length - 1); }
+  if (play) play.disabled = master.length < 2;
+  RADAR.master = master;
+  // Open on the newest; after that, hold the pilot's place across a product
+  // switch where we can - they were looking at a moment, not at an index.
+  setRadarFrame(RADAR.idx < 0 ? master.length - 1
+                              : Math.min(RADAR.idx, master.length - 1));
 }
 
 function setRadarFrame(i) {
-  if (!RADAR.frames.length) return;
-  RADAR.idx = Math.max(0, Math.min(i, RADAR.frames.length - 1));
-  const t = RADAR.frames[RADAR.idx];
-  if (RADAR.wms) RADAR.wms.setParams({ time: t });
+  const master = RADAR.master || [];
+  if (!master.length) return;
+  RADAR.idx = Math.max(0, Math.min(i, master.length - 1));
+  const t = master[RADAR.idx];
+  // Every timed layer gets the same moment, each snapped onto its own extent.
+  // Radar is usually the master itself, so this is an identity for it; it is
+  // not when the radar feed is down and satellite is driving.
+  if (RADAR.wms) RADAR.wms.setParams({ time: frameAtOrBefore(RADAR.frames, t) || t });
+  if (RADAR.sat && RADAR.satFrames.length) {
+    RADAR.sat.setParams({ time: frameAtOrBefore(RADAR.satFrames, t) });
+  }
   const slider = $("#radar-slider"); if (slider) slider.value = String(RADAR.idx);
   const lbl = $("#radar-time"); if (lbl) lbl.textContent = radarTimeLabel(t);
 }
 
 function toggleRadarPlay() {
   if (RADAR.timer) { stopRadar(); return; }
-  if (RADAR.frames.length < 2) return;
+  if ((RADAR.master || []).length < 2) return;
   $("#radar-play").textContent = "⏸";
-  RADAR.timer = setInterval(() => setRadarFrame((RADAR.idx + 1) % RADAR.frames.length), 700);
+  RADAR.timer = setInterval(
+    () => setRadarFrame((RADAR.idx + 1) % (RADAR.master || []).length), 700);
 }
 
 // ---------- Route ----------

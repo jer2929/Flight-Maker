@@ -318,6 +318,89 @@ never leaves the aerodrome. One Weather row carries the result, and a relevant
 SIGMET or CWA fails it; AIRMETs and PIREPs are reported without gating, the same
 standing they have on the route card.
 
+### Satellite
+Radar shows **precipitation**, and a great deal of the weather that ends a VFR
+flight does not precipitate. A stratocumulus deck closing an aerodrome puts
+nothing on the radar at all, so the rewind slider - whose whole value is watching
+where the weather came from in order to judge where it is going - only ever
+worked for rain. The satellite layer is the same slider applied to the cloud
+itself.
+
+**Visible or infrared, and it opens on the right one.** Visible is the sharper
+picture and the one that reads most naturally - texture, gaps, the shadow a
+towering cumulus throws - and it is **black at night**. Infrared works around the
+clock. A night flight that opened on the visible product would open on an empty
+rectangle, and on a weather map an empty rectangle reads as *nothing there*
+rather than *nothing to see*, so the layer follows the flight's own day/night
+until you pick for yourself. After that your choice sticks.
+
+**One slider, two clocks.** Radar composites land about every 6 minutes and GOES
+about every 10, on their own extents, so an index into one means nothing in the
+other. The slider drives a single master timeline - radar's, or satellite's when
+the radar feed is down - and every other layer is snapped to its own newest frame
+**at or before** that moment. At-or-before rather than nearest is the point: the
+alternative shows you cloud from after the radar sweep beneath it, and on a
+rewind you would watch the cloud arrive before the rain underneath it.
+
+**Radar is now a toggle too.** It was always added to the map with no way off,
+which was fine while it was the only raster. "Show me the cloud without the rain
+on top of it" is a real question and it had no answer. Satellite yields to
+0.45 opacity while radar is on and takes the full picture back when it is not -
+two 70% rasters stacked is mush and you lose both.
+
+**A layer that cannot draw says so.** The GeoMet layer names are Environment
+Canada's, not ours, and they can be renamed upstream. Rather than a toggle that
+silently draws nothing - which on a weather map reads as *clear* - the pills grey
+out and say the imagery is unavailable, and the radar, hazards and course line
+are untouched. `scripts/probe_geomet_layers.py` dumps the live catalogue with
+each layer's time extent and styles when the names need re-checking.
+
+### Isobars
+Everything else on the card is a **point reading**: the ceiling here, the wind
+there, the category at one station. The pressure pattern is the thing those
+readings are symptoms of, and it is the one picture that answers *why* - where
+the front is, which side of the low you are on, and whether the isobars you are
+crossing are packed (wind) or slack (not much).
+
+**Contour lines, computed, not a coloured field.** A shaded pressure raster over
+OSM tiles and a 70%-opacity radar layer is mush, and it answers the wrong
+question anyway: nobody reads a surface chart for the absolute value at a point,
+they read it for the **spacing and the curvature**. So the server samples MSL
+pressure on a grid over the route, runs marching squares over it, and hands the
+browser polylines - drawn at the standard **4 hPa** interval, labelled with their
+value, with **H** and **L** on the closed centres. Each line is drawn twice, a
+pale casing under a thin dark line, because a single thin line over that
+substrate is invisible.
+
+**Drawn for your ETD.** The pressure pattern is a forecast field, and showing
+this morning's to a pilot leaving this afternoon is the one thing this layer must
+not do. The legend prints the valid time - *"isobars 4 hPa · MSL pressure ·
+forecast valid 1800Z (your ETD)"* - so the two are never confused. It is
+deliberately **not** wired to the rewind slider: that slider is an observations
+timeline, and hanging a forecast off it would make one control mean two things.
+
+**A fixed budget of samples, not a fixed spacing.** 12 × 12 points whatever the
+box, so a 600 nm route and a single-aerodrome circuit cost the same four upstream
+requests; the spacing adapts, and on a typical route works out near 0.7°. MSL
+pressure is the smoothest synoptic field there is, so that is ample. The grid is
+fixed to the route bounds when the map draws and is not refetched as you pan -
+the box is already padded 150 nm past the route, and refetching on every pan
+would be a request storm for a field that barely moves.
+
+**It would rather draw nothing than draw a line that isn't there.** Below 80% of
+the grid arriving the layer returns empty: a contour bridged across a gap in the
+data looks exactly like a front. For the same reason a contour running off the
+edge of the sampled box is left **open** rather than closed along the boundary,
+and a level sitting exactly on the field's own minimum or maximum is not drawn at
+all - it would trace the edge of our fetch, and invite you to read that as a
+pressure feature.
+
+**Neither layer gates anything.** Like the flight category dots, these are
+pictures. The verdict is still the evaluator's, run against your minimums at your
+ETD. Both toggles sit in the map's layer control, both are **off by default** -
+the map already works, and neither should appear over your radar unasked - and
+both remember being turned on.
+
 ### Icing and turbulence
 Nothing can parse a GFA chart, so these two rows used to read *"review the GFA
 icing chart"* with an amber ⚠ - on every flight, in every season, whatever the
@@ -732,7 +815,7 @@ app/
   models.py          pydantic models
   orchestrator.py    assembles live data into route assessment / discovery
   sources/           cfps, awc (aviationweather.gov), openmeteo (HRDPS),
-                     geomet (radar), airports,
+                     geomet (radar + satellite WMS time extents), airports,
                      cache (TTL + single-flight coalescing),
                      _http (one GET, retried once, over a pooled HTTP/2
                      connection shared by every upstream)
@@ -743,11 +826,13 @@ app/
                      runway, winds_aloft, weather (+TAF segments),
                      timeline, evaluator, density (density altitude),
                      etd_options (would waiting help?),
+                     isobars (MSL pressure contours for the map),
                      fetch_health (what failed to download)
 data/                limits.yaml + bundled airport/runway seed
 scripts/             refresh_airport_data.py (+ ensure_airport_data bootstrap),
                      probe_area_products.py (what the advisory feeds return),
-                     probe_openmeteo_levels.py (which levels/variables are served)
+                     probe_openmeteo_levels.py (which levels/variables are served),
+                     probe_geomet_layers.py (what GeoMet calls its GOES layers)
 web/                 single-page dashboard (Route + Discovery tabs)
 tests/               offline logic tests + auto-skipping live smoke tests
 ```
