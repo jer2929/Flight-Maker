@@ -1169,11 +1169,11 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 .iso-label { display: flex; align-items: center; justify-content: center;
   font-size: .64rem; font-weight: 600; font-variant-numeric: tabular-nums;
   letter-spacing: .02em; pointer-events: none; }
-.iso-label span { padding: 0 3px; border-radius: 2px; line-height: 1.25; }
+.iso-label span { padding: 0 3px; border-radius: var(--r-sm); line-height: 1.25; }
 .iso-centre { display: flex; flex-direction: column; align-items: center;
   line-height: 1; pointer-events: none; }
 .iso-centre b { font-size: 1.15rem; font-weight: 700; }
-.iso-centre span { margin-top: 1px; padding: 0 3px; border-radius: 2px;
+.iso-centre span { margin-top: 1px; padding: 0 3px; border-radius: var(--r-sm);
   font-size: .6rem; font-variant-numeric: tabular-nums; }
 /* position+z-index makes the map its own stacking context so Leaflet's internal
    panes/controls (z-index up to ~1000) stay trapped below the sticky header. */
@@ -1188,7 +1188,7 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 /* An isobar is a line, so its key is a line - a 12px square would read as an
    area fill like the hazard keys above it. The colour comes inline from
    isobarLegend(), which is why there is none here. */
-.hz-key-iso i { height: 2px; border-radius: 1px; opacity: 1; }
+.hz-key-iso i { height: 2px; border-radius: var(--r-sm); opacity: 1; }
 /* The legend container is now always in the markup, because the flight category
    keys append into it once their fetch lands - so it has to collapse when a
    clear day leaves it with nothing to say. */

@@ -82,11 +82,19 @@ def test_map_overlays_are_drawn_in_explicit_panes():
     assert 400 < iso_z < 600
 
 
-def test_isobar_colours_stay_out_of_the_theme_tokens():
-    # They are painted over OSM tiles and the rasters, not over app chrome, so
-    # they must not follow the light/dark tokens - the same mandate the hazard
-    # colours are under. test_theme.py would fail the CSS; this catches the
-    # other direction, someone moving them into style.css as var() references.
+def test_isobar_colours_stay_out_of_the_stylesheet():
+    # The isobar chrome is painted over OSM tiles and the radar/satellite
+    # rasters, not over app chrome, so its colours must not follow the light and
+    # dark tokens - the same mandate HAZARD_COLORS is under. They live as inline
+    # styles set by isobarLayer(), so the .iso- rules must carry no colour at
+    # all: not a literal (test_theme.py would catch that) and not a token
+    # either, which it would not.
+    #
+    # Geometry tokens are fine and expected - a radius is not a colour, and the
+    # sheet requires --r-* for those anyway.
     assert "ISOBAR_LINE" in APP_JS and "ISOBAR_CASING" in APP_JS
-    iso_css = "\n".join(ln for ln in CSS.split("\n") if ".iso-" in ln)
-    assert "var(--" not in iso_css, "isobar chrome must not be themed"
+    iso_css = [ln for ln in CSS.split("\n") if ".iso-" in ln or "hz-key-iso" in ln]
+    assert iso_css, "the isobar rules have gone missing"
+    colour_prop = re.compile(r"(?<!-)\b(color|background(-color)?|fill|stroke|border-color)\s*:")
+    for line in iso_css:
+        assert not colour_prop.search(line), f"isobar chrome must not be themed: {line.strip()}"
