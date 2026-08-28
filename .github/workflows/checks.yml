@@ -1,0 +1,58 @@
+# The gate: lint and tests. ONE definition, called from two places.
+#
+# This runs on every pull request into main, and again from fly-deploy.yml
+# before anything touches Fly. Both call *this file*, which is the whole point:
+# the gate used to live inline in the deploy workflow, so a branch cut before it
+# changed carried a stale copy of the rules. That is not hypothetical - a branch
+# whose copy still said `pyflakes app/` passed its own narrower gate locally,
+# was merged, and turned main red on a lint error the author had genuinely
+# checked for. There is now nowhere for a second, older copy of the gate to
+# live.
+#
+# Running on the PR is the other half. Gating only on merge means main goes red
+# *after* the decision to ship, and someone has to notice; the deploy history is
+# dotted with commits called "Unblock the deploy" for exactly that reason. Now a
+# PR that would break the deploy says so while it is still a PR.
+name: Checks
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:        # fly-deploy.yml runs the same job before it deploys
+  workflow_dispatch:
+
+jobs:
+  checks:
+    name: Lint and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"      # matches the Dockerfile's base image
+          cache: pip
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      # A single undefined name - a local deleted while a closure still read it
+      # - once shipped a 500 on every route assessment, and the first thing that
+      # noticed was a pilot looking at the app.
+      #
+      # app/ is what the container runs, so it is the part that must be clean.
+      # scripts/ and tests/ are linted too: they are not shipped, but an unused
+      # import or a dead local there is the same signal that something was
+      # removed and its scaffolding left behind - and a probe script that has
+      # rotted is one nobody can use on the day they need it.
+      - name: Lint (undefined names, dead imports)
+        run: python -m pyflakes app/ scripts/ tests/
+
+      # test_live_smoke.py auto-skips when the network is unavailable, so it
+      # runs here and nowhere else - pointing eleven tests at the real NAV
+      # CANADA and Open-Meteo endpoints. That is a useful thing to run; it is
+      # the wrong thing to gate a deploy on, because it makes shipping a fix
+      # depend on a weather service being up. Run it deliberately instead:
+      # `python -m pytest tests/test_live_smoke.py` where the network is open.
+      - name: Tests
+        run: python -m pytest tests/ -q --ignore=tests/test_live_smoke.py

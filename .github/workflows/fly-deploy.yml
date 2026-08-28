@@ -19,43 +19,20 @@ env:
   FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
 jobs:
+  # Nothing used to stand between a push to main and production. The gate lives
+  # in checks.yml and is called - not copied - so the deploy and every pull
+  # request are held to the same rules. A copy here is how a branch cut before
+  # the rules changed came to pass its own stale gate and redden main.
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   deploy:
     name: Deploy app
     runs-on: ubuntu-latest
+    needs: checks               # a red main fails the job instead of deploying
     concurrency: deploy-group   # never run two deploys at once
     steps:
       - uses: actions/checkout@v4
-
-      # Nothing used to stand between a push to main and production. A single
-      # undefined name - a local deleted while a closure still read it - shipped
-      # a 500 on every route assessment, and the first thing that noticed was a
-      # pilot looking at the app. These two steps run before anything touches
-      # Fly, so a red main fails the job instead of deploying.
-      #
-      # app/ is what the container runs, so it is the part that must be clean.
-      # scripts/ and tests/ are linted too: they are not shipped, but an unused
-      # import or a dead local there is the same signal that something was
-      # removed and its scaffolding left behind - and a probe script that has
-      # rotted is one nobody can use on the day they need it.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"      # matches the Dockerfile's base image
-          cache: pip
-
-      - name: Install test dependencies
-        run: pip install -r requirements-dev.txt
-
-      - name: Lint (undefined names, dead imports)
-        run: python -m pyflakes app/ scripts/ tests/
-
-      # test_live_smoke.py auto-skips when the network is unavailable, so it
-      # runs here and nowhere else - pointing eleven tests at the real NAV
-      # CANADA and Open-Meteo endpoints. That is a useful thing to run; it is
-      # the wrong thing to gate a deploy on, because it makes shipping a fix
-      # depend on a weather service being up. Run it deliberately instead:
-      # `python -m pytest tests/test_live_smoke.py` where the network is open.
-      - name: Tests
-        run: python -m pytest tests/ -q --ignore=tests/test_live_smoke.py
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
