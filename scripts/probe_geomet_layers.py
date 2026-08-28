@@ -77,7 +77,7 @@ async def main() -> int:
     filters = tuple(a.upper() for a in args) or DEFAULT_FILTERS
 
     params = {"service": "WMS", "version": "1.3.0", "request": "GetCapabilities"}
-    print(f"fetching the full GeoMet catalogue (this is a big document)...")
+    print("fetching the full GeoMet catalogue (this is a big document)...")
     async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
         r = await client.get(GEOMET_WMS, params=params)
         r.raise_for_status()

@@ -4,7 +4,6 @@ positions, a bowl must give closed rings around one low, and a flat field must
 give nothing at all. Anything that passes those and still draws a wrong chart is
 drawing it from wrong *data*, which is a different problem.
 """
-import asyncio
 import math
 
 import pytest
