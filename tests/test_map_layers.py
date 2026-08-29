@@ -9,6 +9,7 @@ toggle that never draws; a storage key that drifts means a preference that is
 written and never read back.
 """
 import re
+from pathlib import Path
 
 from app.config import WEB_DIR
 from app.sources import geomet
@@ -23,6 +24,28 @@ def test_satellite_layer_ids_agree_with_the_server():
     # is a satellite toggle that is permanently "unavailable".
     for layer in geomet.SATELLITE_LAYERS:
         assert layer in APP_JS, f"{layer} is on the server whitelist but not in app.js"
+
+
+def test_app_js_names_no_satellite_layer_the_server_will_not_serve():
+    # The check above only runs server -> app.js, so a renamed layer that was
+    # updated on the server and left behind in app.js passes it: the new name is
+    # present, and the stale one sits alongside being asked for and refused.
+    # Every GOES id app.js mentions must be one the endpoint accepts.
+    named = set(re.findall(r'"(GOES-[A-Za-z]+_\d+km_[A-Za-z0-9-]+)"', APP_JS))
+    assert named, "app.js no longer names any satellite layer"
+    assert named == set(geomet.SATELLITE_LAYERS), (
+        f"app.js and the server whitelist disagree: {named ^ set(geomet.SATELLITE_LAYERS)}")
+
+
+def test_the_offline_suite_cannot_vouch_for_the_names_and_says_so():
+    # The tests above compare two files that are wrong together as readily as
+    # they are right together - `GOES-East_1km_DayVisible` passed every one of
+    # them for as long as it existed, while GeoMet had never heard of it. The
+    # only thing that can tell a typo from an outage is asking GeoMet, so that
+    # check must exist and must cover every layer, not just the radar ones.
+    live = (Path(__file__).parent / "test_live_smoke.py").read_text()
+    assert "geomet.WMS_LAYERS" in live, \
+        "nothing asks GeoMet whether the layer names are real"
 
 
 def test_the_frontend_asks_the_renamed_endpoint():

@@ -1172,10 +1172,10 @@ const RADAR_LABELS = { RADAR_1KM_RRAI: "Rain", RADAR_1KM_RSNO: "Snow" };
 // the backend refuses any layer not on its own whitelist, so a name drifting
 // here shows up as a disabled toggle rather than as wrong imagery.
 const SATELLITE_LABELS = {
-  "GOES-East_1km_DayVisible": "Visible",
+  "GOES-East_1km_DayVis": "Visible",
   "GOES-East_2km_NightMicrophysics": "Infrared",
 };
-const SATELLITE_VISIBLE = "GOES-East_1km_DayVisible";
+const SATELLITE_VISIBLE = "GOES-East_1km_DayVis";
 const SATELLITE_INFRARED = "GOES-East_2km_NightMicrophysics";
 const SATELLITE_OVERLAY = "Satellite";
 const SATELLITE_KEY = "minima.satellite.v1";
@@ -1200,11 +1200,20 @@ const RADAR_KEY = "minima.radar.v1";
 // ``idx`` starts at -1 meaning "never placed" - 0 is a real position (the
 // oldest frame), so it cannot double as the sentinel that means "open on the
 // newest".
+//
+// ``satStatus`` is PER LAYER, not one flag for the panel. It used to be a single
+// ``satOk``, set from whichever product happened to be selected - so a day
+// flight, which opens on visible, let one renamed visible layer strike through
+// the infrared pill as well. Both pills then being `disabled`, the click handler
+// refused them, and the working product was unreachable for the rest of the
+// session. A layer id maps to true (drew frames), false (asked, no frames) or
+// nothing at all (not asked yet), and that third state is what makes the
+// fallback below safe to run once and not loop.
 const newRadarState = (layer, satLayer) => ({
   map: null, wms: null, frames: [], master: [], idx: -1,
   layer: layer || "RADAR_1KM_RRAI",
   sat: null, satLayer: satLayer || SATELLITE_VISIBLE, satFrames: [],
-  satOk: true, satRegistered: false,
+  satStatus: {}, satRegistered: false,
   timer: null, routeView: null, hazardView: null,
   layerControl: null, pirepLayer: null, isoLayer: null,
 });
@@ -1258,6 +1267,20 @@ function defaultSatelliteProduct() {
   if (saved && SATELLITE_LABELS[saved]) return saved;
   return currentMode() === "night" ? SATELLITE_INFRARED : SATELLITE_VISIBLE;
 }
+
+// "Not known to be broken" rather than "known to work": a product nobody has
+// asked GeoMet about yet stays offerable, because striking out a pill we have
+// no evidence against would be inventing an outage.
+const satUsable = (layer) => RADAR.satStatus[layer] !== false;
+// The panel as a whole is only gone when every product is - which is the state
+// the heading is allowed to drop the word "satellite" for.
+const anySatelliteUsable = () => Object.keys(SATELLITE_LABELS).some(satUsable);
+// A product to fall back to when the selected one cannot draw: one we have not
+// asked about yet. Deliberately not "one that worked" - it is the untried layers
+// that make the fallback terminate, since each attempt records a status and so
+// removes itself from this list.
+const untriedSatelliteProduct = () =>
+  Object.keys(SATELLITE_LABELS).find((k) => k !== RADAR.satLayer && !(k in RADAR.satStatus));
 
 // ---------- Area hazards drawn on the same map ----------
 // The polygons a SIGMET or AIRMET is actually drawn as. A bulletin's "WI N4200
@@ -1964,22 +1987,40 @@ async function loadRadarFrames() {
 // two do not tick together - see `frameAtOrBefore`.
 async function loadSatelliteFrames() {
   const map = RADAR.map;
+  const layer = RADAR.satLayer;
+  let frames = [];
   try {
-    const frames = await wmsFrames(RADAR.satLayer);
-    if (RADAR.map !== map) return;   // another assessment replaced the map
-    RADAR.satFrames = frames;
-    RADAR.satOk = frames.length > 0;
+    frames = await wmsFrames(layer);
   } catch (e) {
-    if (RADAR.map !== map) return;
-    RADAR.satFrames = [];
     // The layer name may simply be wrong (they are GeoMet's, and they move).
-    // Say so on the pills rather than offering a toggle that draws nothing:
+    // Say so on the pill rather than offering a toggle that draws nothing:
     // a blank satellite layer over a weather map reads as "clear".
-    RADAR.satOk = false;
+    frames = [];
   }
+  if (RADAR.map !== map) return;      // another assessment replaced the map
+  // Record against the layer we actually asked about, not against whatever is
+  // selected now - a pill clicked while this was in flight would otherwise be
+  // credited or blamed for the answer to a different question.
+  RADAR.satStatus[layer] = frames.length > 0;
   markSatelliteAvailability();
-  if (!RADAR.satOk) {
+  // ...and for the same reason, a superseded answer stops here: the newer
+  // request owns the frames, the overlay and the timeline.
+  if (layer !== RADAR.satLayer) return;
+  RADAR.satFrames = frames;
+
+  if (!satUsable(layer)) {
+    // One product being renamed upstream is not the satellite panel going away.
+    // Move to a product we have not ruled out and ask about that one instead;
+    // each attempt records a status, so this walks the list once and stops.
+    const alt = untriedSatelliteProduct();
+    if (alt) {
+      RADAR.satLayer = alt;
+      if (RADAR.sat) RADAR.sat.setParams({ layers: alt });
+      $$("#route-radar .sat-type").forEach((x) => x.classList.toggle("active", x.dataset.sat === alt));
+      return loadSatelliteFrames();
+    }
     if (RADAR.sat && RADAR.map && RADAR.map.hasLayer(RADAR.sat)) RADAR.map.removeLayer(RADAR.sat);
+    rebuildMasterTimeline();
     return;
   }
   if (RADAR.sat && !RADAR.satRegistered) {
@@ -1992,15 +2033,23 @@ async function loadSatelliteFrames() {
 
 function markSatelliteAvailability() {
   $$("#route-radar .sat-type").forEach((b) => {
-    b.disabled = !RADAR.satOk;
-    b.classList.toggle("unavailable", !RADAR.satOk);
-    if (!RADAR.satOk) b.title = "Satellite imagery unavailable right now";
+    // Per pill: only the product that could not draw is struck through. Greying
+    // both out on one bad layer is what made the good one unreachable, since the
+    // click handler declines a disabled pill.
+    const ok = satUsable(b.dataset.sat);
+    b.disabled = !ok;
+    b.classList.toggle("unavailable", !ok);
+    b.title = ok ? `Satellite: ${SATELLITE_LABELS[b.dataset.sat]}`
+                 : "This satellite product is unavailable right now";
   });
   // And stop the heading claiming a layer the panel does not have. A title is
-  // a promise about what is on the map.
+  // a promise about what is on the map - which cuts both ways, so this restores
+  // the word as well as dropping it: a product recovering on a later assessment
+  // used to leave the heading permanently understating what was on the map.
   const h = $("#radar-title");
-  if (h && !RADAR.satOk) {
-    h.innerHTML = `Radar${h.dataset.tail || ""} <span class="hint">Environment Canada · last 3 h</span>`;
+  if (h) {
+    const sat = anySatelliteUsable() ? ", satellite" : "";
+    h.innerHTML = `Radar${sat}${h.dataset.tail || ""} <span class="hint">Environment Canada · last 3 h</span>`;
   }
 }
 
