@@ -344,9 +344,29 @@ rewind you would watch the cloud arrive before the rain underneath it.
 
 **Radar is now a toggle too.** It was always added to the map with no way off,
 which was fine while it was the only raster. "Show me the cloud without the rain
-on top of it" is a real question and it had no answer. Satellite yields to
-0.45 opacity while radar is on and takes the full picture back when it is not -
-two 70% rasters stacked is mush and you lose both.
+on top of it" is a real question and it had no answer.
+
+**The cloud is the picture, not a wash over the map.** Satellite used to drop to
+0.45 opacity whenever radar was on, reasoning that two 70% rasters stacked is
+mush. That premise was wrong twice over. Radar is requested *transparent* - it
+paints only where there is precipitation, and it sits in a pane **above**
+satellite, so it never mixes into it; satellite was yielding to something that
+was not there. And what satellite actually mixed with was the basemap: GOES has
+no alpha, clear sky is dark pixels rather than transparency, so at 0.45 every
+satellite pixel was 55% OpenStreetMap. The greens won everywhere and a deck came
+out the same washed-out sage as clear ground - the layer was drawing perfectly
+and showing you nothing.
+
+So the satellite is now near-opaque, each product carries its own contrast
+stretch, and the basemap is desaturated and dimmed underneath it while the layer
+is on. Cloud reads white against muted land; roads, coastline and the lakes stay
+legible under it; and radar, hazards, isobars and the station dots are all still
+drawn over the top in full colour. The stretch is per product because the two are
+not the same kind of image - visible is a greyscale brightness field that wants a
+real stretch, while Night Microphysics is a three-channel composite whose *hue*
+carries the meaning, so desaturating it would destroy the product. The basemap
+mute is cleared the moment satellite comes off: a dimmed map with no cloud on it
+reads as a rendering fault, not as a missing layer.
 
 **A layer that cannot draw says so - and only that layer.** The GeoMet layer
 names are Environment Canada's, not ours, and they can be renamed upstream.
@@ -383,10 +403,9 @@ OSM tiles and a 70%-opacity radar layer is mush, and it answers the wrong
 question anyway: nobody reads a surface chart for the absolute value at a point,
 they read it for the **spacing and the curvature**. So the server samples MSL
 pressure on a grid over the route, runs marching squares over it, and hands the
-browser polylines - drawn at the standard **4 hPa** interval, labelled with their
-value, with **H** and **L** on the closed centres. Each line is drawn twice, a
-pale casing under a thin dark line, because a single thin line over that
-substrate is invisible.
+browser polylines - drawn at the standard **4 hPa** interval and labelled with
+their value. Each line is drawn twice, a pale casing under a thin dark line,
+because a single thin line over that substrate is invisible.
 
 **Drawn for your ETD.** The pressure pattern is a forecast field, and showing
 this morning's to a pilot leaving this afternoon is the one thing this layer must

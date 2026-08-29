@@ -331,68 +331,22 @@ def contour(field: list[list[float | None]], lats: list[float], lons: list[float
     return out
 
 
-def pressure_centres(field: list[list[float | None]],
-                     lats: list[float], lons: list[float]) -> list[dict]:
-    """Local highs and lows - the H and L a surface chart is read from.
+def to_feature_collection(lines: list[dict]) -> dict:
+    """GeoJSON, in lon/lat order as the spec requires (Leaflet flips it back).
 
-    Interior points only: an edge point has no neighbours on one side, and the
-    "low" it would report is usually just the box running out rather than a
-    closed circulation.
+    Lines only. This used to take a second list of pressure centres and emit
+    them as Point features for the map to stamp an H or an L on; the markers
+    were dropped from the map, and emitting features nothing draws is weight on
+    every isobar fetch.
     """
-    found: list[tuple[int, int, str, float]] = []
-    for i in range(1, len(lats) - 1):
-        for j in range(1, len(lons) - 1):
-            v = field[i][j]
-            if v is None:
-                continue
-            around = [field[i + di][j + dj]
-                      for di in (-1, 0, 1) for dj in (-1, 0, 1)
-                      if not (di == 0 and dj == 0)]
-            if any(n is None for n in around):
-                continue
-            # ``<=`` with at least one strict, not ``<`` throughout. A centre
-            # almost never lands exactly on a grid node, so the true minimum
-            # routinely ties across two or four cells - and a strict test marks
-            # *none* of them, losing the L on precisely the broad, flat low a
-            # pilot most wants to see. The plateau is collapsed to one marker
-            # below.
-            if all(v <= n for n in around) and any(v < n for n in around):
-                found.append((i, j, "L", v))
-            elif all(v >= n for n in around) and any(v > n for n in around):
-                found.append((i, j, "H", v))
-
-    out: list[dict] = []
-    taken: list[tuple[int, int, str, float]] = []
-    for i, j, kind, v in found:
-        # One marker per plateau: a tie spread over adjacent cells is one
-        # circulation, and stamping an L on each of four cells reads as four
-        # lows sitting on top of each other.
-        if any(k == kind and abs(v - w) < 1e-9 and abs(i - pi) <= 1 and abs(j - pj) <= 1
-               for pi, pj, k, w in taken):
-            continue
-        taken.append((i, j, kind, v))
-        out.append({"kind": kind, "hpa": v, "lat": lats[i], "lon": lons[j]})
-    return out
-
-
-def to_feature_collection(lines: list[dict], centres: list[dict]) -> dict:
-    """GeoJSON, in lon/lat order as the spec requires (Leaflet flips it back)."""
-    features = [
+    return {"type": "FeatureCollection", "features": [
         {"type": "Feature",
          "geometry": {"type": "LineString",
                       "coordinates": [[round(lon, 5), round(lat, 5)]
                                       for lat, lon in ln["points"]]},
          "properties": {"hpa": round(ln["hpa"], 1)}}
         for ln in lines
-    ]
-    features += [
-        {"type": "Feature",
-         "geometry": {"type": "Point",
-                      "coordinates": [round(c["lon"], 5), round(c["lat"], 5)]},
-         "properties": {"kind": c["kind"], "hpa": round(c["hpa"], 1)}}
-        for c in centres
-    ]
-    return {"type": "FeatureCollection", "features": features}
+    ]}
 
 
 EMPTY = {"type": "FeatureCollection", "features": []}
@@ -435,6 +389,4 @@ async def collect(path: list[Point], etd_utc: str | None, *,
     if got < MIN_COVERAGE * len(points):
         # Better no chart than a chart with an invented front across the gap.
         return EMPTY, {**meta, "error": "not enough pressure data"}
-    return (to_feature_collection(contour(field, lats, lons, interval),
-                                  pressure_centres(field, lats, lons)),
-            meta)
+    return to_feature_collection(contour(field, lats, lons, interval)), meta

@@ -1177,6 +1177,27 @@ const SATELLITE_LABELS = {
 };
 const SATELLITE_VISIBLE = "GOES-East_1km_DayVis";
 const SATELLITE_INFRARED = "GOES-East_2km_NightMicrophysics";
+// How hard to push each product, as a CSS filter on the satellite pane. PER
+// PRODUCT because the two are not the same kind of image and one setting cannot
+// serve both: visible is a greyscale brightness field where cloud is bright and
+// clear ground is dark, so a real contrast stretch is what separates a deck from
+// the field under it. Night Microphysics is a three-channel RGB composite where
+// the *hue* carries the meaning - low cloud, fog and ice read as different
+// colours - so desaturating it or crushing its levels would destroy the product.
+// Every id in SATELLITE_LABELS must appear here; test_map_layers.py enforces it.
+const SATELLITE_FILTERS = {
+  "GOES-East_1km_DayVis": "contrast(1.35) brightness(1.06) saturate(0.85)",
+  "GOES-East_2km_NightMicrophysics": "contrast(1.12) brightness(1.02)",
+};
+// The base map while satellite is drawn. OSM's greens and tans are the loudest
+// thing on this panel, and GOES has no alpha - clear sky is dark pixels, not
+// transparency - so every satellite pixel was being mixed with a saturated
+// basemap and cloud came out the same washed-out sage as clear ground. Muting
+// the land is what makes the cloud the picture; roads, coastline and the lakes
+// stay legible underneath it. Values live here rather than in style.css for the
+// reason given above HAZARD_COLORS: this is map substrate, and the OSM raster
+// under it is light in both themes, so it must not follow the theme tokens.
+const BASEMAP_UNDER_SATELLITE = "saturate(0.25) brightness(0.85) contrast(0.92)";
 const SATELLITE_OVERLAY = "Satellite";
 const SATELLITE_KEY = "minima.satellite.v1";
 const SATELLITE_PRODUCT_KEY = "minima.satproduct.v1";
@@ -1248,13 +1269,35 @@ function setSatelliteProduct(id) {
   try { localStorage.setItem(SATELLITE_PRODUCT_KEY, id); } catch (_) {}
 }
 
-// Two 70%-opacity rasters stacked on each other is mush, and the pilot loses
-// both. So satellite yields to radar when radar is actually on the map, and
-// takes the full picture back when it isn't - which is the case where satellite
-// is the layer being read, not the backdrop.
-function satelliteOpacity() {
-  const radarOn = !!(RADAR.map && RADAR.wms && RADAR.map.hasLayer(RADAR.wms));
-  return radarOn ? 0.45 : 0.85;
+// Satellite used to yield to 0.45 whenever radar was on the map, on the reasoning
+// that "two 70%-opacity rasters stacked on each other is mush". That premise was
+// wrong. Radar is requested with `transparent: true`, so it is not a competing
+// full-frame raster at all - it paints only where there is precipitation, and it
+// sits in a pane ABOVE satellite, so it is never mixed into it. Satellite was
+// yielding to something that was not there, and what it actually mixed with was
+// the OSM basemap: at 0.45, every satellite pixel was 55% OpenStreetMap, so the
+// greens won everywhere and cloud read as the same washed-out sage as clear
+// ground. Near-opaque, over a muted basemap, is what makes a deck visible.
+const SATELLITE_OPACITY = 0.92;
+
+// The two pane filters that make cloud the subject, kept in one place because
+// they are one decision: the satellite is stretched, and the basemap under it
+// gets out of the way. Called wherever the layer, the product or the map itself
+// changes.
+//
+// `createPane` parents custom panes to `mapPane`, NOT to `tilePane`, so filtering
+// the tile pane touches the OSM base and nothing else - satellite, radar, the
+// hazard polygons, the isobars and the station markers are all untouched.
+function applyCloudFirstStyling() {
+  const map = RADAR.map;
+  if (!map) return;
+  const drawn = !!(RADAR.sat && map.hasLayer(RADAR.sat));
+  const tiles = map.getPane("tilePane");
+  // Cleared, not left set, when satellite comes off: a dimmed basemap with no
+  // cloud over it is just a map somebody broke.
+  if (tiles) tiles.style.filter = drawn ? BASEMAP_UNDER_SATELLITE : "";
+  const sat = map.getPane("satellitePane");
+  if (sat) sat.style.filter = SATELLITE_FILTERS[RADAR.satLayer] || "";
 }
 
 // Visible imagery is black at night, so a night flight that opened on the
@@ -1453,15 +1496,10 @@ function setIsobarsOn(on) {
 const ISOBAR_LINE = "#1b2733";
 const ISOBAR_CASING = "#f4f7fb";
 const ISOBAR_CHIP = `background:${ISOBAR_CASING};color:${ISOBAR_LINE};`;
-// A low is what you route around and a high is what you route through, so the
-// two must not read alike at a glance. Blue and red are the convention.
-const ISOBAR_LOW = "#2f6fd1";
-const ISOBAR_HIGH = "#c0392b";
 
 function isobarLayer(gj) {
   const group = L.layerGroup([], { pane: "isobarPane" });
   const lines = (gj.features || []).filter((f) => f.geometry && f.geometry.type === "LineString");
-  const centres = (gj.features || []).filter((f) => f.geometry && f.geometry.type === "Point");
 
   lines.forEach((f) => {
     const latlngs = f.geometry.coordinates.map(([lon, lat]) => [lat, lon]);
@@ -1488,22 +1526,6 @@ function isobarLayer(gj) {
     }
   });
 
-  centres.forEach((f) => {
-    const [lon, lat] = f.geometry.coordinates;
-    const p = f.properties || {};
-    // The H and L a surface chart is actually read from - the lines tell you
-    // the gradient, these tell you what you are going around.
-    const ink = p.kind === "H" ? ISOBAR_HIGH : ISOBAR_LOW;
-    L.marker([lat, lon], {
-      pane: "isobarPane", interactive: false,
-      icon: L.divIcon({
-        className: "iso-centre",
-        html: `<b style="color:${ink};-webkit-text-stroke:2px ${ISOBAR_CASING};paint-order:stroke fill">${escapeHtml(p.kind || "")}</b>`
-            + `<span style="${ISOBAR_CHIP}">${Math.round(p.hpa)}</span>`,
-        iconSize: [34, 34], iconAnchor: [17, 12],
-      }),
-    }).addTo(group);
-  });
   return group;
 }
 
@@ -1847,8 +1869,9 @@ async function loadRadar(r, stops) {
   if (radarOn()) RADAR.wms.addTo(RADAR.map);
   RADAR.sat = L.tileLayer.wms(GEOMET_WMS, {
     layers: RADAR.satLayer, format: "image/png", transparent: true, version: "1.3.0",
-    opacity: satelliteOpacity(), pane: "satellitePane",
+    opacity: SATELLITE_OPACITY, pane: "satellitePane",
   });
+  applyCloudFirstStyling();
   // The course line. A hazard polygon means nothing without the track it does
   // or does not cross, and the map used to show only the two end markers. A
   // circuit has no track to draw - the single marker is the whole flight.
@@ -1875,12 +1898,10 @@ async function loadRadar(r, stops) {
     if (on && e.name === FLIGHT_CATEGORY_OVERLAY && RADAR.pirepLayer) {
       RADAR.pirepLayer.bringToFront();
     }
-    // Radar coming or going changes what satellite is competing with, and a
-    // layer left at backdrop opacity once it is the only raster on the map is a
-    // layer nobody can read.
-    if ((e.name === RADAR_OVERLAY || e.name === SATELLITE_OVERLAY) && RADAR.sat) {
-      RADAR.sat.setOpacity(satelliteOpacity());
-    }
+    // Satellite arriving or leaving is what decides whether the basemap is
+    // muted. Radar no longer gets a vote: it is a transparent overlay in a pane
+    // above satellite, so it never dims it.
+    if (e.name === SATELLITE_OVERLAY) applyCloudFirstStyling();
     if (e.name === SATELLITE_OVERLAY && on) {
       // Turned on mid-session: it has no frames yet and no place on the
       // timeline. Both are fixed by loading them now.
@@ -1955,6 +1976,9 @@ async function loadRadar(r, stops) {
     setSatelliteProduct(RADAR.satLayer);
     $$("#route-radar .sat-type").forEach((x) => x.classList.toggle("active", x === b));
     if (RADAR.sat) RADAR.sat.setParams({ layers: RADAR.satLayer });
+    // Each product carries its own stretch - greyscale visible and a colour RGB
+    // composite cannot take the same one.
+    applyCloudFirstStyling();
     // Each product has its own time extent, so the frames have to be re-read -
     // exactly as switching rain for snow does.
     loadSatelliteFrames();
@@ -2017,9 +2041,13 @@ async function loadSatelliteFrames() {
       RADAR.satLayer = alt;
       if (RADAR.sat) RADAR.sat.setParams({ layers: alt });
       $$("#route-radar .sat-type").forEach((x) => x.classList.toggle("active", x.dataset.sat === alt));
+      applyCloudFirstStyling();
       return loadSatelliteFrames();
     }
     if (RADAR.sat && RADAR.map && RADAR.map.hasLayer(RADAR.sat)) RADAR.map.removeLayer(RADAR.sat);
+    // The basemap has to come back out of the mute with it - a dimmed map with
+    // no cloud over it reads as a rendering fault, not as a missing layer.
+    applyCloudFirstStyling();
     rebuildMasterTimeline();
     return;
   }
@@ -2028,6 +2056,7 @@ async function loadSatelliteFrames() {
     RADAR.satRegistered = true;
   }
   if (satelliteOn() && RADAR.map && !RADAR.map.hasLayer(RADAR.sat)) RADAR.sat.addTo(RADAR.map);
+  applyCloudFirstStyling();
   rebuildMasterTimeline();
 }
 
