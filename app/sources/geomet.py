@@ -30,7 +30,17 @@ RADAR_LAYERS = ("RADAR_1KM_RRAI", "RADAR_1KM_RSNO")
 # the live service before trusting this tuple, and note that ``layer_times``
 # below returns None for anything not listed, so a bad name degrades to a
 # disabled toggle rather than to somebody else's imagery.
-SATELLITE_LAYERS = ("GOES-East_1km_DayVisible", "GOES-East_2km_NightMicrophysics")
+#
+# The day product was first written here as ``GOES-East_1km_DayVisible``, which
+# is not a layer GeoMet has ever served - the real one is ``..._1km_DayVis``
+# ("Day visibility / Day Cloud Convection"). Nothing caught it, because a name
+# that does not exist and a name that has been renamed fail identically: no time
+# dimension, disabled pills, no imagery. Both names below are now checked
+# against ECCC's published layer table
+# (ECCC-MSC/open-data, docs/msc-data/obs_satellite/readme_satellite_geomet_en.md)
+# and, where the network is open, by ``tests/test_live_smoke.py``, which asks
+# GeoMet itself whether every layer in ``WMS_LAYERS`` still has a time extent.
+SATELLITE_LAYERS = ("GOES-East_1km_DayVis", "GOES-East_2km_NightMicrophysics")
 SATELLITE_LABELS = {SATELLITE_LAYERS[0]: "Visible", SATELLITE_LAYERS[1]: "Infrared"}
 
 # Every layer the browser is allowed to ask us the time extent for.

@@ -9,7 +9,7 @@ import asyncio
 import httpx
 import pytest
 
-from app.sources import awc, cfps, openmeteo
+from app.sources import awc, cfps, geomet, openmeteo
 
 
 def _reachable(url: str) -> bool:
@@ -30,6 +30,7 @@ def _reachable(url: str) -> bool:
 CFPS_UP = _reachable("https://plan.navcanada.ca/")
 OM_UP = _reachable("https://api.open-meteo.com/")
 AWC_UP = _reachable("https://aviationweather.gov/")
+GEOMET_UP = _reachable("https://geo.weather.gc.ca/")
 
 
 @pytest.mark.skipif(not CFPS_UP, reason="CFPS unreachable (egress blocked)")
@@ -86,6 +87,34 @@ def test_awc_geojson_features_carry_geometry_live():
     assert parsed, "features came back but none carried readable text"
     assert any(len(h.geometry) >= 3 for h in parsed), \
         "at least one active SIGMET should have a polygon"
+
+
+# ---------------------------------------------------------------------------
+# GeoMet map layers.
+#
+# The same canary role the CFPS area-products test plays, for the one thing the
+# offline suite provably cannot check: whether the layer names in
+# ``geomet.WMS_LAYERS`` are names GeoMet actually serves. Those strings are
+# Environment Canada's and can be renamed upstream; the offline tests only check
+# that ``geomet.py`` and ``app.js`` agree *with each other*, which they do
+# perfectly happily when both are wrong.
+#
+# They were wrong. ``GOES-East_1km_DayVisible`` was never a GeoMet layer - the
+# day product is ``GOES-East_1km_DayVis`` - and the only symptom was two satellite
+# pills greyed out on the map, which is exactly what a genuine upstream outage
+# looks like. This is the test that tells those two apart.
+# ---------------------------------------------------------------------------
+@pytest.mark.skipif(not GEOMET_UP, reason="GeoMet unreachable (egress blocked)")
+@pytest.mark.parametrize("layer", geomet.WMS_LAYERS)
+def test_geomet_layers_still_exist_live(layer):
+    dim = asyncio.run(geomet.layer_times(layer))
+    # None means GetCapabilities came back with no time dimension, which for a
+    # scoped request is how GeoMet answers "no such layer".
+    assert dim is not None, f"{layer} has no time dimension - renamed or gone from GeoMet"
+    assert dim["layer"] == layer
+    # A layer with no extent cannot be rewound, so it is no use to this map
+    # however good the imagery is.
+    assert dim["start"] and dim["end"]
 
 
 @pytest.mark.skipif(not OM_UP, reason="Open-Meteo unreachable (egress blocked)")

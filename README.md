@@ -348,12 +348,28 @@ on top of it" is a real question and it had no answer. Satellite yields to
 0.45 opacity while radar is on and takes the full picture back when it is not -
 two 70% rasters stacked is mush and you lose both.
 
-**A layer that cannot draw says so.** The GeoMet layer names are Environment
-Canada's, not ours, and they can be renamed upstream. Rather than a toggle that
-silently draws nothing - which on a weather map reads as *clear* - the pills grey
-out and say the imagery is unavailable, and the radar, hazards and course line
-are untouched. `scripts/probe_geomet_layers.py` dumps the live catalogue with
-each layer's time extent and styles when the names need re-checking.
+**A layer that cannot draw says so - and only that layer.** The GeoMet layer
+names are Environment Canada's, not ours, and they can be renamed upstream.
+Rather than a toggle that silently draws nothing - which on a weather map reads
+as *clear* - the pill for that product greys out and says the imagery is
+unavailable, and the radar, hazards and course line are untouched.
+
+The greying is **per product**, which it was not to begin with. A single
+panel-wide flag was set from whichever product happened to be selected, and a
+day flight opens on visible - so one renamed visible layer struck out the
+infrared pill as well, and since the app declines a struck-out pill, the product
+that still worked could not be reached for the rest of the session. One bad
+layer now costs one pill: the map moves to a product it has no evidence against
+and asks GeoMet about that one instead.
+
+And the names themselves are checked rather than assumed. `GOES-East_1km_DayVisible`
+sat in the source for as long as the feature existed and GeoMet had never served
+it - the day product is `GOES-East_1km_DayVis` - because the offline tests only
+ever compared the frontend and the backend *to each other*, and they were wrong
+together. `tests/test_live_smoke.py` now asks GeoMet whether every layer still
+has a time extent, which is the one check that tells a typo from an outage;
+`scripts/probe_geomet_layers.py` dumps the live catalogue with each layer's time
+extent and styles when the names need re-checking by hand.
 
 ### Isobars
 Everything else on the card is a **point reading**: the ceiling here, the wind

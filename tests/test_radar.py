@@ -3,6 +3,7 @@ import asyncio
 from fastapi.testclient import TestClient
 
 from app import main
+from app.config import WEB_DIR
 from app.sources import geomet
 from app.sources.geomet import parse_time_dimension
 
@@ -68,3 +69,30 @@ def test_the_endpoint_reports_an_unknown_layer():
     r = TestClient(main.app).get("/api/wms_times", params={"layer": "NOT_A_LAYER"})
     assert r.status_code == 200          # the degradation contract: never a 500
     assert "unknown layer" in r.json()["error"]
+
+
+# --- One dead layer must not cost the other ---------------------------------
+
+
+def test_satellite_availability_is_tracked_per_layer():
+    # It was one `satOk` flag for the whole panel, set from whichever product
+    # happened to be selected. A day flight opens on visible, so one renamed
+    # visible layer struck through the infrared pill too - and since the click
+    # handler declines a disabled pill, the product that still worked could not
+    # be reached for the rest of the session. Availability must be per layer.
+    app_js = (WEB_DIR / "app.js").read_text()
+    assert "satStatus" in app_js
+    # The comment in `newRadarState` names the old flag to explain why it went,
+    # so match how a flag is *used*, not any mention of it.
+    assert "RADAR.satOk" not in app_js, "the panel-wide availability flag is back"
+    assert "satOk:" not in app_js, "the panel-wide availability flag is back in the state object"
+
+
+def test_a_dead_satellite_product_falls_back_to_one_that_is_not():
+    # Striking out the broken pill is only half the answer; the map should end
+    # up on a product that draws rather than on no satellite at all.
+    app_js = (WEB_DIR / "app.js").read_text()
+    assert "untriedSatelliteProduct" in app_js
+    # "not yet asked about" rather than "known good" is what makes the walk
+    # terminate - each attempt records a status and so removes itself.
+    assert "in RADAR.satStatus" in app_js
