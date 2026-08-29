@@ -1175,11 +1175,6 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
   font-size: .64rem; font-weight: 600; font-variant-numeric: tabular-nums;
   letter-spacing: .02em; pointer-events: none; }
 .iso-label span { padding: 0 3px; border-radius: var(--r-sm); line-height: 1.25; }
-.iso-centre { display: flex; flex-direction: column; align-items: center;
-  line-height: 1; pointer-events: none; }
-.iso-centre b { font-size: 1.15rem; font-weight: 700; }
-.iso-centre span { margin-top: 1px; padding: 0 3px; border-radius: var(--r-sm);
-  font-size: .6rem; font-variant-numeric: tabular-nums; }
 /* position+z-index makes the map its own stacking context so Leaflet's internal
    panes/controls (z-index up to ~1000) stay trapped below the sticky header. */
 .radar-map { height: 380px; width: 100%; border-radius: var(--r-md); border: 1px solid var(--line);

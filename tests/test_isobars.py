@@ -95,9 +95,6 @@ def test_a_bowl_gives_closed_rings_around_one_low():
         for la, lo in pts:
             assert math.hypot(la - 7, lo - 7) == pytest.approx(r, abs=0.35)
 
-    centres = iso.pressure_centres(field, lats, lons)
-    assert [(c["kind"], c["lat"], c["lon"]) for c in centres] == [("L", 7.0, 7.0)]
-
 
 def test_a_contour_running_off_the_grid_is_left_open():
     # Honest about where our data stopped: the alternative is joining the two
@@ -110,34 +107,20 @@ def test_a_contour_running_off_the_grid_is_left_open():
     assert all(ln["points"][0] != ln["points"][-1] for ln in wide)
 
 
-def test_a_dome_gives_exactly_one_high():
-    field, lats, lons = _grid(15, lambda i, j: 1040 - (i - 7) ** 2 - (j - 7) ** 2)
-    centres = iso.pressure_centres(field, lats, lons)
-    assert [c["kind"] for c in centres] == ["H"]
-    assert centres[0]["hpa"] == pytest.approx(1040.0)
-
-
-def test_a_low_between_two_grid_points_is_still_found():
-    # A centre almost never lands exactly on a grid node. Here the cone's apex
-    # sits halfway between two rows, so both tie for lowest - and a strict
-    # "lower than all eight neighbours" test marks neither, losing the L on
-    # exactly the broad flat low that most deserves one.
-    field, lats, lons = _grid(11, lambda i, j: 1000 + math.hypot(i - 5.5, j - 5))
-    centres = iso.pressure_centres(field, lats, lons)
-    assert [c["kind"] for c in centres] == ["L"], "a tied minimum lost its L"
-
-
-def test_a_tied_plateau_is_marked_once_not_four_times():
-    # Four cells tie for the minimum. That is one circulation, and stamping an L
-    # on each reads as four lows stacked on each other.
-    field, lats, lons = _grid(11, lambda i, j: 1000 + math.hypot(i - 5.5, j - 5.5))
-    assert len(iso.pressure_centres(field, lats, lons)) == 1
-
-
-def test_a_flat_field_has_no_isobars_and_no_centres():
+def test_a_flat_field_has_no_isobars():
     field, lats, lons = _grid(8, lambda i, j: 1013.0)
     assert iso.contour(field, lats, lons) == []
-    assert iso.pressure_centres(field, lats, lons) == []
+
+
+def test_the_layer_is_lines_only():
+    # Pressure centres used to ride along as Point features for the map to stamp
+    # an H or an L on. The markers were dropped, and so was the machinery: a
+    # Point coming back here is a feature nothing draws.
+    field, lats, lons = _grid(15, lambda i, j: 1040 - (i - 7) ** 2 - (j - 7) ** 2)
+    gj = iso.to_feature_collection(iso.contour(field, lats, lons, interval=4.0))
+    assert gj["features"], "a dome should still produce contours"
+    assert {f["geometry"]["type"] for f in gj["features"]} == {"LineString"}
+    assert not hasattr(iso, "pressure_centres")
 
 
 def test_a_col_does_not_produce_crossed_isobars():
@@ -279,8 +262,7 @@ def test_an_unknown_aerodrome_is_a_404_like_the_sibling_endpoint():
 def test_geojson_is_lon_lat_order():
     field, lats, lons = _grid(9, lambda i, j: 1000 + 2 * j)
     gj = iso.to_feature_collection(
-        iso.contour(field, lats, lons, interval=4.0, smooth=False),
-        iso.pressure_centres(field, lats, lons))
+        iso.contour(field, lats, lons, interval=4.0, smooth=False))
     line = next(f for f in gj["features"] if f["geometry"]["type"] == "LineString")
     lon, lat = line["geometry"]["coordinates"][0]
     # lons here run 0..8 and lats 0..8 too, so use the known contour longitude.

@@ -48,6 +48,40 @@ def test_the_offline_suite_cannot_vouch_for_the_names_and_says_so():
         "nothing asks GeoMet whether the layer names are real"
 
 
+def test_every_satellite_product_declares_its_own_stretch():
+    # Greyscale visible and a colour RGB night composite cannot take the same
+    # filter - a stretch that separates cloud from ground on one destroys the
+    # hue that carries the meaning on the other. A product with no entry would
+    # silently fall back to no stretch at all, which is the washed-out layer
+    # this was written to fix.
+    filters = APP_JS[APP_JS.index("const SATELLITE_FILTERS"):]
+    filters = filters[: filters.index("};")]
+    for layer in geomet.SATELLITE_LAYERS:
+        assert layer in filters, f"{layer} has no satellite pane filter"
+    assert "saturate(0)" not in filters, "a colour composite must not be desaturated"
+
+
+def test_the_basemap_mute_is_applied_and_cleared_from_one_place():
+    # A dimmed basemap with no cloud over it reads as a rendering fault. The
+    # filter is set and cleared by one helper so the clearing path cannot be
+    # forgotten on one of the several routes satellite comes off the map.
+    assert "BASEMAP_UNDER_SATELLITE" in APP_JS
+    assert APP_JS.count("BASEMAP_UNDER_SATELLITE") == 2, \
+        "the basemap filter should be declared once and used once, inside the helper"
+    body = APP_JS[APP_JS.index("function applyCloudFirstStyling"):]
+    body = body[: body.index("\n}")]
+    assert "BASEMAP_UNDER_SATELLITE" in body and 'filter = drawn' in body
+
+
+def test_satellite_no_longer_dims_itself_when_radar_is_on():
+    # It yielded to 0.45 whenever radar was drawn, on a premise that was wrong:
+    # radar is requested transparent and sits in a pane ABOVE satellite, so it
+    # never mixes into it. What satellite actually mixed with was the basemap.
+    assert "satelliteOpacity" not in APP_JS
+    assert "SATELLITE_OPACITY" in APP_JS
+    assert "setOpacity(satelliteOpacity" not in APP_JS
+
+
 def test_the_frontend_asks_the_renamed_endpoint():
     # /api/radar_times became /api/wms_times when it started serving satellite
     # too. A stale path here 404s and both animations stop.
