@@ -894,6 +894,11 @@ button.src-pop:focus-visible { outline: 2px solid var(--accent); outline-offset:
    and points like one - overriding the [title] "help" cursor above, which this
    chip still carries as its accessible hint. */
 .chk .sub button.src-mini { cursor: pointer; }
+/* The same footnote on a card's meta line, where it marks a value that did not
+   come from the source the headline chip names - a TAF ceiling beside a model
+   wind. Quiet for the same reason: it annotates the number, it is not the
+   number. */
+.meta .src-mini { color: var(--muted); font-size: .9em; letter-spacing: .02em; cursor: help; }
 
 /* The raw METAR/TAF a checklist row was decided by. Monospaced and wrapped
    rather than scrolled: a TAF is several lines of fixed-width groups, and on a
@@ -1338,6 +1343,12 @@ details.taf summary { cursor: pointer; color: var(--accent); }
 .taf-p .taf-t { color: var(--muted); }
 .taf-p.in .taf-k, .taf-p.in .taf-t, .taf-p.in .taf-x { color: var(--go-ink); }
 .taf-p .taf-x { word-break: break-word; }
+/* Values a BECMG carries forward rather than restating. Quieter than the raw
+   text beside it, because it is the app's reading of the group and not
+   something the forecaster wrote - but it has to be legible, since it is often
+   the value the row is actually gated on. Italic, not a colour: the row already
+   uses colour to mean "you fly through this". */
+.taf-p .taf-i { font-style: italic; opacity: .75; }
 .taf-raw { margin-top: 6px; opacity: .6; }
 @media (max-width: 560px) {
   .taf-p { grid-template-columns: 52px 92px 1fr; font-size: .72rem; }

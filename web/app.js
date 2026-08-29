@@ -2559,9 +2559,9 @@ function endpointCard(a, role, timeLabel, etdIso) {
     ${whyBlock(a)}
     <div class="meta obs">
       <span>${srcChip(w.source)}${w.as_of ? " " + w.as_of : ""}</span>
-      <span><span class="mk">Wind</span> ${wind}</span>
+      <span><span class="mk">Wind</span> ${wind}${fieldSrc(w, "wind")}</span>
       ${ceilChip(w)}
-      ${w.visibility_sm != null ? `<span><span class="mk">Vis</span> ${w.visibility_sm} SM</span>` : ""}
+      ${w.visibility_sm != null ? `<span><span class="mk">Vis</span> ${w.visibility_sm} SM${fieldSrc(w, "visibility")}</span>` : ""}
       ${notamToggle(a)}
     </div>
     ${showTakeoff && to ? rwyWrap(to, w, "Takeoff", rwyComponentsLine(to, gust)) : ""}
@@ -2612,10 +2612,18 @@ function tafRow(p, etdIso) {
     p.kind === "overlay" ? "overlay" : "",
     p.in_window && p.gates === false ? "prob" : "",
   ].filter(Boolean).join(" ");
+  // A BECMG amends only what it names, so the group's own text can be silent
+  // about the very element the flight is gated on. The carried-forward values
+  // ride after the raw text, marked as unchanged rather than mixed into it -
+  // the row still matches the raw TAF at the foot of the card character for
+  // character, and no longer reads as a group the app has no data for.
+  const carried = p.inherited
+    ? ` <span class="taf-i" title="Not restated by this group - a BECMG changes only what it names, so this still applies.">${escapeHtml(p.inherited)} unchanged</span>`
+    : "";
   return `<div class="${cls}">
     <span class="taf-k">${escapeHtml(p.label || "")}</span>
     <span class="taf-t">${supDays(zRange(p.start, p.end, etdIso))}</span>
-    <span class="taf-x">${escapeHtml(p.text || "")}</span></div>`;
+    <span class="taf-x">${escapeHtml(p.text || "")}${carried}</span></div>`;
 }
 
 // Aerodromes within the route corridor - precautionary-landing options, shown
@@ -4012,13 +4020,13 @@ function ceilChip(w) {
   if (!sky) {
     // No stack at all - an older payload, or a card built without weather. The
     // ceiling alone is still better than nothing; silence is not.
-    if (w.ceiling_agl_ft != null) return `<span><span class="mk">Ceiling</span> ${fmtCeil(w.ceiling_agl_ft)}</span>`;
+    if (w.ceiling_agl_ft != null) return `<span><span class="mk">Ceiling</span> ${fmtCeil(w.ceiling_agl_ft)}${fieldSrc(w, "ceiling")}</span>`;
     return `<span class="warn" title="No cloud assessment reached this card."><span class="mk">Sky</span> not assessed</span>`;
   }
   if (sky.state === "unsampled") {
     return `<span class="warn" title="The forecast for this point did not download, so nothing looked at the sky. This is NOT a report of clear weather - pull the data again."><span class="mk">Sky</span> ${escapeHtml(sky.text)}</span>`;
   }
-  return `<span title="${escapeHtml(skyTitle(sky))}"><span class="mk">Sky</span> ${escapeHtml(sky.text)}</span>`;
+  return `<span title="${escapeHtml(skyTitle(sky))}"><span class="mk">Sky</span> ${escapeHtml(sky.text)}${fieldSrc(w, "ceiling")}</span>`;
 }
 
 // Where the layers came from, and how much to trust their heights. Estimated
@@ -4144,6 +4152,20 @@ function fmtHrMin(hr) {
 // a card reports one merged worst-case line, and "what is the weather actually
 // doing around my ETD" is the next question it raises. Observed (a METAR, which
 // the card already prints in full at the bottom) stays a plain chip.
+// The headline chip names ONE source for a card that routinely has several -
+// it is set on ceiling/visibility alone (see orchestrator._endpoint_weather_
+// forecast), so a wind the TAF never stated is printed right beside a chip
+// reading TAF. That is how a model gust - a maximum over the preceding hour,
+// not a METAR's peak - came to fail a flight under a limit written for the
+// other statistic. A value that did not come from the chip's source now says
+// so where it is printed, and only there: on the ordinary card, where
+// everything agrees, nothing is added.
+function fieldSrc(w, key) {
+  const src = (w.field_sources || {})[key];
+  if (!src || src === w.source) return "";
+  return ` <span class="src-mini" title="This value came from ${escapeHtml(src)}, not ${escapeHtml(w.source || "the headline source")}.">${escapeHtml(src)}</span>`;
+}
+
 function srcChip(source, a) {
   if (!source || source === "-") return `<span class="src">-</span>`;
   const k = { Observed: "OBSERVED", TAF: "TAF", HRDPS: "HRDPS" }[source] || "";

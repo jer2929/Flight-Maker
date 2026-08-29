@@ -447,6 +447,116 @@ def _dhm(day: int, hour: int, ref: datetime) -> datetime:
     return best + timedelta(days=extra)
 
 
+#: A chunk that is only a PROB header - ``PROB30``, or ``PROB30 2815/2818`` -
+#: and so cannot be a group in its own right.
+_BARE_PROB = re.compile(r"PROB\d{2}(?:\s+\d{4}/\d{4})?")
+
+
+def _chunks(body: str) -> list[str]:
+    """The TAF body split into its change groups.
+
+    ``PROB30 TEMPO`` is a single group and both halves have to stay together.
+    The splitter cannot see that on its own - the space before ``TEMPO`` looks
+    like every other space - so the halves are rejoined afterwards, which reads
+    better than the stacked lookbehinds it would otherwise take.
+
+    Torn apart, that group did real damage in both of its forms. ``PROB30
+    2815/2818 TEMPO 2815/2818 3SM TSRA`` became a null-conditioned PROB30 beside
+    a *firm* TEMPO carrying the thunderstorm, promoting a 30% chance to a
+    forecast that gates. The windowless ``PROB30 TEMPO 2815/2818 ...`` was
+    worse: the bare ``PROB30`` matched no branch in the caller and fell through
+    to MAIN, inventing a base group with every condition null across the whole
+    TAF validity.
+    """
+    out: list[str] = []
+    for chunk in re.split(r"\s+(?=FM\d{6}|BECMG\b|TEMPO\b|PROB\d{2}\b)", body):
+        if chunk.startswith("TEMPO") and out and _BARE_PROB.fullmatch(out[-1]):
+            out[-1] += " " + chunk
+        else:
+            out.append(chunk)
+    return out
+
+
+#: The condition fields a BECMG inherits, as the units they have to move in.
+#: Each entry is ``(the field that means "this group said nothing", the fields
+#: that travel with it)``. Wind is a unit because a steady wind from one group
+#: beside a gust from another is a wind nobody forecast; sky and ceiling are a
+#: unit because the ceiling is derived from the stack and the two must agree.
+_INHERITED = (
+    ("wind_kt", ("wind_dir_true", "wind_kt", "gust_kt")),
+    ("visibility_sm", ("visibility_sm",)),
+    ("sky", ("sky", "ceiling_agl_ft")),
+)
+
+
+def _carry_forward(segments: list[dict]) -> None:
+    """Fill each BECMG's unstated elements from the group it amends, in place.
+
+    A BECMG changes only the elements it names. The forecaster does not write
+    the wind again when the wind is not changing, so ``BECMG 2811/2813 P6SM NSW
+    SKC`` after ``FM281100 18008KT 6SM BR FEW002`` is still 180 at 8 - and
+    reading that silence as "no wind" is how a card came to fail a flight on a
+    12 kt gust spread the TAF never forecast. With no TAF wind
+    ``timeline._merge_model_taf`` leaves the model's, and HRDPS's gust is a
+    maximum over the preceding hour: a statistic the personal gust-spread limit
+    was never written against.
+
+    Applied to BECMG only. An FM is a complete restatement of every element
+    (ICAO Annex 3), so its silence is a statement and must not be overwritten;
+    MAIN has nothing to inherit from.
+
+    Hazards deliberately do not carry: ``NSW`` exists precisely to cancel them
+    and is not parsed today, so inheriting would keep weather a forecaster had
+    just cleared. That is the one element still read as "absent means none".
+
+    ``sky`` rather than ``ceiling_agl_ft`` is what marks "said nothing about
+    cloud" - see :func:`_parse_group`, where a group naming only FEW/SCT layers
+    has a sky and no ceiling. Keyed on the ceiling instead, a ``BECMG ... SKC``
+    would inherit the deck it had just lifted.
+    """
+    prevailing: Optional[dict] = None
+    for seg in sorted((s for s in segments if s["kind"] == "base"),
+                      key=lambda s: s["start"]):
+        cond = seg["cond"]
+        if seg["label"] == "BECMG" and prevailing is not None:
+            for marker, fields in _INHERITED:
+                if cond.get(marker) is None:
+                    for f in fields:
+                        cond[f] = prevailing.get(f)
+                    # So the card can say *why* a group with no wind in its text
+                    # is being gated on one - see ``orchestrator._taf_periods``.
+                    cond.setdefault("inherited", []).append(marker)
+        prevailing = cond
+
+
+def inherited_text(cond: dict) -> str:
+    """What a group carries forward, for the period table: ``18008KT, 10 SM``.
+
+    A BECMG that states no wind is still gated on one, and a pilot reading the
+    row against the raw TAF underneath has no way to know where that wind came
+    from - which is exactly how the period highlighted green for a flight looked
+    like a group the app had no wind for. The wind is printed in the TAF's own
+    notation, true and in knots, so it can be matched against the group above it
+    character for character.
+    """
+    marks = cond.get("inherited") or []
+    out: list[str] = []
+    for marker in marks:
+        if marker == "wind_kt" and cond.get("wind_kt") is not None:
+            d = cond.get("wind_dir_true")
+            gust = cond.get("gust_kt")
+            out.append(f"{'VRB' if d is None else f'{int(d):03d}'}{int(cond['wind_kt']):02d}"
+                       f"{f'G{int(gust):02d}' if gust is not None else ''}KT")
+        elif marker == "visibility_sm" and cond.get("visibility_sm") is not None:
+            v = cond["visibility_sm"]
+            out.append(f"{v:g} SM")
+        elif marker == "sky" and cond.get("sky") is not None:
+            text = getattr(cond["sky"], "text", "")
+            if text:
+                out.append(text)
+    return ", ".join(out)
+
+
 def parse_taf_segments(raw: str, now: Optional[datetime] = None) -> list[dict]:
     """Parse a TAF into ``{kind, start, end, cond}`` segments (UTC times).
 
@@ -474,7 +584,15 @@ def parse_taf_segments(raw: str, now: Optional[datetime] = None) -> list[dict]:
         main_end = _dhm(int(period.group(3)), int(period.group(4)), ref)
 
         body = up[period.end():]
-        chunks = re.split(r"\s+(?=FM\d{6}|BECMG\b|TEMPO\b|PROB\d{2}\b)", body.strip())
+        # ``PROB30 TEMPO`` is one group, and the lookahead must not split it: it
+        # used to break before the TEMPO as well, which tore the group in half
+        # and made the *worse* half firm. A ``PROB30 2815/2818 TEMPO 2815/2818
+        # 3SM TSRA`` became a null PROB30 overlay plus a gating TEMPO carrying
+        # the thunderstorm - a 30% chance promoted to a forecast - and the
+        # windowless ``PROB30 TEMPO 2815/2818 ...`` form left a bare "PROB30"
+        # chunk that matched no branch below and fell through to MAIN, inventing
+        # a base group with every condition null across the whole TAF.
+        chunks = _chunks(body.strip())
 
         segments: list[dict] = []
         for chunk in chunks:
@@ -489,8 +607,13 @@ def parse_taf_segments(raw: str, now: Optional[datetime] = None) -> list[dict]:
                                  "cond": _parse_group(chunk)})
             elif chunk.startswith("BECMG") and win:
                 start = _dhm(int(win.group(1)), int(win.group(2)), ref)
+                # Both ends of the transition. The change governs from ``start``
+                # (the conservative reading of "becoming"), but the group it
+                # supersedes is not finished until ``becmg_end`` - see
+                # :func:`base_intervals`, which is the only reader.
                 segments.append({"kind": "base", "label": "BECMG", "text": chunk,
                                  "start": start, "end": main_end,
+                                 "becmg_end": _dhm(int(win.group(3)), int(win.group(4)), ref),
                                  "cond": _parse_group(chunk)})
             elif (chunk.startswith("TEMPO") or chunk.startswith("PROB")) and win:
                 start = _dhm(int(win.group(1)), int(win.group(2)), ref)
@@ -504,13 +627,14 @@ def parse_taf_segments(raw: str, now: Optional[datetime] = None) -> list[dict]:
                 segments.append({"kind": "base", "label": "MAIN", "text": chunk,
                                  "start": main_start, "end": main_end,
                                  "cond": _parse_group(chunk)})
+        _carry_forward(segments)
         return segments
     except Exception:
         return []
 
 
 def base_intervals(segments: list[dict]) -> list[dict]:
-    """Segments with each base group's end clipped to the next base's start.
+    """Segments with each base group's end clipped to where the next takes over.
 
     ``parse_taf_segments`` stores every FM/BECMG base as ``start -> main_end``,
     relying on "latest applicable start wins" in :func:`conditions_at`. That is
@@ -519,13 +643,25 @@ def base_intervals(segments: list[dict]) -> list[dict]:
     "what hazards fall inside 12:00-14:00Z" would match a group that only takes
     over at 18:00Z. Overlays (TEMPO/PROB) already carry real windows and pass
     through untouched.
+
+    **A BECMG clips the group before it at the END of its transition, not the
+    start.** ``BECMG 2811/2813`` says the change happens *somewhere* between
+    1100Z and 1300Z, so through that window either side may be what you meet;
+    the BECMG still governs from 1100Z (its stored ``start``, the conservative
+    reading of a deterioration) and the outgoing group runs to 1300Z, so
+    :func:`worst_in_window` folds both and an improvement is not counted on
+    until it has actually completed. Clipping to the start instead read every
+    BECMG as an instant step, which - for an ``FM281100`` followed by a
+    ``BECMG 2811/2813`` - collapsed the FM to a zero-length period that covered
+    no window at all and printed as "FM 1100Z-1100Z".
     """
     bases = sorted((s for s in segments if s["kind"] == "base"), key=lambda s: s["start"])
     out: list[dict] = []
     for i, seg in enumerate(bases):
         end = seg["end"]
         if i + 1 < len(bases):
-            end = min(end, bases[i + 1]["start"])
+            nxt = bases[i + 1]
+            end = min(end, nxt.get("becmg_end") or nxt["start"])
         out.append({**seg, "end": end})
     out.extend(s for s in segments if s["kind"] != "base")
     return sorted(out, key=lambda s: s["start"])
@@ -578,6 +714,28 @@ def _precip_rank(c: dict) -> tuple:
     return (bool(c.get("hazards")), bool(c.get("precip_heavy")), bool(c.get("precip")))
 
 
+def _own_pair(c: dict) -> tuple[float, float] | None:
+    """``(steady, gust)`` as this one group forecasts it, or None if it gusts not.
+
+    A dict that has already been folded carries the pair it kept in
+    ``gust_pair``; differencing its own maxima instead would rebuild the very
+    mixture the pair exists to prevent.
+    """
+    if c.get("gust_pair") is not None:
+        return c["gust_pair"]
+    wind, gust = c.get("wind_kt"), c.get("gust_kt")
+    if wind is None or gust is None:
+        return None
+    return (float(wind), float(gust))
+
+
+def _gustiest(a: tuple | None, b: tuple | None) -> tuple | None:
+    """Whichever pair has the larger spread - the one a spread limit reads."""
+    if a is None or b is None:
+        return a or b
+    return a if (a[1] - a[0]) >= (b[1] - b[0]) else b
+
+
 def worse(a: dict, b: dict | None) -> dict:
     """Merge two condition dicts taking the more conservative of each field.
 
@@ -592,6 +750,19 @@ def worse(a: dict, b: dict | None) -> dict:
         out["wind_kt"] = b["wind_kt"]
         if b.get("wind_dir_true") is not None:
             out["wind_dir_true"] = b["wind_dir_true"]
+    # The strongest steady wind and the strongest gust in the window are each
+    # genuinely the worst the flight meets, so both keep their own maximum above
+    # and below. The *spread* is not like that: it is a relationship inside one
+    # observation, and differencing two maxima that came from different groups
+    # reports a gustiness nobody forecast. It errs one way, too: the largest
+    # steady wind can only ever shrink the gap, so the answer is always the real
+    # spread or less. 19010KT folded with 05003G25KT read as "10 gusting 25" - a
+    # 15 kt spread, where the group that gusts actually forecasts 22. So the pair
+    # is carried whole, from whichever single group is gustiest, and the spread
+    # limit is read from it (``evaluator.summary_spread_kt``).
+    pair = _gustiest(_own_pair(a), _own_pair(b))
+    if pair is not None:
+        out["gust_pair"] = pair
     for k in ("gust_kt", "cloud_cover_pct", "precip_mm"):
         if b.get(k) is not None and (out.get(k) is None or b[k] > out[k]):
             out[k] = b[k]
