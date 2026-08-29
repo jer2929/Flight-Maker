@@ -160,6 +160,11 @@ def _merge_model_taf(model: dict, taf: dict | None) -> tuple[dict, bool]:
     if taf.get("wind_kt") is not None:
         merged["wind_kt"] = taf["wind_kt"]
         merged["gust_kt"] = taf.get("gust_kt")
+        # The pair the spread is read from belongs to the wind, and is replaced
+        # with it - including when the TAF has none. Left standing, the model's
+        # pair would go on setting the gust spread under a wind the TAF supplied,
+        # which is the same lie as leaving the model's gust behind.
+        merged["gust_pair"] = taf.get("gust_pair")
         # VRB: the TAF declines to give a direction. Keep the model's rather than
         # blanking the runway diagram - it is the only directional guess going.
         if taf.get("wind_dir_true") is not None:

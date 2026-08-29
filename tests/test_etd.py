@@ -77,6 +77,107 @@ def test_taf_wind_beats_the_model_and_takes_its_gust_with_it():
     assert ws.field_sources["gust"] == Source.TAF
 
 
+# The reported CYHZ TAF, reduced to the groups that produced the bust: an FM
+# stating the wind, then a BECMG opening at the same instant that does not.
+TAF_BECMG_NO_WIND = (
+    f"CYFD {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
+    f"17005KT 6SM BR SCT002 "
+    f"FM{_dh(BASE + timedelta(hours=4))}00 18008KT 6SM BR FEW002 "
+    f"BECMG {_dh(BASE + timedelta(hours=4))}/{_dh(BASE + timedelta(hours=6))} P6SM NSW SKC"
+)
+
+
+def test_a_becmg_without_a_wind_does_not_hand_the_wind_to_the_model():
+    # The reported bust. The BECMG states no wind, so the card read the model's -
+    # 14 kt gusting 16 here, 5G17 at CYHZ - while its headline chip said TAF,
+    # because the TAF had supplied the visibility. A gust spread the forecaster
+    # never wrote then failed the flight.
+    segs = wx.parse_taf_segments(TAF_BECMG_NO_WIND)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, TAF_BECMG_NO_WIND, segs, _fc(wind=14.0), BASE + timedelta(hours=5),
+        span=(BASE + timedelta(hours=5), BASE + timedelta(hours=5, minutes=52)))
+    assert ws.wind_kt == 8                       # the FM's, carried by the BECMG
+    assert ws.wind_dir_true == 180
+    assert ws.gust_kt is None                    # and no gust came with it
+    assert ws.field_sources["wind"] == Source.TAF
+    assert ws.field_sources["gust"] == Source.TAF
+
+
+def test_the_group_the_becmg_supersedes_still_covers_the_transition():
+    # "Becoming between +4 h and +6 h" is not a step: the FM's 6 SM stands until
+    # the change has completed, so the window is gated on it rather than on the
+    # P6SM the BECMG is still on its way to.
+    segs = wx.parse_taf_segments(TAF_BECMG_NO_WIND)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, TAF_BECMG_NO_WIND, segs, _fc(), BASE + timedelta(hours=5),
+        span=(BASE + timedelta(hours=5), BASE + timedelta(hours=5, minutes=52)))
+    assert ws.visibility_sm == 6
+    assert ws.field_sources["visibility"] == Source.TAF
+
+
+def test_a_carried_wind_is_named_on_the_period_it_is_read_from():
+    # The row the pilot read as "the app has no wind here". It has to say which
+    # wind it is being gated on, in the TAF's own notation, or the green
+    # highlight is the only thing on the line that knows.
+    segs = wx.parse_taf_segments(TAF_BECMG_NO_WIND)
+    periods = orchestrator._taf_periods(segs, None)
+    becmg = next(p for p in periods if p.label == "BECMG")
+    assert becmg.inherited == "18008KT"
+    assert all(not p.inherited for p in periods if p.label == "FM")
+
+
+def test_the_carried_wind_ends_the_gust_spread_bust():
+    # The whole point of the fix, at the row the pilot actually read: with the
+    # TAF's own wind in hand there is no gust to difference, so the spread row
+    # reports nothing rather than failing the flight on a model statistic. The
+    # flight can still be stopped - by the 6 SM the TAF really does forecast -
+    # but not by a wind nobody wrote.
+    segs = wx.parse_taf_segments(TAF_BECMG_NO_WIND)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, TAF_BECMG_NO_WIND, segs, _fc(wind=14.0), BASE + timedelta(hours=5),
+        span=(BASE + timedelta(hours=5), BASE + timedelta(hours=5, minutes=52)))
+    rows = {c.key: c for c in
+            evaluator.conditions_checks(ws, None, "day", ceiling_mode="endpoint")}
+    assert rows["gust_spread"].passed
+    assert rows["gust_spread"].actual_text == "no data"   # the TAF forecasts no gust
+    assert rows["wind"].passed
+    assert rows["wind"].source == "TAF"
+    # And the row that does fail names the TAF, not HRDPS.
+    assert not rows["visibility"].passed
+    assert rows["visibility"].source == "TAF"
+
+
+def test_the_spread_row_reads_the_pair_and_not_the_two_maxima():
+    # A TAF whose calm group has the strongest steady wind and whose gusty group
+    # has the strongest gust. The row must report the 22 kt the second group
+    # actually forecasts, not the 15 kt left over from subtracting one group's
+    # maximum from the other's - which is the direction that hides gustiness.
+    taf = (f"CYFD {_dh(BASE)}00Z {_dh(BASE)}/{_dh(BASE + timedelta(hours=24))} "
+           f"19010KT P6SM SKC "
+           f"FM{_dh(BASE + timedelta(hours=4))}00 05003G25KT P6SM SKC")
+    segs = wx.parse_taf_segments(taf)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, taf, segs, _fc(), BASE + timedelta(hours=3),
+        span=(BASE + timedelta(hours=3), BASE + timedelta(hours=5)))
+    assert ws.wind_kt == 10 and ws.gust_kt == 25     # both maxima still honest
+    assert ws.gust_pair == (3.0, 25.0)
+    rows = {c.key: c for c in
+            evaluator.conditions_checks(ws, None, "day", ceiling_mode="endpoint")}
+    assert rows["gust_spread"].actual_text == "22 kt"
+    assert not rows["gust_spread"].passed
+
+
+def test_a_taf_wind_does_not_inherit_the_models_gust_pair():
+    # The pair travels with the wind. Left behind when the TAF supplied a wind,
+    # the model's pair went on setting the spread underneath it - the same lie as
+    # keeping the model's gust, one level down.
+    segs = wx.parse_taf_segments(TAF_BECMG_NO_WIND)
+    ws = orchestrator._endpoint_weather_forecast(
+        None, TAF_BECMG_NO_WIND, segs, _fc(wind=14.0), BASE + timedelta(hours=5),
+        span=(BASE + timedelta(hours=5), BASE + timedelta(hours=5, minutes=52)))
+    assert ws.gust_pair is None
+
+
 def test_a_vrb_taf_wind_keeps_the_model_direction():
     # VRB means the TAF declines to give a direction. Blanking it would leave the
     # runway diagram with nothing to draw, so the model's stands.

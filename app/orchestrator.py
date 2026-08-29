@@ -641,7 +641,12 @@ def _endpoint_weather_forecast(metar: str | None, taf: str | None,
     ws.field_sources = srcs
     ws.window_forecast = _window_forecast(taf_win, when)
     ws.window_gated = True
-    ws.as_of = when.strftime("%d%H%M") + "Z"
+    # "at DDHHMMZ", not a bare stamp: this is the hour the card was assessed for,
+    # and it renders immediately after the source chip. Bare, beside a chip
+    # reading TAF, it read as the TAF's own issue time - a forecast for the ETA
+    # presented as a report filed at the ETA. On the observation path (see
+    # ``_endpoint_weather``) the stamp *is* a report time and stays bare.
+    ws.as_of = "at " + when.strftime("%d%H%M") + "Z"
     # Headline provenance: the TAF is authoritative for ceiling/vis, so if it
     # supplied either, that is what the pilot is actually reading.
     if srcs.get("ceiling") == Source.TAF or srcs.get("visibility") == Source.TAF:
@@ -707,6 +712,7 @@ def _apply(ws: WeatherSummary, c: dict) -> None:
     ws.wind_dir_true = c.get("wind_dir_true")
     ws.wind_kt = c.get("wind_kt")
     ws.gust_kt = c.get("gust_kt")
+    ws.gust_pair = c.get("gust_pair")
     ws.visibility_sm = c.get("visibility_sm")
     ws.ceiling_agl_ft = c.get("ceiling_agl_ft")
     if c.get("sky") is not None:
@@ -770,6 +776,7 @@ def _taf_periods(segs: list[dict], span: tuple[datetime, datetime] | None) -> li
             in_window=bool(span and wx.overlaps(s, *span)),
             gates=not wx.is_prob(s),
             hazards=list(s["cond"].get("hazards") or []),
+            inherited=wx.inherited_text(s["cond"]),
         ))
     return out
 

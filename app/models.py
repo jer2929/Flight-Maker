@@ -176,6 +176,13 @@ class TafPeriod(BaseModel):
     # different border colour, never as a loss of the green.
     gates: bool = True
     hazards: list[str] = []
+    # What this group carries forward from the one it amends, already rendered
+    # ("18008KT, 10 SM"). A BECMG changes only the elements it names, so a group
+    # whose text shows no wind can still be the one a wind limit is read from -
+    # and the row has to say so, or it reads as a group the app has no data for.
+    # Empty for everything that states its own conditions. See
+    # ``weather.inherited_text``.
+    inherited: str = ""
 
 
 class NearbyStation(BaseModel):
@@ -341,6 +348,14 @@ class WeatherSummary(BaseModel):
     wind_dir_mag: Optional[float] = None
     wind_kt: Optional[float] = None
     gust_kt: Optional[float] = None
+    # ``(steady, gust)`` as one forecast group or hour actually stated it, when
+    # the values above are the worst of several. Both of those are honest
+    # maxima - the flight really does meet that steady wind and really does meet
+    # that gust - but they can come from different groups, and subtracting one
+    # from the other then reports a gustiness no forecast contains. The spread
+    # limit is read from this pair instead; None when nothing gusts, or when the
+    # values above are already a single observation. See ``weather.worse``.
+    gust_pair: Optional[tuple[float, float]] = None
     visibility_sm: Optional[float] = None
     ceiling_agl_ft: Optional[float] = None
     hazards: list[str] = []  # e.g. ["thunderstorm", "freezing_rain"]

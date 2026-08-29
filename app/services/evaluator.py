@@ -139,6 +139,22 @@ def gust_spread_kt(wind_kt: float | None, gust_kt: float | None) -> float | None
     return float(printed_kt(gust_kt) - printed_kt(wind_kt))
 
 
+def summary_spread_kt(weather: WeatherSummary) -> float | None:
+    """The gust spread this card should be gated on.
+
+    ``wind_kt`` and ``gust_kt`` are each the worst in the window and can come
+    from different forecast groups; the spread is a relationship inside one
+    observation, so where the fold kept the pair that actually gusted
+    (``weather.gust_pair``, set by ``weather.worse``) that is what the limit
+    reads. Falling back to the headline values is right for everything that is
+    already a single observation - a METAR, one model hour, one TAF group.
+    """
+    pair = weather.gust_pair
+    if pair is not None:
+        return gust_spread_kt(pair[0], pair[1])
+    return gust_spread_kt(weather.wind_kt, weather.gust_kt)
+
+
 def gust_spread_gates(gust_kt: float | None) -> bool:
     """Whether a spread this peak gust produced is allowed to fail a flight.
 
@@ -217,8 +233,8 @@ def conditions_checks(
         "wind", "Sustained wind", w["sustained_max_kt"], weather.wind_kt,
         unit="kt", source=wind_src,
     ), weather, "wind_kt"))
-    # Gust spread
-    spread = gust_spread_kt(weather.wind_kt, weather.gust_kt)
+    # Gust spread, read from a single observation - see ``summary_spread_kt``.
+    spread = summary_spread_kt(weather)
     checks.append(apply_gust_spread_floor(_attribute(_num_check(
         "gust_spread", "Gust spread", w["gust_spread_max_kt"], spread,
         unit="kt", source=gust_src,
@@ -598,7 +614,7 @@ def derive_threats(
         threats.add("strong_or_gusty_winds")
     # Same floor as the hard-limit row, or the threat stack would simply re-fire
     # a spread the row above has just said is too small to mean anything.
-    spread = gust_spread_kt(weather.wind_kt, weather.gust_kt)
+    spread = summary_spread_kt(weather)
     if (spread is not None and spread >= spread_trip
             and gust_spread_gates(weather.gust_kt)):
         threats.add("strong_or_gusty_winds")

@@ -243,6 +243,163 @@ def test_a_point_query_at_the_boundary_still_finds_a_base():
     assert w is not None
 
 
+# --- a BECMG amends only what it names ---------------------------------------
+
+# The reported CYHZ bug, in the shape that produced it: an FM at 1100Z followed
+# immediately by a BECMG whose transition opens at the same instant. The BECMG
+# says nothing about wind, because the wind is not changing.
+TAF_CARRY = (
+    f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 "
+    f"17005KT 6SM BR SCT002 "
+    f"FM{_dd(D)}1400 18008KT 6SM BR FEW002 "
+    f"BECMG {_dd(D)}14/{_dd(D)}16 P6SM NSW SKC "
+    f"FM{_dd(D)}2000 18008G18KT P6SM SCT160"
+)
+
+
+def test_a_becmg_carries_the_wind_it_does_not_restate():
+    # The bug: read as "no wind", the BECMG let the model's wind stand for the
+    # rest of the flight - and HRDPS's gust is a maximum over the preceding hour,
+    # so the spread it produced failed a limit written for a METAR's peak. A
+    # forecaster does not write the wind twice when it is not changing.
+    becmg = next(s for s in parse_taf_segments(TAF_CARRY) if s["label"] == "BECMG")
+    assert becmg["cond"]["wind_kt"] == 8
+    assert becmg["cond"]["wind_dir_true"] == 180
+    assert becmg["cond"]["gust_kt"] is None
+    assert becmg["cond"]["inherited"] == ["wind_kt"]
+
+
+def test_a_becmg_does_not_carry_what_it_does_restate():
+    # It says P6SM and SKC, so those are its own - carrying the FM's 6 SM over
+    # them would ignore the change the group exists to state.
+    becmg = next(s for s in parse_taf_segments(TAF_CARRY) if s["label"] == "BECMG")
+    assert becmg["cond"]["visibility_sm"] == 10
+    assert becmg["cond"]["ceiling_agl_ft"] is None
+
+
+def test_an_fm_restates_everything_and_carries_nothing():
+    # An FM is a complete statement of every element (ICAO Annex 3), so its
+    # silence is a statement too. Only a BECMG amends.
+    fms = [s for s in parse_taf_segments(TAF_CARRY) if s["label"] == "FM"]
+    assert all(not s["cond"].get("inherited") for s in fms)
+
+
+def test_a_becmg_carries_a_visibility_it_does_not_restate():
+    # Same rule, the field that is not the wind: this BECMG changes the wind and
+    # the cloud and says nothing about visibility, so the P6SM stands.
+    raw = (f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM SCT040 "
+           f"BECMG {_dd(D)}18/{_dd(D)}19 19006KT SCT180")
+    becmg = next(s for s in parse_taf_segments(raw) if s["label"] == "BECMG")
+    assert becmg["cond"]["visibility_sm"] == 10
+
+
+def test_a_becmg_clearing_the_sky_does_not_inherit_the_deck_it_lifted():
+    # Keyed on the ceiling rather than the stack, "said nothing about cloud" and
+    # "said SKC" look identical, and a group would inherit the overcast it had
+    # just cleared.
+    raw = (f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT 2SM OVC005 "
+           f"BECMG {_dd(D)}18/{_dd(D)}19 SKC")
+    becmg = next(s for s in parse_taf_segments(raw) if s["label"] == "BECMG")
+    assert becmg["cond"]["ceiling_agl_ft"] is None
+    assert becmg["cond"]["visibility_sm"] == 2      # this one it really is silent on
+
+
+def test_no_base_period_is_zero_length():
+    # An FM superseded by a BECMG opening at the same instant used to clip to
+    # nothing at all: it printed as "FM 1400Z-1400Z", and because `covers` is
+    # half-open at the near end it then matched no window, so the wind in it
+    # reached neither the gate nor the card.
+    for p in taf_periods(parse_taf_segments(TAF_CARRY)):
+        assert p["end"] > p["start"], p["label"]
+
+
+def test_a_becmg_does_not_end_the_group_before_it_until_the_transition_does():
+    # "Becoming between 1400Z and 1600Z" is not a step at 1400Z: through the
+    # transition either side may be what you meet, so the outgoing group runs to
+    # 1600Z and the gate is the worse of the two. An improvement is not counted
+    # on until it has actually completed.
+    fm = next(s for s in taf_periods(parse_taf_segments(TAF_CARRY))
+              if s["label"] == "FM" and s["start"] == _q(14))
+    assert fm["end"] == _q(16)
+    w = worst_in_window(parse_taf_segments(TAF_CARRY), _q(15), _q(15) + timedelta(minutes=52))
+    assert w["visibility_sm"] == 6               # the FM's, not the BECMG's P6SM
+    assert w["wind_kt"] == 8 and w["gust_kt"] is None
+    assert [s["label"] for s in w["governing"]] == ["FM", "BECMG"]
+
+
+def test_the_becmg_still_governs_from_the_start_of_its_transition():
+    # The other half of the same rule: a deterioration is not delayed to the end
+    # of the transition just because the group before it is still in force.
+    raw = (f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM SKC "
+           f"BECMG {_dd(D)}14/{_dd(D)}16 27008KT 1SM OVC003")
+    w = worst_in_window(parse_taf_segments(raw), _q(14) + timedelta(minutes=15), _q(15))
+    assert w["visibility_sm"] == 1
+    assert w["ceiling_agl_ft"] == 300
+
+
+# --- a wind is one observation, not three numbers -----------------------------
+
+
+def test_folding_keeps_the_worst_of_each_wind_value():
+    # Both maxima are honest: the flight really does meet 10 kt steady in the
+    # first group and really does meet a 25 kt gust in the second, and each is
+    # what its own limit row has to be read against.
+    raw = (f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 19010KT P6SM SKC "
+           f"FM{_dd(D)}1400 05003G25KT P6SM SKC")
+    w = worst_in_window(parse_taf_segments(raw), _q(13), _q(15))
+    assert (w["wind_kt"], w["gust_kt"], w["wind_dir_true"]) == (10, 25, 190)
+
+
+def test_the_spread_comes_from_one_group_not_from_two_maxima():
+    # ...but the spread is a relationship inside one observation. Differencing
+    # the two maxima gave 25-10 = 15 kt, which is not what either group says -
+    # and systematically *under*-reports, because the largest steady wind can
+    # only ever shrink the gap. The second group forecasts 3 kt gusting 25: a
+    # 22 kt spread, and that is the one the limit has to see.
+    raw = (f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 19010KT P6SM SKC "
+           f"FM{_dd(D)}1400 05003G25KT P6SM SKC")
+    w = worst_in_window(parse_taf_segments(raw), _q(13), _q(15))
+    assert w["gust_pair"] == (3.0, 25.0)
+
+
+def test_no_pair_is_kept_when_nothing_gusts():
+    # Nothing to protect, and a (wind, wind) pair would report a 0 kt spread as
+    # though a forecast had stated one.
+    raw = (f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 19010KT P6SM SKC "
+           f"FM{_dd(D)}1400 05003KT P6SM SKC")
+    w = worst_in_window(parse_taf_segments(raw), _q(13), _q(15))
+    assert (w["wind_kt"], w["gust_kt"], w["wind_dir_true"]) == (10, None, 190)
+    assert w.get("gust_pair") is None
+
+
+# --- PROB30 TEMPO is one group ------------------------------------------------
+
+
+def test_prob_tempo_stays_a_single_prob_group():
+    # Split before the TEMPO, the 30% chance became two groups and the worse half
+    # became firm: a null-conditioned PROB30 plus a gating TEMPO carrying the
+    # thunderstorm.
+    raw = (f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM SKC "
+           f"PROB30 {_dd(D)}15/{_dd(D)}18 TEMPO {_dd(D)}15/{_dd(D)}18 3SM TSRA BKN025CB")
+    segs = parse_taf_segments(raw)
+    assert [s["label"] for s in segs] == ["MAIN", "PROB30"]
+    w = worst_in_window(segs, _q(16), _q(17))
+    assert w["hazards"] == []                       # the TSRA never gates
+    assert "thunderstorm" in w["prob"]["hazards"]
+
+
+def test_a_windowless_prob_tempo_invents_no_base_group():
+    # `PROB30 TEMPO 1500/1800 ...` left a bare "PROB30" chunk matching no branch,
+    # which fell through to MAIN - a second base group spanning the whole TAF
+    # with every condition null, quietly erasing the real one.
+    raw = (f"CYFD {_dd(D)}1140Z {_dd(D)}12/{_dd(D)}24 27008KT P6SM SKC "
+           f"PROB30 TEMPO {_dd(D)}15/{_dd(D)}18 3SM TSRA BKN025CB")
+    segs = parse_taf_segments(raw)
+    assert [s["label"] for s in segs] == ["MAIN", "PROB30"]
+    assert [s["kind"] for s in segs] == ["base", "overlay"]
+    assert worst_in_window(segs, _q(16), _q(17))["hazards"] == []
+
+
 # --- which group produced which value ----------------------------------------
 
 
