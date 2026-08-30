@@ -1177,6 +1177,10 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 .iso-label span { padding: 0 3px; border-radius: var(--r-sm); line-height: 1.25; }
 /* position+z-index makes the map its own stacking context so Leaflet's internal
    panes/controls (z-index up to ~1000) stay trapped below the sticky header. */
+/* Why the satellite picture looks like static at 0200Z. Sits between the pills
+   and the map, where the pill that fixes it is one tap away. */
+.sat-note { margin: 8px 0 0; font-size: .74rem; font-style: italic; line-height: 1.4; }
+.sat-note:empty { display: none; }
 .radar-map { height: 380px; width: 100%; border-radius: var(--r-md); border: 1px solid var(--line);
   position: relative; z-index: 0; }
 /* Hazard overlay: legend under the map, popups over it. */
@@ -1214,6 +1218,34 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 .radar-time { min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
 /* Leaflet tiles render light; keep its controls readable on the dark theme */
 .leaflet-container { background: var(--bg); }
+
+/* The layer list. Leaflet ships it as a full-size panel pinned over the map's
+   top-right corner, and on a phone six checkboxes cover most of the weather
+   they are a key to. Compact type, a capped width and a header with a close
+   button make it something you can read past - and put away.
+
+   GEOMETRY AND TYPE ONLY. The panel's own translucent background is set inline
+   by decorateLayerControl(), under the same mandate as HAZARD_COLORS and the
+   isobar chrome: it is painted over OSM raster and the satellite image, which
+   are light in both themes, so it must not follow the theme tokens. Radii are
+   geometry and stay on them. */
+.leaflet-control-layers.layer-panel { border-radius: var(--r-md); }
+.leaflet-control-layers-expanded.layer-panel {
+  padding: 6px 9px 7px; max-width: min(55%, 230px);
+  -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+}
+.layer-panel .leaflet-control-layers-list { margin: 0; }
+.layer-panel label { margin: 0; font-size: .74rem; }
+.layer-panel label > span { display: flex; align-items: center; gap: 5px; line-height: 1.5; }
+.layer-panel input[type=checkbox] { flex: none; width: 13px; height: 13px; margin: 0; }
+.layer-panel-head { display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 3px; font-size: .62rem; font-weight: 600;
+  letter-spacing: .07em; text-transform: uppercase; opacity: .55; }
+/* Bigger than it looks: the glyph is small so the panel stays small, but the
+   padding gives it a target a thumb can hit on the first try. */
+.layer-panel-close { border: 0; background: none; color: inherit; cursor: pointer;
+  font-size: 1rem; line-height: 1; padding: 2px 4px; margin: -2px -4px -2px 0; opacity: .8; }
+.layer-panel-close:hover { opacity: 1; }
 
 /* GFA graphical area forecast panel */
 .gfa-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
