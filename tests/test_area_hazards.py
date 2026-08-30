@@ -573,6 +573,23 @@ def test_a_line_and_width_is_read_as_a_corridor():
     assert width == 30.0
 
 
+def test_a_width_written_as_the_whole_band_is_halved():
+    """"50NM WID LINE" is a band 50 nm across - 25 nm either side.
+
+    The other spelling, "30NM EITHER SIDE OF LINE", is a half width already, and
+    reading the two the same way doubled every corridor the Canadian feed
+    issues - which is nearly all of them, since GFACN bulletins are written this
+    way almost exclusively. Everything downstream takes ``corridor_nm`` as a half
+    width: the relevance corridor, and the band the map draws.
+    """
+    pts, width = apr.parse_icao_corridor(
+        "CZYZ TORONTO FIR SFC VIS 1 1/2-3SM -RA BR - OVC CLD 500-1000/20000FT "
+        "OBS WI 50NM WID LINE BTN /N4519 W08001/30 NW CYQA - "
+        "/N4453 W07636/45 N CYGK MOV E 10KT NC")
+    assert len(pts) == 2, "the line itself still reads"
+    assert width == 25.0
+
+
 def test_a_line_with_no_stated_width_reads_as_a_line_with_no_width():
     """``None`` is not zero. The caller falls back to its own corridor rather
     than inventing a number the forecaster never wrote."""
