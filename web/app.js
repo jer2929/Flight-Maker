@@ -1298,6 +1298,25 @@ function applyCloudFirstStyling() {
   if (tiles) tiles.style.filter = drawn ? BASEMAP_UNDER_SATELLITE : "";
   const sat = map.getPane("satellitePane");
   if (sat) sat.style.filter = SATELLITE_FILTERS[RADAR.satLayer] || "";
+  updateSatelliteNote();
+}
+
+// Visible imagery is reflected sunlight, so after dark it is not a dimmer
+// picture - it is sensor noise, and the contrast stretch that separates a cloud
+// deck from the field under it in daylight amplifies precisely that noise. The
+// product default already follows the flight's own day/night, but the choice is
+// remembered, so a pilot who once picked Visible keeps it into every night
+// flight afterwards. Overriding a choice they made would be worse than the
+// grain; saying why the picture looks like static is not, and it is the
+// difference between "the imagery is the wrong product for this hour" and "this
+// app is broken".
+function updateSatelliteNote() {
+  const el = $("#sat-note");
+  if (!el) return;
+  const drawn = !!(RADAR.sat && RADAR.map && RADAR.map.hasLayer(RADAR.sat));
+  el.textContent = (drawn && RADAR.satLayer === SATELLITE_VISIBLE && currentMode() === "night")
+    ? "Visible is sunlit imagery and it is night on this route - the grain is sensor noise, not cloud. Infrared is the product that sees after dark."
+    : "";
 }
 
 // Visible imagery is black at night, so a night flight that opened on the
@@ -1589,8 +1608,74 @@ function addRadarOverlay(layer, name) {
   if (!RADAR.layerControl) {
     RADAR.layerControl = L.control.layers(null, {}, { collapsed: false, position: "topright" })
       .addTo(RADAR.map);
+    decorateLayerControl(RADAR.layerControl);
   }
   RADAR.layerControl.addOverlay(layer, name);
+}
+
+// Leaflet offers the layer list two ways and on a phone neither is right:
+// `collapsed: false` is a permanent six-row panel over the top-right of the map
+// - which on this map is where the weather is - and `collapsed: true` hides the
+// whole idea behind an unlabelled icon that opens on hover, an event a touch
+// screen does not have. What follows is the third way: built open, compact, and
+// closable.
+const LAYERS_OPEN_KEY = "minima.layerlist.v1";
+// Leaflet's panel is opaque white. Letting a little of the map through it is
+// most of what stops it reading as a hole punched in the weather. Set here and
+// not in the stylesheet for the reason given above HAZARD_COLORS: this is a map
+// surface, over raster that is light in both themes.
+const LAYER_PANEL_BG = "rgba(255, 255, 255, 0.92)";
+
+// Whether the list starts open.
+function layersPanelOpen() {
+  try {
+    const v = localStorage.getItem(LAYERS_OPEN_KEY);
+    if (v !== null) return v === "1";
+  } catch (_) {}
+  // No stored choice yet: open where it costs nothing and shut on a narrow
+  // screen, where the list would cover most of what it is a key to. The pilot's
+  // first close (or open) replaces this guess for good.
+  return window.innerWidth >= 700;
+}
+function setLayersPanelOpen(open) {
+  try { localStorage.setItem(LAYERS_OPEN_KEY, open ? "1" : "0"); } catch (_) {}
+}
+
+// The header and the close button, added to the control Leaflet has already
+// built. Nothing here replaces its machinery - `collapse()` and the toggle icon
+// are its own; this only gives them a way in on a touch screen.
+function decorateLayerControl(control) {
+  const c = control.getContainer();
+  if (!c) return;
+  c.classList.add("layer-panel");
+  c.style.background = LAYER_PANEL_BG;
+  const list = c.querySelector(".leaflet-control-layers-list");
+  // Collapsed, the panel becomes Leaflet's own layers icon in the same corner,
+  // and that icon's click handler expands it again. So the close button is
+  // offered only where that icon is: a panel that can be shut and not reopened
+  // would take the layer toggles away for the rest of the session, which is
+  // worse than a panel that will not shut.
+  const toggle = c.querySelector(".leaflet-control-layers-toggle");
+  if (!list || !toggle) return;
+  L.DomEvent.on(toggle, "click", () => setLayersPanelOpen(true));
+
+  const head = L.DomUtil.create("div", "layer-panel-head");
+  head.appendChild(document.createTextNode("Layers"));
+  const close = L.DomUtil.create("button", "layer-panel-close", head);
+  close.type = "button";
+  close.textContent = "×";
+  close.title = "Hide the layer list";
+  close.setAttribute("aria-label", "Hide the layer list");
+  L.DomEvent.on(close, "click", (e) => {
+    // Without this the click carries on to the map underneath, and on the way
+    // it lands on the label row the button sits above - shutting the panel and
+    // turning a layer off in the same tap.
+    L.DomEvent.stop(e);
+    control.collapse();
+    setLayersPanelOpen(false);
+  });
+  list.insertBefore(head, list.firstChild);
+  if (!layersPanelOpen()) control.collapse();
 }
 
 async function loadFlightCategory(pts, etdUtc) {
@@ -1747,15 +1832,51 @@ function parseISODurationMin(s) {
   const m = /^P(?:T)?(?:(\d+)H)?(?:(\d+)M)?/.exec(s || "");
   return m ? (+(m[1] || 0)) * 60 + (+(m[2] || 0)) : 0;
 }
+// How far back the animation reaches, and the ceiling on how many frames that
+// may be cut into. BOTH layers are held to the same window, which is what makes
+// one slider honest: radar composites land every ~6 minutes and GOES every ~10,
+// so the two lists are different lengths, but they now cover the same three
+// hours and a position on the slider means the same moment in each.
+const RADAR_WINDOW_MIN = 180;
+const RADAR_MAX_FRAMES = 40;
+// The panel heading's "last 3 h" is the same fact as the window above, so it is
+// read from it: the two used to be a constant and a string that could disagree,
+// and the heading was the one a pilot would believe.
+const RADAR_SOURCE_NOTE = `Environment Canada · last ${RADAR_WINDOW_MIN / 60} h`;
+
+// Keep the NEWEST frames. This list used to be built forwards from the extent's
+// start and cut at 40, which is right for radar - GeoMet publishes about three
+// hours of it at 6 minutes, so the cut never fired - and quietly wrong for
+// satellite, whose extent runs far longer. There the cut landed at the OLD end:
+// every frame in the list predated the radar sweeps beside it, and because
+// `frameAtOrBefore` clamps to the newest frame it has, the satellite layer was
+// handed that same stale frame at every slider position. Two layers on one
+// timeline and only one of them moving - which is exactly what it looked like.
+function newestFrames(times) {
+  const newest = Date.parse(times[times.length - 1]);
+  const floor = isNaN(newest) ? -Infinity : newest - RADAR_WINDOW_MIN * 60000;
+  // An unparseable timestamp is kept rather than dropped: it is GeoMet's own
+  // string and the WMS will understand it even where Date.parse does not.
+  const out = times.filter((t) => { const p = Date.parse(t); return isNaN(p) || p >= floor; });
+  return out.slice(-RADAR_MAX_FRAMES);
+}
+
 function radarFrameTimes(caps) {
-  if (caps.times && caps.times.length) return caps.times;
+  if (caps.times && caps.times.length) return newestFrames(caps.times);
   const start = Date.parse(caps.start), end = Date.parse(caps.end);
   const stepMin = parseISODurationMin(caps.interval) || 6;
   if (isNaN(start) || isNaN(end)) return caps.default ? [caps.default] : [];
+  const step = stepMin * 60000;
+  // Anchored on `end` and walked backwards, so the newest frame is always in the
+  // list by construction and it is the old end that gets dropped when the extent
+  // is longer than the window.
+  const span = Math.min(RADAR_WINDOW_MIN * 60000, (RADAR_MAX_FRAMES - 1) * step);
+  const first = Math.max(start, end - span);
   const out = [];
-  for (let t = start; t <= end && out.length < 40; t += stepMin * 60000) {
+  for (let t = end; t >= first; t -= step) {
     out.push(new Date(t).toISOString().replace(/\.\d+Z$/, "Z"));
   }
+  out.reverse();
   return out.length ? out : (caps.default ? [caps.default] : []);
 }
 const radarTimeLabel = (iso) => {
@@ -1822,7 +1943,7 @@ async function loadRadar(r, stops) {
   const satProduct = defaultSatelliteProduct();
   host.innerHTML = `<div class="panel radar-panel">
     <div class="radar-head">
-      <h3 id="radar-title" data-tail="${hazardsGeo ? " &amp; hazards" : ""}">Radar, satellite${hazardsGeo ? " &amp; hazards" : ""} <span class="hint">Environment Canada · last 3 h</span></h3>
+      <h3 id="radar-title" data-tail="${hazardsGeo ? " &amp; hazards" : ""}">Radar, satellite${hazardsGeo ? " &amp; hazards" : ""} <span class="hint">${RADAR_SOURCE_NOTE}</span></h3>
       <div class="radar-types">
         ${Object.entries(RADAR_LABELS).map(([k, v]) =>
           `<button class="radar-type ${k === RADAR.layer ? "active" : ""}" data-layer="${k}">${v}</button>`).join("")}
@@ -1832,6 +1953,7 @@ async function loadRadar(r, stops) {
              title="Satellite: ${v}">${v}</button>`).join("")}
       </div>
     </div>
+    <div id="sat-note" class="sat-note hint"></div>
     <div id="radar-map" class="radar-map"></div>
     <div class="hz-legend" id="radar-legend">${hazardsGeo ? hazardLegend(hazardsGeo) : ""}</div>
     <div class="radar-controls">
@@ -2078,7 +2200,7 @@ function markSatelliteAvailability() {
   const h = $("#radar-title");
   if (h) {
     const sat = anySatelliteUsable() ? ", satellite" : "";
-    h.innerHTML = `Radar${sat}${h.dataset.tail || ""} <span class="hint">Environment Canada · last 3 h</span>`;
+    h.innerHTML = `Radar${sat}${h.dataset.tail || ""} <span class="hint">${RADAR_SOURCE_NOTE}</span>`;
   }
 }
 

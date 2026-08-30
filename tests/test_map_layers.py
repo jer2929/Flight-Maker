@@ -155,3 +155,70 @@ def test_isobar_colours_stay_out_of_the_stylesheet():
     colour_prop = re.compile(r"(?<!-)\b(color|background(-color)?|fill|stroke|border-color)\s*:")
     for line in iso_css:
         assert not colour_prop.search(line), f"isobar chrome must not be themed: {line.strip()}"
+
+
+def test_the_layer_list_can_be_put_away():
+    # Leaflet offers permanently-open or open-on-hover, and on a phone neither
+    # works: six checkboxes pinned over the top-right corner cover the weather
+    # they are a key to, and hover is not an event a touch screen has. The panel
+    # is built open and given a close button of its own.
+    body = APP_JS[APP_JS.index("function decorateLayerControl"):]
+    body = body[: body.index("\n}\n")]
+    assert "layer-panel-close" in body
+    assert "control.collapse()" in body, "the close button must actually collapse the control"
+    assert "L.DomEvent.stop" in body, \
+        "an unstopped click reaches the label row underneath and toggles a layer"
+    assert ".layer-panel-close" in CSS
+
+
+def test_closing_the_layer_list_is_never_one_way():
+    # Collapsed, the panel is Leaflet's layers icon, whose own click handler
+    # expands it again. If that icon is not there the close button must not be
+    # offered at all - shutting the list with no way back would take the layer
+    # toggles away for the rest of the session.
+    body = APP_JS[APP_JS.index("function decorateLayerControl"):]
+    body = body[: body.index("\n}\n")]
+    assert "leaflet-control-layers-toggle" in body
+    assert "if (!list || !toggle) return;" in body
+
+
+def test_the_open_shut_choice_is_remembered_like_the_layers_themselves():
+    assert "minima.layerlist.v1" in APP_JS
+    body = APP_JS[APP_JS.index("function layersPanelOpen"):]
+    body = body[: body.index("\n}\n")]
+    # Open on a wide map where it costs nothing, shut on a phone where it does -
+    # but only until the pilot says otherwise, which is what the stored value is.
+    assert "window.innerWidth" in body
+    assert "localStorage.getItem(LAYERS_OPEN_KEY)" in body
+
+
+def test_the_panel_background_stays_out_of_the_stylesheet():
+    # Same mandate as HAZARD_COLORS and the isobar chrome: this box is painted
+    # over OSM raster and the satellite image, which are light in both themes,
+    # so its colour must not follow the theme tokens. Geometry and type belong
+    # in the sheet; the background does not.
+    assert "LAYER_PANEL_BG" in APP_JS
+    panel_css = [ln for ln in CSS.split("\n") if "layer-panel" in ln]
+    assert panel_css, "the layer panel rules have gone missing"
+    colour_prop = re.compile(r"(?<!-)\b(background(-color)?|color)\s*:")
+    for line in panel_css:
+        assert not colour_prop.search(line) or "color: inherit" in line, \
+            f"map chrome must not be themed: {line.strip()}"
+
+
+def test_night_visible_imagery_says_why_it_looks_like_static():
+    # Visible is reflected sunlight; after dark it is sensor noise, and the
+    # contrast stretch that makes a cloud deck readable in daylight amplifies
+    # exactly that. The default already follows the flight's day/night, but the
+    # product choice is remembered - so a pilot who once picked Visible meets
+    # this every night flight afterwards, with nothing on screen to explain it.
+    assert "function updateSatelliteNote" in APP_JS
+    body = APP_JS[APP_JS.index("function updateSatelliteNote"):]
+    body = body[: body.index("\n}\n")]
+    assert "SATELLITE_VISIBLE" in body and 'currentMode() === "night"' in body
+    assert "hasLayer(RADAR.sat)" in body, "nothing to explain when the layer is off"
+    assert 'id="sat-note"' in APP_JS and ".sat-note" in CSS
+    # Hung off the one helper every path that changes the satellite state
+    # already calls, so it cannot be forgotten on one of them.
+    styling = APP_JS[APP_JS.index("function applyCloudFirstStyling"):]
+    assert "updateSatelliteNote();" in styling[: styling.index("\n}\n")]
