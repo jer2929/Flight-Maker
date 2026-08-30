@@ -262,17 +262,30 @@ def parse_icao_polygon(text: str) -> list[tuple[float, float]]:
 # and placing a bulletin WRONGLY is worse than leaving it unplaced - an unplaced
 # one is shown and advises, where a misplaced one can gate the wrong flight or
 # fail to gate the right one.
+#
+# The width comes in two spellings, and they do NOT mean the same number:
+#
+#   WI 30NM EITHER SIDE OF LINE ...   30 nm each way - a band 60 nm across
+#   WI 50NM WID LINE BTN ...          the band is 50 nm across - 25 nm each way
+#
+# The second is the Canadian AIRMET house style (GFACN bulletins are written
+# that way almost exclusively), and reading its number as a half width drew and
+# tested an area twice as wide as the forecaster issued. Everything downstream
+# takes this as a half width - the relevance corridor in ``area_hazards`` and the
+# band drawn on the map - so the halving belongs here, once.
 _LINE_MARK = re.compile(r"\bLINE\b")
-_LINE_WIDTH = re.compile(r"\b(\d{1,3})\s?NM\b(?=[^.]{0,30}?\bLINE\b)")
+_LINE_WIDTH = re.compile(r"\b(\d{1,3})\s?NM\b([^.]{0,30}?)\bLINE\b")
+_TOTAL_WIDTH = re.compile(r"\bWID(?:E|TH)?\b")
 
 
 def parse_icao_corridor(text: str) -> tuple[list[tuple[float, float]], Optional[float]]:
     """A line-and-width area as ``([(lat, lon), ...], half_width_nm)``.
 
     ``([], None)`` when the text names no line, which is the common case and not
-    an error. The width is the distance *either side* of the line as the bulletin
-    states it; ``None`` means it named a line but no width, and the caller should
-    fall back to its own corridor rather than inventing one.
+    an error. The width returned is always the distance *either side* of the
+    line, whichever way the bulletin spelled it; ``None`` means it named a line
+    but no width, and the caller should fall back to its own corridor rather
+    than inventing one.
     """
     up = text.upper()
     mark = _LINE_MARK.search(up)
@@ -289,7 +302,10 @@ def parse_icao_corridor(text: str) -> tuple[list[tuple[float, float]], Optional[
     if len(pts) < 2:
         return [], None
     w = _LINE_WIDTH.search(up)
-    return pts, (float(w.group(1)) if w else None)
+    if not w:
+        return pts, None
+    nm = float(w.group(1))
+    return pts, (nm / 2.0 if _TOTAL_WIDTH.search(w.group(2)) else nm)
 
 
 # The three forms a PIREP gives its position in, in the order they are tried:

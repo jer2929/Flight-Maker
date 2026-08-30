@@ -1175,6 +1175,14 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
   font-size: .64rem; font-weight: 600; font-variant-numeric: tabular-nums;
   letter-spacing: .02em; pointer-events: none; }
 .iso-label span { padding: 0 3px; border-radius: var(--r-sm); line-height: 1.25; }
+/* "AIRMET IFR" over the area it belongs to. Geometry only - the chip is painted
+   in its hazard's map colour, which is set inline where those colours live.
+   Absolutely positioned so the chip centres on the point Leaflet anchors it to
+   however wide the text runs; the marker itself is given no icon size. */
+.hz-label { pointer-events: none; }
+.hz-label span { position: absolute; transform: translate(-50%, -50%); white-space: nowrap;
+  padding: 1px 4px; border-radius: var(--r-sm); font-size: .62rem; font-weight: 600;
+  letter-spacing: .03em; line-height: 1.3; }
 /* position+z-index makes the map its own stacking context so Leaflet's internal
    panes/controls (z-index up to ~1000) stay trapped below the sticky header. */
 /* Why the satellite picture looks like static at 0200Z. Sits between the pills
@@ -1188,6 +1196,10 @@ details.mhist summary { cursor: pointer; color: var(--accent); }
 .hz-key { display: inline-flex; align-items: center; gap: 5px; }
 .hz-key i { width: 12px; height: 12px; border-radius: var(--r-sm); display: inline-block; opacity: .75; }
 .hz-key-dash i { background: transparent; border: 1px dashed var(--muted); }
+/* The band an AIRMET's line is drawn inside - an outline with a wash, the way
+   it is painted on the map. Tokens here, colours inline on the map itself, for
+   the reason given above HAZARD_COLORS in app.js. */
+.hz-key-band i { background: var(--muted); border: 1px solid var(--muted); opacity: .35; }
 .hz-key-dot i { background: var(--muted); border-radius: 50%; }
 /* An isobar is a line, so its key is a line - a 12px square would read as an
    area fill like the hazard keys above it. The colour comes inline from

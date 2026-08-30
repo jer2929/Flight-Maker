@@ -1726,6 +1726,167 @@ function hazardStyle(f) {
     : { color: c, weight: 2, opacity: 0.8, fillColor: c, fillOpacity: 0.12, dashArray: "4 4" };
 }
 
+// ---------- The width a line-and-width bulletin was issued with ----------
+// "WI 50NM WID LINE BTN A - B" is an AREA 50 nm across, not a line. It reached
+// the map as a bare LineString, so the one thing the pilot needed off it - does
+// this band cover my route, and by how much - was invisible: a hairline through
+// Ontario, with the 25 nm either side of it buried in the popup text.
+//
+// The band drawn here is exactly the set the relevance test measures against:
+// ``area_hazards._drop_reason`` compares the route's distance TO THE LINE with
+// ``corridor_nm``, so the shape is everything within that distance of the line -
+// round ends included. A rectangle would claim the corners the test does not.
+const CORRIDOR_ARC_DEG = 15;   // how finely the round ends are stepped
+const NM_PER_DEG_LAT = 60;
+
+// Everything below works in a local nm plane centred on the line's own latitude.
+// Over a few hundred miles of a single bulletin the error is far under the
+// rounding on the width itself, and it keeps the maths readable.
+function corridorRing(latlngs, halfNm) {
+  const pts = [];
+  latlngs.forEach((ll) => {
+    if (!pts.length || pts[pts.length - 1][0] !== ll[0] || pts[pts.length - 1][1] !== ll[1]) pts.push(ll);
+  });
+  if (!(halfNm > 0) || pts.length < 2) return null;
+  const latRef = pts.reduce((sum, ll) => sum + ll[0], 0) / pts.length;
+  const kx = NM_PER_DEG_LAT * Math.cos((latRef * Math.PI) / 180) || 1e-6;
+  const xy = pts.map(([lat, lon]) => [lon * kx, lat * NM_PER_DEG_LAT]);
+
+  // The heading of each leg. The band's edge on the left of a leg sits at
+  // heading + 90 degrees from every point on it, and on the right at -90.
+  const head = [];
+  for (let i = 0; i < xy.length - 1; i++) {
+    head.push(Math.atan2(xy[i + 1][1] - xy[i][1], xy[i + 1][0] - xy[i][0]));
+  }
+
+  const ring = [];
+  const at = (c, ang) => ring.push([
+    (c[1] + halfNm * Math.sin(ang)) / NM_PER_DEG_LAT,
+    (c[0] + halfNm * Math.cos(ang)) / kx,
+  ]);
+  // Sweep `delta` radians around a point, so an end - or the outside of a bend -
+  // is a real arc rather than a mitre that would claim corners the width does
+  // not reach.
+  const sweep = (c, from, delta) => {
+    const steps = Math.max(1, Math.ceil(Math.abs(delta) / ((CORRIDOR_ARC_DEG * Math.PI) / 180)));
+    for (let i = 1; i <= steps; i++) at(c, from + (delta * i) / steps);
+  };
+  // Shortest way round, so a corner joins its two legs the way the eye expects.
+  const short = (d) => Math.atan2(Math.sin(d), Math.cos(d));
+
+  // A corner, given the edge angle coming into it and how far the line turns.
+  // Both edges are walked in the same rotational sense, so the sign says which
+  // side of the bend this edge is on: negative is the outside, and gets the arc.
+  // Positive is the inside, where the two straight edges cross - and there the
+  // boundary is the single point where they meet, out along the bisector at
+  // halfNm / cos(half the turn). Emitting the two edge ends AND a join there
+  // would tie a knot round the inside of the bend, which is how a filled band
+  // ends up with a notch cut out of it.
+  const MITRE_LIMIT = 0.25;   // past a near-hairpin the meeting point runs away
+  const corner = (c, from, delta) => {
+    const half = Math.cos(delta / 2);
+    if (delta < 0 || half < MITRE_LIMIT) {
+      at(c, from);
+      sweep(c, from, delta);
+      return;
+    }
+    ring.push([
+      (c[1] + (halfNm / half) * Math.sin(from + delta / 2)) / NM_PER_DEG_LAT,
+      (c[0] + (halfNm / half) * Math.cos(from + delta / 2)) / kx,
+    ]);
+  };
+
+  const QUARTER = Math.PI / 2;
+  const last = head.length - 1;
+  // Down the left-hand edge, vertex by vertex - consecutive offsets already lie
+  // on the straight edge between the corners, so only the corners need work.
+  at(xy[0], head[0] + QUARTER);
+  for (let j = 1; j <= last; j++) corner(xy[j], head[j - 1] + QUARTER, short(head[j] - head[j - 1]));
+  at(xy[last + 1], head[last] + QUARTER);
+  // Round the far end...
+  sweep(xy[last + 1], head[last] + QUARTER, -Math.PI);
+  // ...back up the right-hand edge...
+  for (let j = last; j >= 1; j--) corner(xy[j], head[j] - QUARTER, short(head[j - 1] - head[j]));
+  at(xy[0], head[0] - QUARTER);
+  // ...and round the near end, back to where the left-hand edge started.
+  sweep(xy[0], head[0] - QUARTER, -Math.PI);
+  return ring;
+}
+
+// The band is the area; the LineString the server sends is only its spine. So
+// the band carries the same fill and relevance dash as any polygon, and the
+// spine is drawn thin on top of it - readable as "the line this was written
+// around" without competing with the edge of the area itself.
+function corridorBands(gj) {
+  const out = [];
+  (gj.features || []).forEach((f) => {
+    const p = f.properties || {};
+    if (!f.geometry || f.geometry.type !== "LineString" || !p.corridor_nm) return;
+    const ring = corridorRing(f.geometry.coordinates.map(([lon, lat]) => [lat, lon]), p.corridor_nm);
+    if (!ring) return;
+    const st = hazardStyle(f);
+    out.push(L.polygon(ring, { ...st, weight: 1, opacity: st.opacity * 0.8 })
+      .bindPopup(hazardPopup(p), { maxWidth: 360 }));
+  });
+  return out;
+}
+
+// ---------- Which product an area is ----------
+// The map drew the shapes and named none of them: a grey band across Ontario
+// with nothing to say whether it was an AIRMET, a SIGMET or a CWA, while the
+// card below called it "AIRMET CZYZ". The colour key answers "what hazard"; this
+// answers "what product", which is the half that decides how much weight it
+// carries. Inline colours, like the isobar labels and for the same reason - the
+// substrate under them is light in both themes.
+const HAZARD_LABEL_INK = "#ffffff";
+
+function hazardLabelText(p) {
+  // The hazard word only when the feed actually gave one. An unclassified
+  // bulletin comes through as the literal "unknown" (the server has no better
+  // word for it), and "AIRMET unknown" reads as a fault where "AIRMET" is
+  // simply the whole of what is known.
+  const haz = p.hazard && p.hazard !== "unknown" ? p.hazard_label : "";
+  return [p.kind, haz].filter(Boolean).join(" ");
+}
+
+// Where to hang it: on a line, the middle of the line itself; on a polygon, the
+// centre of its extent. Never a corner, which is where a Leaflet tooltip's own
+// bounding-box anchor would have put it.
+function hazardLabelPoint(f) {
+  const co = f.geometry.coordinates;
+  if (f.geometry.type === "LineString") {
+    const mid = co[Math.floor((co.length - 1) / 2)];
+    const next = co[Math.floor((co.length - 1) / 2) + 1] || mid;
+    return [(mid[1] + next[1]) / 2, (mid[0] + next[0]) / 2];
+  }
+  const ring = (co[0] || []).map(([lon, lat]) => [lat, lon]);
+  return ring.length ? L.latLngBounds(ring).getCenter() : null;
+}
+
+function hazardLabels(gj) {
+  const out = [];
+  (gj.features || []).forEach((f) => {
+    const p = f.properties || {};
+    if (!f.geometry || f.geometry.type === "Point" || !p.kind) return;
+    const at = hazardLabelPoint(f);
+    const text = hazardLabelText(p);
+    if (!at || !text) return;
+    const chip = `background:${hazardColor(p)};color:${HAZARD_LABEL_INK};`
+               + (p.relevant ? "" : "opacity:.75;");
+    out.push(L.marker(at, {
+      interactive: false,
+      icon: L.divIcon({
+        className: "hz-label",
+        html: `<span style="${chip}">${escapeHtml(text)}</span>`,
+        // No iconSize: the chip is as wide as its text, and `.hz-label span`
+        // pulls itself back over the anchor. A fixed box would clip the long
+        // ones and mis-centre the short ones.
+      }),
+    }));
+  });
+  return out;
+}
+
 function hazardPopup(p) {
   const bits = [];
   if (p.band_label && p.band_label !== "no altitude given") bits.push(p.band_label);
@@ -1773,12 +1934,16 @@ function hazardLayers(gj) {
     onEachFeature: (f, layer) => layer.bindPopup(hazardPopup(f.properties || {}),
                                                  { maxWidth: 360 }),
   });
+  // "not a Point" rather than "is a Polygon": an area written as "WI 30NM
+  // EITHER SIDE OF LINE ..." is drawn as a LineString, and belongs here with
+  // the polygons rather than with the point reports. `hazardStyle`'s fill
+  // values are simply inert on a line, which is what `corridorBands` supplies
+  // the shape for.
+  const spines = make((f) => f.geometry && f.geometry.type !== "Point", hazardStyle);
   return {
-    // "not a Point" rather than "is a Polygon": an area written as "WI 30NM
-    // EITHER SIDE OF LINE ..." is drawn as a LineString, and belongs here with
-    // the polygons rather than with the point reports. `hazardStyle`'s fill
-    // values are simply inert on a line.
-    areas: make((f) => f.geometry && f.geometry.type !== "Point", hazardStyle),
+    // Order is drawing order: the bands go down first so the outlines and the
+    // product labels sit on top of them rather than under.
+    areas: L.featureGroup([...corridorBands(gj), spines, ...hazardLabels(gj)]),
     pireps: make((f) => f.geometry && f.geometry.type === "Point", pirepStyle),
   };
 }
@@ -1821,11 +1986,22 @@ function hazardLegend(gj) {
   // A lone dot needs saying: it is one aircraft's report, not a forecast area.
   const dots = (gj.features || []).some((f) => f.geometry && f.geometry.type === "Point")
     ? `<span class="hz-key hz-key-dot"><i></i>PIREP (one aircraft's report)</span>` : "";
+  // And so does a band: the shape around it is the width the forecaster wrote,
+  // so the line inside it is the spine of an area, not the area. Named only when
+  // one is actually drawn - a key for a shape that is not on the map teaches the
+  // wrong thing about the map.
+  const widths = (gj.features || [])
+    .filter((f) => f.geometry && f.geometry.type === "LineString" && (f.properties || {}).corridor_nm)
+    .map((f) => Math.round(f.properties.corridor_nm));
+  const band = widths.length
+    ? `<span class="hz-key hz-key-band"><i></i>${
+        [...new Set(widths)].sort((a, b) => a - b).join(" / ")} NM either side of the line</span>`
+    : "";
   // Keys only - `#radar-legend` is the shared container, because the flight
   // category keys append into it once their fetch lands.
   return `${seen.map((s) =>
     `<span class="hz-key"><i style="background:${s.color}"></i>${escapeHtml(s.label)}</span>`).join("")}
-    <span class="hz-key hz-key-dash"><i></i>not on your route</span>${dots}`;
+    <span class="hz-key hz-key-dash"><i></i>not on your route</span>${dots}${band}`;
 }
 
 function parseISODurationMin(s) {

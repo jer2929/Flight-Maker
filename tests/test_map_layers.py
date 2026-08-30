@@ -222,3 +222,62 @@ def test_night_visible_imagery_says_why_it_looks_like_static():
     # already calls, so it cannot be forgotten on one of them.
     styling = APP_JS[APP_JS.index("function applyCloudFirstStyling"):]
     assert "updateSatelliteNote();" in styling[: styling.index("\n}\n")]
+
+
+def _fn(name: str) -> str:
+    """One function's body, by the convention this file already uses."""
+    body = APP_JS[APP_JS.index(f"function {name}("):]
+    return body[: body.index("\n}\n")]
+
+
+def test_a_line_and_width_advisory_is_drawn_as_the_band_it_was_issued_as():
+    # "WI 50NM WID LINE BTN A - B" is an area 50 nm across. It reached the map as
+    # a bare LineString - a hairline across Ontario, with the 25 nm either side
+    # of it readable only by tapping it - which is the one question a pilot has
+    # of an area advisory: does it cover my route, and by how much.
+    assert "function corridorRing" in APP_JS
+    assert "corridorBands(gj)" in _fn("hazardLayers"), \
+        "the band is built but never reaches the map"
+
+
+def test_the_band_drawn_is_the_shape_the_relevance_test_measures():
+    # ``area_hazards._drop_reason`` compares the route's distance TO THE LINE
+    # with ``corridor_nm``, so the area is everything within that distance of the
+    # line - round ends included. Square ends would draw corners the test does
+    # not count, which is a map that disagrees with its own verdict.
+    ring = _fn("corridorRing")
+    assert ring.count("sweep(") >= 2 and "-Math.PI" in ring, \
+        "the ends of a corridor are half-circles, not corners"
+
+
+def test_an_area_on_the_map_says_which_product_it_is():
+    # The colour key answers "what hazard". Nothing answered "what product",
+    # so a grey band across Ontario gave no sign it was the AIRMET the card
+    # underneath was talking about.
+    assert "hazardLabels(gj)" in _fn("hazardLayers")
+    assert ".hz-label" in CSS
+
+
+def test_an_unclassified_bulletin_is_not_labelled_unknown():
+    # The server has no better word for a hazard it could not classify and sends
+    # the literal "unknown". "AIRMET unknown" reads as a rendering fault, where
+    # "AIRMET" is simply the whole of what is known.
+    assert '"unknown"' in _fn("hazardLabelText")
+
+
+def test_the_legend_names_the_width_the_band_was_drawn_with():
+    # A shaded band with no key is decoration. The number is the forecaster's,
+    # not ours, and it is what makes the shape mean something.
+    assert "either side of the line" in _fn("hazardLegend")
+
+
+def test_the_map_label_colours_stay_out_of_the_stylesheet():
+    # Same mandate as HAZARD_COLORS and the isobar chrome: a label chip is
+    # painted in its hazard's colour over OSM raster, which is light in both
+    # themes. Geometry in the sheet, colour inline.
+    assert "HAZARD_LABEL_INK" in APP_JS
+    label_css = [ln for ln in CSS.split("\n") if ".hz-label" in ln]
+    assert label_css, "the label rules have gone missing"
+    for line in label_css:
+        assert not re.search(r"(?<!-)\b(background(-color)?|color)\s*:", line), \
+            f"map chrome must not be themed: {line.strip()}"
