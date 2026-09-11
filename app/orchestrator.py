@@ -291,8 +291,9 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
 def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
                           metar: str | None, taf_segs: list[dict],
                           when: datetime, use_metar: bool,
-                          raw_taf: str | None = None) -> None:
-    """Fold a real report from under the route into a model sample, in place.
+                          raw_taf: str | None = None,
+                          model_sky: list | None = None) -> None:
+    """Fold a real report from near the route into a model sample, in place.
 
     **Worst-of, and deliberately asymmetric.** An observed broken or overcast
     layer *lowers* the route ceiling, because a station that has looked at the
@@ -306,6 +307,15 @@ def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
     station's TAF is read at the hour the flight is actually over the point -
     which is the honest forecast for that place and time, and the thing the model
     was standing in for.
+
+    **Several stations can reach one sample**, so provenance follows the ceiling
+    rather than the last caller. Whichever station owns the reported ceiling is
+    the one the card names and whose report the popover shows; the nearest
+    station narrates when none of them lowered it, so the row can still say the
+    route was really sampled. ``model_sky`` is the stack the model derived before
+    any station was consulted - it is what the sample falls back to when the
+    owning report is a TAF, which forecasts a worst case rather than observing a
+    sky, and so has no stack of its own to show.
     """
     cond: dict | None = None
     kind = ""
@@ -317,10 +327,15 @@ def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
     if not cond:
         return
 
-    label = f"{station.ident} {kind}, {round(dist_nm)} nm"
+    # "18 nm off track", not a bare "18 nm". The number used to be the distance
+    # from an invisible midpoint, which read as an off-track distance and was
+    # not one - a station 4 nm abeam the course could be labelled 19 nm. Saying
+    # what is measured is most of what makes the figure usable.
+    label = f"{station.ident} {kind}, {round(dist_nm)} nm off track"
     obs_ceil = cond.get("ceiling_agl_ft")
-    if obs_ceil is not None and (pt.get("ceiling_ft") is None
-                                 or obs_ceil < pt["ceiling_ft"]):
+    took_ceiling = obs_ceil is not None and (pt.get("ceiling_ft") is None
+                                             or obs_ceil < pt["ceiling_ft"])
+    if took_ceiling:
         pt["ceiling_ft"] = obs_ceil
         pt["ceiling_source"] = label
     obs_vis = cond.get("visibility_sm")
@@ -329,19 +344,25 @@ def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
     # A real report is data even when it changed nothing, so the row can never
     # claim the route went unsampled.
     pt["sampled"] = True
-    pt["obs_station"] = station.ident
-    pt["obs_kind"] = kind
-    # A station that looked at the sky outranks a derivation that inferred it from
-    # pressure-level humidity, for the whole stack and not only for the ceiling
-    # promoted above. Only a METAR, though: ``conditions_at`` gives a TAF group's
-    # worst case rather than a report, so there is no observed stack to take.
-    if kind == "METAR" and text:
-        pt["sky"] = sky_svc.from_metar(text)
-    # The report itself, not just its name. The checklist chip says where a
-    # value came from ("CYCK METAR, 18 nm") and the pilot's next question is
-    # always what that report actually said - which used to mean going and
-    # finding it. It rides to the browser as ``LimitCheck.source_text``.
-    pt["obs_text"] = text
+    # The station that owns the ceiling is the station the card names. Callers
+    # fold stations in nearest-track-first, so the first one to arrive narrates
+    # until a nearer-to-the-weather report takes the ceiling off it.
+    if took_ceiling or pt.get("obs_station") is None:
+        pt["obs_station"] = station.ident
+        pt["obs_kind"] = kind
+        # A station that looked at the sky outranks a derivation that inferred it
+        # from pressure-level humidity, for the whole stack and not only for the
+        # ceiling promoted above. Only a METAR, though: ``conditions_at`` gives a
+        # TAF group's worst case rather than a report, so there is no observed
+        # stack to take and the model's own stack stands.
+        pt["sky"] = (sky_svc.from_metar(text) if kind == "METAR" and text
+                     else model_sky)
+        # The report itself, not just its name. The checklist chip says where a
+        # value came from ("CYCK METAR, 18 nm off track") and the pilot's next
+        # question is always what that report actually said - which used to mean
+        # going and finding it. It rides to the browser as
+        # ``LimitCheck.source_text``.
+        pt["obs_text"] = text
 
 
 def _ceiling_dropping(fc: dict, from_dt: datetime | None = None) -> dict | None:
@@ -1185,34 +1206,121 @@ def _reporting_candidates(airport: Airport, max_nm: float = 90.0, limit: int = 5
     return out
 
 
-# How near a route midpoint a station has to be for its report to say anything
-# about the air the flight passes through. Wide enough to find one in most of
-# southern Ontario, tight enough that the observation is about this route.
+# How far off the COURSE LINE a station's report still describes the air this
+# flight passes through. Wide enough to find one in most of southern Ontario,
+# and the value a report is labelled with, so the pilot can weigh it.
 ENROUTE_OBS_NM = 40.0
+# How many stations the route consults in total. These idents ride the METAR/TAF
+# batch the route already issues, and CFPS chunks at ten sites, so the cap is
+# about staying inside the chunks already being sent rather than about geometry:
+# with both ends' own candidates this keeps a route at the two chunks it sends
+# today. It is twice the three the midpoint rule managed.
+ENROUTE_OBS_MAX = 6
 
 
-def _enroute_candidates(mids: list[tuple[float, float]],
+def _enroute_candidates(dep: Airport, dest: Airport, distance_nm: float,
+                        mids: list[tuple[float, float]],
                         exclude: set[str]) -> list[tuple[Airport, float, int]]:
-    """The nearest reporting station to each route midpoint.
+    """Reporting stations near the **course line**, nearest to the track first.
 
     The enroute ceiling was model-only, which is the largest single source of the
     "no ceiling (clear)" error: the pressure-level derivation is blind to decks
     thinner than its level spacing, while a station under the route has simply
-    looked at the sky. These idents ride the METAR/TAF batch the route already
-    issues, so the accuracy costs no extra round trip.
+    looked at the sky.
 
-    Returns ``(airport, distance_nm, midpoint_index)`` so a merged sample can say
-    which station it used and how far away it was.
+    Which stations get asked is the whole question, and this used to answer it
+    with *"the one nearest each of three midpoints"* - a station's distance
+    measured to a point produced by cutting the route in four, and only ever one
+    station per point. Those are two different questions from "what is near my
+    track", and on a real route they gave visibly wrong answers:
+
+      * **CYFD->CYOW.** CYOO sits **3.7 nm** off the course line and was
+        reporting BKN 2,700. It was found, ranked second behind CYTZ at the
+        first midpoint, and thrown away by the one-per-midpoint rule. The route
+        passed on CYPQ's BKN 4,500 instead, and the deck the flight would fly
+        into never reached the card. Meanwhile the third midpoint contributed
+        CYGK - **35 nm** off track.
+      * **CYFD->CYUL.** The same CYOO, now **12 nm** off track and so *less*
+        relevant, happened to be nearest the first midpoint and failed the
+        route. Two flights over the same aerodrome, opposite answers, decided by
+        where the arithmetic put the midpoints.
+
+    So the measurement is now the one the question implies: perpendicular
+    distance to the sampled great circle, clamped to the segment between the two
+    ends (``geo.along_and_cross_nm``, the same solution ``_corridor_airports``
+    already uses for precautionary fields). Stations are ranked by it, several
+    can attach to one sample, and the number each report is labelled with is how
+    far off track it really is - not how far it sat from an invisible waypoint.
+
+    This can only widen what is consulted: a station within ``ENROUTE_OBS_NM`` of
+    a midpoint is within that distance of the track too. What it changes is the
+    *order*, and the order is what decides which reports are read at all.
+
+    Returns ``(airport, cross_track_nm, midpoint_index)`` - the index being the
+    sample the station speaks for, so a merged point can say where on the route
+    the reading belongs.
     """
+    if distance_nm < 1 or not mids:    # dep == dest: the course is undefined
+        return []
+    pad = ENROUTE_OBS_NM / 60.0
+    lat_lo, lat_hi = min(dep.lat, dest.lat) - pad, max(dep.lat, dest.lat) + pad
+    coslat = max(0.1, math.cos(math.radians((dep.lat + dest.lat) / 2)))
+    lon_pad = pad / coslat
+    lon_lo, lon_hi = min(dep.lon, dest.lon) - lon_pad, max(dep.lon, dest.lon) + lon_pad
+
+    # Where each midpoint sits along the course, so a station can be attached to
+    # the sample it actually speaks for.
+    mid_atd = [distance_nm * (i + 1) / (len(mids) + 1) for i in range(len(mids))]
+
+    hits: list[tuple[Airport, float, int]] = []
+    for a in ap.load_airports().values():
+        if a.ident in exclude or not _REPORTING_RE.match(a.ident):
+            continue
+        # Cheap box reject first - the full dataset is a few thousand rows and
+        # the trig below is far more expensive than four comparisons.
+        if not (lat_lo <= a.lat <= lat_hi and lon_lo <= a.lon <= lon_hi):
+            continue
+        atd, xtd = along_and_cross_nm(dep.lat, dep.lon, dest.lat, dest.lon,
+                                      a.lat, a.lon)
+        if abs(xtd) > ENROUTE_OBS_NM:
+            continue
+        # Clamped to the leg. A station behind the departure or beyond the
+        # destination is not enroute of anything, and both ends already carry
+        # their own reporting candidates.
+        if not (0 < atd < distance_nm):
+            continue
+        k = min(range(len(mids)), key=lambda i: abs(atd - mid_atd[i]))
+        hits.append((a, abs(xtd), k))
+
+    hits.sort(key=lambda h: h[1])      # nearest the track first
+
+    # Coverage first, then relevance - and in that order, because each answers a
+    # question the other cannot.
+    #
+    # Ranking purely by cross-track distance lets a cluster of fields near one
+    # end spend the whole budget and leave a 150 nm stretch of the route with no
+    # observation at all. Ranking purely by sample - the old rule - throws away
+    # the station 4 nm off your track because a nearer-to-the-midpoint one got
+    # there first.
+    #
+    # So: every sample is guaranteed its own nearest-to-track station, and
+    # whatever budget is left over goes to the stations nearest the course line
+    # wherever they happen to sit. On CYFD->CYUL that second pass is what keeps
+    # CYOO, which is fourth-nearest to that track and was reporting BKN 2,700.
     out: list[tuple[Airport, float, int]] = []
-    seen = set(exclude)
-    for k, (mlat, mlon) in enumerate(mids):
-        for a, d in ap.nearest_airports(mlat, mlon, seen, ENROUTE_OBS_NM, 10):
-            if _REPORTING_RE.match(a.ident):
-                out.append((a, d, k))
-                seen.add(a.ident)
-                break
-    return out
+    taken: set[str] = set()
+    for k in range(len(mids)):
+        first = next((h for h in hits if h[2] == k and h[0].ident not in taken), None)
+        if first is not None:
+            out.append(first)
+            taken.add(first[0].ident)
+    for h in hits:
+        if len(out) >= ENROUTE_OBS_MAX:
+            break
+        if h[0].ident not in taken:
+            out.append(h)
+            taken.add(h[0].ident)
+    return sorted(out, key=lambda h: h[1])
 
 
 async def _gather_hazards(sites: list[str], path: list[tuple[float, float]],
@@ -1687,7 +1795,10 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # Stations under the route itself. Added to the same batch as the endpoint
     # candidates - CFPS chunks at 10 sites, so on a typical route these three
     # ride along in requests already being made.
-    enroute_cands = _enroute_candidates(mids, {dep.ident, dest.ident})
+    enroute_cands = _enroute_candidates(dep, dest,
+                                        haversine_nm(dep.lat, dep.lon,
+                                                     dest.lat, dest.lon),
+                                        mids, {dep.ident, dest.ident})
     all_sites = list(dict.fromkeys(
         sites + [c.ident for c in dep_cands + dest_cands]
         + [a.ident for a, _d, _k in enroute_cands]))
@@ -1896,7 +2007,13 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # "worst point on the route" row can't report a right-now ceiling for a
     # flight eight hours out and silently contradict the endpoint rows.
     enroute = []
-    obs_by_mid = {k: (a, d) for a, d, k in enroute_cands}
+    # A list per sample, not one station: several reporting fields can sit near
+    # one stretch of the course, and the nearest to a *midpoint* is not the
+    # nearest to the *track*. See ``_enroute_candidates``. Already ordered
+    # nearest-track-first, which is the order they are folded in.
+    obs_by_mid: dict[int, list[tuple[Airport, float]]] = {}
+    for _a, _d, _k in enroute_cands:
+        obs_by_mid.setdefault(_k, []).append((_a, _d))
     for k, ((mlat, mlon), fc) in enumerate(zip(mids, mid_fcs), 1):
         frac = k / (len(mids) + 1)
         over_at = etd_utc + timedelta(hours=t_prov * frac)
@@ -1908,14 +2025,16 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         # Cross-reference the model against a station under the route. This is
         # the largest accuracy win available here and it costs no extra fetch -
         # these idents were added to the METAR/TAF batch above.
-        station = obs_by_mid.get(k - 1)
-        if station is not None:
-            a, d = station
+        # The stack the model derived, before any station is consulted: what a
+        # sample falls back to when the report that ends up owning its ceiling
+        # is a TAF, which has no observed sky of its own.
+        model_sky = pt.get("sky")
+        for a, d in obs_by_mid.get(k - 1, []):
             _merge_enroute_report(
                 pt, a, d, metars.get(a.ident),
                 wx.parse_taf_segments(tafs.get(a.ident) or ""),
                 over_at, use_metar=bool(is_now and show_obs),
-                raw_taf=tafs.get(a.ident))
+                raw_taf=tafs.get(a.ident), model_sky=model_sky)
         enroute.append(pt)
 
     # Gate the (VFR) cruising altitude on the minimum ceiling along the whole

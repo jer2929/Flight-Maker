@@ -142,9 +142,9 @@ def test_a_sampled_point_with_no_stack_never_reads_as_a_failed_fetch():
 def test_enroute_row_cites_the_station_not_a_hardcoded_model_name():
     """The old code stamped every enroute sample "HRDPS" regardless of origin."""
     obs = [{"ceiling_ft": 4900, "sampled": True, "label": "~30 nm from CYKF",
-            "ceiling_source": "CYKF METAR, 28 nm", "obs_station": "CYKF"}]
+            "ceiling_source": "CYKF METAR, 28 nm off track", "obs_station": "CYKF"}]
     row = _rows(obs, dep_ceiling=8000, dest_ceiling=8000)["ceiling"]
-    assert row.source == "CYKF METAR, 28 nm"
+    assert row.source == "CYKF METAR, 28 nm off track"
     assert "4,900 ft AGL" in row.actual_text
 
 
@@ -170,7 +170,7 @@ def test_observed_deck_lowers_a_model_that_saw_nothing():
     orchestrator._merge_enroute_report(pt, STATION, 28.0, _metar("BKN049"), [],
                                        WHEN, use_metar=True)
     assert pt["ceiling_ft"] == 4900
-    assert pt["ceiling_source"] == "CYKF METAR, 28 nm"
+    assert pt["ceiling_source"] == "CYKF METAR, 28 nm off track"
     assert pt["obs_station"] == "CYKF"
 
 
@@ -214,7 +214,7 @@ def test_future_etd_reads_the_taf_not_the_metar():
         pt, STATION, 28.0, _metar("SKC"), segs,
         datetime(2026, 8, 15, 21, 0, tzinfo=timezone.utc), use_metar=False)
     assert pt["ceiling_ft"] == 2500
-    assert pt["ceiling_source"] == "CYKF TAF, 28 nm"
+    assert pt["ceiling_source"] == "CYKF TAF, 28 nm off track"
 
 
 def test_a_report_that_changed_nothing_still_counts_as_sampled():
