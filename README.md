@@ -689,6 +689,21 @@ that station's TAF is read at the hour you are actually over the point. Each row
 names the station and how far **off track** it is behind its number, so a real
 observation is always distinguishable from an inference — and from a distant one.
 
+Two distances, not one. A report is **read** out to 40 nm from the course line
+and can only **fail the flight** inside `FM_ENROUTE_GATE_NM` (15 nm). One number
+used to do both jobs, so a BKN 2,700 at a field thirty miles abeam the track went
+straight into the hard-limit ceiling row and turned a GO into a NO-GO — about a
+deck the flight never goes near. This is the same pair the area advisories
+already use: `hazard_corridor_nm` decides what gates a verdict, `NEARBY_NM`
+decides what is still worth putting on the card.
+
+Nothing outside the gating corridor is silently dropped. A station that is below
+your cross-country minimums but too far off track to count raises an **advisory
+row** — "2,700 ft AGL at CYGK, 30 nm off track" — which shows without moving the
+verdict, and carries the report itself. Only reports that would actually have
+busted a limit raise it: every distant station every time is noise, and noise is
+what teaches a pilot to skip the row on the day it matters.
+
 Which stations get asked is decided by **perpendicular distance to the course
 line**, clamped to the leg between the two ends. That sounds obvious and was not
 what happened: the rule used to be "the single nearest station to each of three

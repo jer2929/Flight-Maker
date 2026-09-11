@@ -292,7 +292,8 @@ def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
                           metar: str | None, taf_segs: list[dict],
                           when: datetime, use_metar: bool,
                           raw_taf: str | None = None,
-                          model_sky: list | None = None) -> None:
+                          model_sky: list | None = None,
+                          gates: bool = True) -> None:
     """Fold a real report from near the route into a model sample, in place.
 
     **Worst-of, and deliberately asymmetric.** An observed broken or overcast
@@ -316,6 +317,14 @@ def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
     any station was consulted - it is what the sample falls back to when the
     owning report is a TAF, which forecasts a worst case rather than observing a
     sky, and so has no stack of its own to show.
+
+    ``gates`` is how far off the course line the station sits, reduced to a
+    yes/no by ``settings.enroute_gate_nm``. A station outside that corridor is
+    still read, but it may not move the numbers the verdict is computed from: a
+    BKN 2,700 thirty miles abeam the track is not a deck this flight goes
+    through, and failing the flight on it is a false NO-GO. It is recorded in
+    ``nearby_obs`` instead, and the checklist raises an advisory row for any of
+    them that would have failed a limit - seen, named, and not counted.
     """
     cond: dict | None = None
     kind = ""
@@ -333,6 +342,17 @@ def _merge_enroute_report(pt: dict, station: Airport, dist_nm: float,
     # what is measured is most of what makes the figure usable.
     label = f"{station.ident} {kind}, {round(dist_nm)} nm off track"
     obs_ceil = cond.get("ceiling_agl_ft")
+
+    if not gates:
+        # Too far off track to count, near enough to matter if it is bad. Kept
+        # whole - station, distance, numbers and the report itself - so the
+        # advisory row can say what was seen rather than that something was.
+        pt.setdefault("nearby_obs", []).append({
+            "ident": station.ident, "kind": kind, "dist_nm": dist_nm,
+            "ceiling_ft": obs_ceil, "vis_sm": cond.get("visibility_sm"),
+            "text": text, "source": label,
+        })
+        return
     took_ceiling = obs_ceil is not None and (pt.get("ceiling_ft") is None
                                              or obs_ceil < pt["ceiling_ft"])
     if took_ceiling:
@@ -1703,6 +1723,43 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     else:
         checks.append(LimitCheck(key="visibility", label="Visibility (XC)", limit_text=f"≥ {vis_limit} SM",
                                  actual_text="no data", passed=True))
+
+    # Reports from near the route that are NOT counted, and would have failed a
+    # limit if they were.
+    #
+    # This row is the other half of ``settings.enroute_gate_nm``. Not gating on a
+    # deck thirty miles abeam the track is only right if the pilot still gets to
+    # know it is there - otherwise the app has quietly decided, on their behalf,
+    # that a below-minimums ceiling near their route is not worth a sentence,
+    # which is the "renders as clear" failure everything else here refuses.
+    #
+    # Advisory, so it shows without moving the verdict, and only raised for a
+    # report that would actually have busted something: every distant station
+    # every time is noise, and noise is what teaches a pilot to skip the row on
+    # the day it matters.
+    near_misses = [n for e in enroute for n in (e.get("nearby_obs") or [])
+                   if (n.get("ceiling_ft") is not None and n["ceiling_ft"] < ceil_limit)
+                   or (n.get("vis_sm") is not None and n["vis_sm"] < vis_limit)]
+    if near_misses:
+        worst = min(near_misses, key=lambda n: (n.get("ceiling_ft") if n.get("ceiling_ft")
+                                                is not None else float("inf")))
+        bits = []
+        if worst.get("ceiling_ft") is not None and worst["ceiling_ft"] < ceil_limit:
+            bits.append(f"{round(worst['ceiling_ft'] / 100) * 100:,} ft AGL")
+        if worst.get("vis_sm") is not None and worst["vis_sm"] < vis_limit:
+            bits.append(f"{worst['vis_sm']:g} SM")
+        more = "" if len(near_misses) == 1 else f" (+{len(near_misses) - 1} more)"
+        checks.append(LimitCheck(
+            key="ceiling_near_route", label="Below minimums near track",
+            limit_text=f"within {get_settings().enroute_gate_nm:g} nm counts",
+            actual_text=(f"{' · '.join(bits)} at {worst['ident']}, "
+                         f"{round(worst['dist_nm'])} nm off track{more}"),
+            passed=True, advisory=True, source=worst.get("source"),
+            source_text=worst.get("text"),
+            reason_text=("A station near your route is below your cross-country "
+                         "minimums, but too far off track to count against this "
+                         "flight. Worth a look at the map before you go.")))
+
     # Density altitude at each end, per-end rather than worst-of-both: "CYFD
     # +1,510 ft" and "CYKF +620 ft" are two different pieces of runway
     # performance information, and collapsing them loses the one you are
@@ -2034,7 +2091,11 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
                 pt, a, d, metars.get(a.ident),
                 wx.parse_taf_segments(tafs.get(a.ident) or ""),
                 over_at, use_metar=bool(is_now and show_obs),
-                raw_taf=tafs.get(a.ident), model_sky=model_sky)
+                raw_taf=tafs.get(a.ident), model_sky=model_sky,
+                # Near enough to the course that its sky is this flight's sky.
+                # Further out it is read and reported, never counted - see
+                # ``settings.enroute_gate_nm``.
+                gates=d <= settings.enroute_gate_nm)
         enroute.append(pt)
 
     # Gate the (VFR) cruising altitude on the minimum ceiling along the whole

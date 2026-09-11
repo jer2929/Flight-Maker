@@ -108,6 +108,26 @@ class Settings(BaseSettings):
     # transcontinental route asks for a hemisphere.
     isobar_max_span_deg: float = 30.0
 
+    # How far off the course line a station's report may still FAIL the flight.
+    #
+    # Separate from ``orchestrator.ENROUTE_OBS_NM`` (40 nm), which is how far out
+    # a report is still worth *reading*, and the split is the whole point. One
+    # number was doing both jobs, so a BKN 2,700 at a field thirty miles abeam
+    # the track went straight into the hard-limit ceiling row and turned a GO
+    # into a NO-GO - about a deck the flight would never go near.
+    #
+    # The app already works this way for area advisories: ``hazard_corridor_nm``
+    # (25 nm) decides what gates a verdict and ``area_hazards.NEARBY_NM``
+    # (150 nm) decides what is still worth putting on the card as a near miss.
+    # This is that same pair for point observations.
+    #
+    # Outside this and inside ENROUTE_OBS_NM a report cannot gate, but it is
+    # never silently dropped: if it would have failed a limit, the card carries
+    # an advisory row naming the station and how far off track it is. A deck that
+    # vanishes because it was 20 nm away is the "renders as clear" failure this
+    # whole app is built to refuse.
+    enroute_gate_nm: float = 15.0
+
     # Route timeline horizon (hours)
     timeline_hours: int = 48
 

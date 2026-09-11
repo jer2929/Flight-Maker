@@ -219,3 +219,112 @@ def test_a_taf_owner_falls_back_to_the_models_sky():
     assert pt["obs_kind"] == "TAF"
     assert pt["sky"] == ["model"], (
         "the sample kept CYTZ's observed clear stack under CYOO's ceiling")
+
+
+# ---------------------------------------------------------------------------
+# What may fail a flight, and what may only warn about it
+# ---------------------------------------------------------------------------
+#
+# One number used to do both jobs. ENROUTE_OBS_NM (40 nm) decided both which
+# reports were read AND which could fail the flight, so a BKN 2,700 at a field
+# thirty miles abeam the track went into the hard-limit ceiling row and turned a
+# GO into a NO-GO - about a deck the flight never goes near.
+#
+# Split now, the way area advisories already are: hazard_corridor_nm decides what
+# gates a verdict, NEARBY_NM decides what is still worth showing. Here that pair
+# is settings.enroute_gate_nm and ENROUTE_OBS_NM.
+from app.config import get_settings
+
+
+def _pt():
+    return {"ceiling_ft": 6000, "vis_sm": 10.0, "sky": ["model"]}
+
+
+FAR = Airport(ident="CYGK", name="Kingston", lat=44.22, lon=-76.60)
+
+
+def test_a_deck_beyond_the_gating_corridor_cannot_fail_the_flight():
+    """The report that made this question worth asking."""
+    pt = _pt()
+    orc._merge_enroute_report(pt, FAR, 30.0, _metar("CYGK", "BKN027"), [], WHEN,
+                              use_metar=True, model_sky=["model"], gates=False)
+    assert pt["ceiling_ft"] == 6000, (
+        "a deck 30 nm off track lowered the route ceiling - that is a false "
+        "NO-GO about air this flight never enters")
+    assert pt.get("sampled") is not True, (
+        "a station that cannot gate must not claim the route was observed")
+
+
+def test_but_it_is_never_silently_dropped():
+    """Not gating is only defensible if the pilot still gets told."""
+    pt = _pt()
+    orc._merge_enroute_report(pt, FAR, 30.0, _metar("CYGK", "BKN027"), [], WHEN,
+                              use_metar=True, model_sky=["model"], gates=False)
+    near = pt["nearby_obs"]
+    assert len(near) == 1
+    assert near[0]["ident"] == "CYGK"
+    assert near[0]["ceiling_ft"] == 2700
+    assert near[0]["dist_nm"] == 30.0
+    assert "CYGK" in near[0]["text"], "the report itself must survive"
+
+
+def _rows_for(enroute):
+    """The conditions checklist for a route whose ends are unremarkable."""
+    from app.models import AirportAssessment, Airport as A, WeatherSummary, Source, Verdict
+
+    def end(ident):
+        return AirportAssessment(
+            airport=A(ident=ident, name=ident, lat=43.0, lon=-80.0),
+            distance_nm=0.0, bearing_true=0.0, flight_time_hr=0.0,
+            verdict=Verdict.GO,
+            weather=WeatherSummary(source=Source.MODEL, ceiling_agl_ft=6000,
+                                   visibility_sm=10.0))
+    return orc._route_conditions_checks(end("CYFD"), end("CYOW"), enroute, "day")
+
+
+def test_the_advisory_row_names_the_station_and_how_far_off_track(monkeypatch):
+    """It shows without moving the verdict - LimitCheck.advisory is exactly
+    "passed, but needs human review", and the checklist auto-expands those."""
+    enroute = [{"label": "~120 nm from CYFD", "ceiling_ft": 6000, "vis_sm": 10.0,
+                "nearby_obs": [{"ident": "CYGK", "kind": "METAR", "dist_nm": 30.0,
+                                "ceiling_ft": 2700, "vis_sm": None,
+                                "text": _metar("CYGK", "BKN027"),
+                                "source": "CYGK METAR, 30 nm off track"}]}]
+    rows = _rows_for(enroute)
+    row = next((c for c in rows if c.key == "ceiling_near_route"), None)
+    assert row is not None, "a below-minimums deck near the route said nothing"
+    assert row.passed and row.advisory, "an advisory row must not fail the flight"
+    assert "CYGK" in row.actual_text and "30 nm off track" in row.actual_text
+    assert "2,700 ft AGL" in row.actual_text
+    assert row.source_text and "BKN027" in row.source_text
+
+
+def test_a_nearby_station_above_your_minimums_stays_quiet():
+    """Every distant station every time is noise, and noise is what teaches a
+    pilot to skip the row on the day it matters."""
+    enroute = [{"label": "~120 nm from CYFD", "ceiling_ft": 6000, "vis_sm": 10.0,
+                "nearby_obs": [{"ident": "CYGK", "kind": "METAR", "dist_nm": 30.0,
+                                "ceiling_ft": 8000, "vis_sm": 10.0,
+                                "text": _metar("CYGK", "FEW080"),
+                                "source": "CYGK METAR, 30 nm off track"}]}]
+    rows = _rows_for(enroute)
+    assert not [c for c in rows if c.key == "ceiling_near_route"]
+
+
+def test_inside_the_corridor_it_still_fails_the_flight():
+    """The other direction. The whole point of catching CYOO at 3.7 nm was that
+    it should fail; narrowing what gates must not undo that."""
+    pt = _pt()
+    near = Airport(ident="CYOO", name="Oshawa", lat=43.9, lon=-78.9)
+    assert 3.7 <= get_settings().enroute_gate_nm, "the corridor excludes CYOO"
+    orc._merge_enroute_report(pt, near, 3.7, _metar("CYOO", "BKN027"), [], WHEN,
+                              use_metar=True, model_sky=["model"], gates=True)
+    assert pt["ceiling_ft"] == 2700
+    assert pt["sampled"] is True
+    assert "nearby_obs" not in pt, "a gating report is not a near miss"
+
+
+def test_the_gating_corridor_is_inside_the_reading_corridor():
+    """Invert them and the advisory band is empty - every report read would gate,
+    which is the behaviour this split exists to end."""
+    assert get_settings().enroute_gate_nm < orc.ENROUTE_OBS_NM
