@@ -186,7 +186,7 @@ CYCK_METAR = "CYCK 161700Z 24008KT 6SM BR OVC010 14/12 A2988 RMK SC8 SLP118"
 
 
 def test_a_station_under_the_route_carries_its_report_text():
-    """A row that says "CYCK METAR, 18 nm" should be able to show that METAR.
+    """A row that says "CYCK METAR, 18 nm off track" should be able to show that METAR.
 
     ``_merge_enroute_report`` already recorded which station and which product
     decided the value; the text itself was thrown away, so the pilot could see
@@ -202,7 +202,7 @@ def test_a_station_under_the_route_carries_its_report_text():
     assert pt["obs_kind"] == "METAR"
     assert pt["obs_station"] == "CYCK"
     assert pt["obs_text"] == CYCK_METAR
-    assert pt["ceiling_source"] == "CYCK METAR, 18 nm"
+    assert pt["ceiling_source"] == "CYCK METAR, 18 nm off track"
     assert pt["ceiling_ft"] == 1000, "the observed deck should have won"
 
 

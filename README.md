@@ -680,14 +680,28 @@ body group, and the genus off the Canadian remarks (`RMK SC8` → `OVC 1,000 ft 
 `RMK CU6CI1` → cumulus under cirrus). No forecast model carries a cloud type, so a
 model-derived layer shows none rather than guessing one.
 
-The much better answer, where one exists, is a **real report**: the nearest
-reporting station to each route midpoint rides the METAR/TAF batch the route
-already issues, and is merged worst-of. An observed broken layer **lowers** the
-route ceiling; an observed clear sky **never raises** it, because a field 30 nm
-off track being clear is no evidence about the air over your course. Past the
-observation horizon that station's TAF is read at the hour you are actually over
-the point. Each row names the station and distance behind its number, so a real
-observation is always distinguishable from an inference.
+The much better answer, where one exists, is a **real report**: reporting
+stations near the course line ride the METAR/TAF batch the route already issues,
+and are merged worst-of. An observed broken layer **lowers** the route ceiling;
+an observed clear sky **never raises** it, because a field 30 nm off track being
+clear is no evidence about the air over your course. Past the observation horizon
+that station's TAF is read at the hour you are actually over the point. Each row
+names the station and how far **off track** it is behind its number, so a real
+observation is always distinguishable from an inference — and from a distant one.
+
+Which stations get asked is decided by **perpendicular distance to the course
+line**, clamped to the leg between the two ends. That sounds obvious and was not
+what happened: the rule used to be "the single nearest station to each of three
+midpoints", which measures to a point produced by cutting the route in four. On
+CYFD→CYOW that skipped CYOO — 3.7 nm off track, reporting BKN 2,700, below the
+cross-country minimum — because CYTZ was nearer *that midpoint*, and then spent a
+slot on CYGK 35 nm off track. On CYFD→CYUL the same CYOO, now 12 nm off track and
+so less relevant, happened to land nearest a midpoint and failed the flight. Two
+routes over the same aerodrome, opposite answers, decided by arithmetic the pilot
+cannot see. Stations are now ranked by how near the track they really are, each
+sample is guaranteed its own nearest station so a long leg cannot go unobserved,
+and several reports can inform one sample — with the card naming whichever one
+actually owns the ceiling.
 
 On the airport cards the TAF is split into its **FM/BECMG/TEMPO/PROB periods**,
 and **every period the flight passes through is green** - whatever kind of group
