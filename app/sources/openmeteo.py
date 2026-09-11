@@ -194,6 +194,52 @@ def _point_key(lat: float, lon: float, days: int) -> str:
     return f"hrdps:{lat:.3f},{lon:.3f}:{days}"
 
 
+def _usable(fc) -> bool:
+    """Does this response actually carry an hourly series?
+
+    Everything downstream reads ``fc["hourly"][<name>][i]``, so a response
+    without a populated ``hourly.time`` is not a forecast - it is an empty sky
+    wearing a forecast's shape.
+    """
+    if not isinstance(fc, dict):
+        return False
+    return bool((fc.get("hourly") or {}).get("time"))
+
+
+class UnusableForecast(RuntimeError):
+    """Open-Meteo answered, but not with a forecast.
+
+    Deliberately an exception rather than a falsy return, because the difference
+    decides whether the answer is *cached*. ``cache.once`` stores what the
+    factory returns and stores nothing at all when it raises, and a body with no
+    hourly series is a failure however the status line described it - Open-Meteo
+    reports a rate limit as JSON, and a truncated or degraded response is a 200
+    right up until you look inside it.
+
+    Caching one was a thirty-minute outage of our own making. A single bad
+    minute upstream wrote ``{"error": true, "reason": "..."}`` under the point's
+    key with the full ``openmeteo_cache_ttl``; from then on every assessment read
+    it as a hit, found no hours in it, and told the pilot the HRDPS forecast had
+    not downloaded - without ever asking again. Pulling the data again did
+    nothing, because pulling the data again is exactly what the cache was
+    preventing. It came right on its own half an hour later, which is the worst
+    possible way for a bug to behave: it looks like the weather service, and it
+    goes away before anyone can catch it.
+    """
+
+
+def _checked(fc, where: str):
+    """Return ``fc`` if it is a forecast, else raise :class:`UnusableForecast`.
+
+    Carries Open-Meteo's own ``reason`` through when there is one - a rate limit
+    and a malformed body are the same shape here and very different problems.
+    """
+    if _usable(fc):
+        return fc
+    reason = (fc or {}).get("reason") if isinstance(fc, dict) else None
+    raise UnusableForecast(f"{where}: {reason or 'no hourly series in the response'}")
+
+
 async def forecast(lat: float, lon: float, days: int = 2) -> dict:
     """HRDPS hourly forecast for a point (winds in knots, hours in UTC).
 
@@ -214,7 +260,8 @@ async def forecast(lat: float, lon: float, days: int = 2) -> dict:
             "windspeed_unit": "kn",
             "timezone": "UTC",
         }
-        return await _http.get_json(settings.openmeteo_base, params)
+        return _checked(await _http.get_json(settings.openmeteo_base, params),
+                        f"hrdps {lat:.3f},{lon:.3f}")
 
     return await cache.once(_point_key(lat, lon, days),
                             settings.openmeteo_cache_ttl, fetch)
@@ -247,7 +294,14 @@ async def forecast_many(points: list[tuple[float, float]], days: int = 2,
             "windspeed_unit": "kn", "timezone": "UTC",
         }
         data = await _http.get_json(settings.openmeteo_base, params)
-        return data if isinstance(data, list) else [data]
+        out = data if isinstance(data, list) else [data]
+        # Every point or none: this is one request, so a body that answered it
+        # properly carries an hourly series for all of them (a point outside the
+        # model's domain still comes back with the hours, filled with nulls).
+        # A batch missing one is a degraded response, not a gap in the weather.
+        for fc in out:
+            _checked(fc, f"hrdps batch of {len(out)}")
+        return out
 
     return await cache.once(key, settings.openmeteo_cache_ttl, fetch)
 
@@ -361,7 +415,12 @@ async def forecast_points(points: list[tuple[float, float]],
         return await per_point()
 
     for i, fc in zip(missing, batch):
-        if isinstance(fc, dict):
+        # ``_usable`` and not ``isinstance(fc, dict)``: the write-back below is
+        # what every later lookup of this point reads, and a body with no hourly
+        # series cached under a point key is a thirty-minute outage nobody can
+        # clear (see ``UnusableForecast``). ``forecast_many`` already refuses to
+        # cache one; this is the same rule on the way back out.
+        if _usable(fc):
             out[i] = fc
             cache.put(_point_key(*points[i], days), fc, ttl)
     return out
@@ -758,6 +817,13 @@ def derive_ceiling_ft(hourly: dict, i: int, elevation_ft: float | None,
 # ---------------------------------------------------------------------------
 # Multi-model wind ensemble (used when there's no METAR).
 # ---------------------------------------------------------------------------
+# All three entry points below go through ``cache.once`` rather than a bare
+# get/put pair. The TTL behaviour is unchanged - a blend that comes back empty
+# is still not cached, so the next caller retries - but a second caller arriving
+# while the first is still in flight now waits on that fetch instead of starting
+# an identical one. These are the most expensive requests the app makes, five
+# models wide, and they are issued from inside the same ``gather`` as everything
+# else; racing them was free only as long as nothing else wanted the same point.
 # Distinct sources blended for a more robust model wind: HRDPS (gem), GFS, HRRR
 # (CONUS/southern-Ontario), ICON, and ECMWF. Open-Meteo serves them in one
 # request via ``models=a,b,c`` and suffixes each variable ``_<model>``; a model
@@ -955,21 +1021,18 @@ async def ensemble_wind_now(lat: float, lon: float, days: int = 2) -> dict | Non
     served them, which is what lets density altitude answer for a field with no
     METAR.
     """
-    key = f"ens:{lat:.3f},{lon:.3f}:{days}"
-    cached = cache.get(key)
-    if cached is None:
+    async def fetch() -> dict | None:
         for models in (ENSEMBLE_MODELS, _CORE_MODELS):
             try:
                 resp = (await _ensemble_fetch([(lat, lon)], days, models,
                                               _BLEND_VARS))[0]
-                cached = ensemble_point_now(resp, models)
-                break
+                return ensemble_point_now(resp, models)
             except Exception:
                 continue  # bad model id / egress → try the safe subset, then give up
-        if cached is None:
-            return None
-        cache.put(key, cached, get_settings().openmeteo_cache_ttl)
-    return cached
+        return None
+
+    return await cache.once(f"ens:{lat:.3f},{lon:.3f}:{days}",
+                            get_settings().openmeteo_cache_ttl, fetch)
 
 
 async def ensemble_wind_many(points: list[tuple[float, float]],
@@ -982,18 +1045,17 @@ async def ensemble_wind_many(points: list[tuple[float, float]],
     if not points:
         return []
     key = f"ens_many:{hash((tuple((round(a, 3), round(b, 3)) for a, b in points), days))}"
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-    for models in (ENSEMBLE_MODELS, _CORE_MODELS):
-        try:
-            data = await _ensemble_fetch(points, days, models, _BLEND_VARS)
-            out = [ensemble_point_now(d, models) for d in data]
-            cache.put(key, out, get_settings().openmeteo_cache_ttl)
-            return out
-        except Exception:
-            continue
-    return [None] * len(points)
+
+    async def fetch() -> list[dict | None]:
+        for models in (ENSEMBLE_MODELS, _CORE_MODELS):
+            try:
+                data = await _ensemble_fetch(points, days, models, _BLEND_VARS)
+                return [ensemble_point_now(d, models) for d in data]
+            except Exception:
+                continue
+        return [None] * len(points)
+
+    return await cache.once(key, get_settings().openmeteo_cache_ttl, fetch)
 
 
 async def ensemble_series(lat: float, lon: float,
@@ -1005,21 +1067,19 @@ async def ensemble_series(lat: float, lon: float,
     that actually answered. Cached under its own key - the collapsed blend and
     the full series are not interchangeable.
     """
-    key = f"ens_series:{lat:.3f},{lon:.3f}:{days}"
-    cached = cache.get(key)
-    if cached is not None:
-        return cached
-    for models in (ENSEMBLE_MODELS, _CORE_MODELS):
-        try:
-            resp = (await _ensemble_fetch([(lat, lon)], days, models,
-                                          _BLEND_VARS))[0]
-            if resp:
-                out = (resp, models)
-                cache.put(key, out, get_settings().openmeteo_cache_ttl)
-                return out
-        except Exception:
-            continue
-    return None
+    async def fetch() -> tuple[dict, list[str]] | None:
+        for models in (ENSEMBLE_MODELS, _CORE_MODELS):
+            try:
+                resp = (await _ensemble_fetch([(lat, lon)], days, models,
+                                              _BLEND_VARS))[0]
+                if resp:
+                    return resp, models
+            except Exception:
+                continue
+        return None
+
+    return await cache.once(f"ens_series:{lat:.3f},{lon:.3f}:{days}",
+                            get_settings().openmeteo_cache_ttl, fetch)
 
 
 def index_for_time(hourly: dict, iso_utc: str) -> int | None:

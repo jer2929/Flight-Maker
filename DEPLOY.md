@@ -164,6 +164,14 @@ keeps idle cost near zero. The thing that bends before your bill at higher usage
 is the free upstreams' rate limits — lengthen cache TTLs via the `FM_` env vars
 (see `app/config.py`) if needed.
 
+A hanging request is billed the same as a working one, which is the other reason
+every API request carries a **time budget** (`FM_REQUEST_BUDGET`, 25 s by
+default). Before it, one unresponsive upstream could hold a machine open for two
+minutes per assessment — awake, billed, and producing nothing the first twenty
+seconds had not already decided. Lowering it trims the worst case further;
+raising it buys patience for a genuinely slow upstream and pays for that patience
+in machine-seconds.
+
 **Two things hold the cost down, and both matter:**
 
 1. **One machine, not two.** flyctl provisions 2 machines by default for high

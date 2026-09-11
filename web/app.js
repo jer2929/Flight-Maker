@@ -907,6 +907,42 @@ let MODE_MANUAL = false;
 function rederiveDayNight() {
   MODE_MANUAL = false;
   refreshAutoDayNight();
+  maybeWarmRoute();
+}
+
+// The route we have already asked the backend to warm.
+// Keyed so that correcting a typo re-warms and re-typing the same code doesn't.
+let WARMED_ROUTE = null;
+
+// Start the destination's forecast downloading while the pilot is still setting
+// up the flight.
+//
+// The page already warms the route-independent products on load. That leaves the
+// expensive half - the full-variable HRDPS forecast for both ends and the three
+// midpoints - entirely on the critical path, and it is the fetch that leaves the
+// card saying "the HRDPS data did not download" when an upstream is having a
+// slow minute. Naming the destination is the moment that fetch becomes knowable,
+// and it is typically seconds before Assess is clicked, so this buys most of the
+// wait back for free: same request, same cache key, same TTL, just started
+// earlier. Nothing on the page waits for it and its failures are ignored - the
+// assessment re-fetches and reports honestly, and a warmup must never be able to
+// raise a banner.
+//
+// Gated on a complete identifier rather than debounced alone: a four-character
+// code is the shortest thing that can be a real aerodrome, so a pilot typing
+// "CYQG" warms once at the end instead of three times on the way there.
+function maybeWarmRoute() {
+  const ctx = autoDayNightContext();
+  if (!ctx || !ctx.dest || ctx.dest.length < 4) return;
+  const dep = (ctx.ident || "").toUpperCase(), dest = ctx.dest.toUpperCase();
+  if (!dep || dep === dest) return;
+  const tas = currentTas();
+  const key = `${dep}>${dest}@${tas > 0 ? Math.round(tas) : ""}`;
+  if (key === WARMED_ROUTE) return;
+  WARMED_ROUTE = key;
+  const p = new URLSearchParams({ dep, dest });
+  if (tas > 0) p.set("tas", Math.round(tas));
+  fetch(`/api/prewarm?${p}`).catch(() => {});
 }
 
 // Which aerodrome(s) and time the current tab is actually planning from.

@@ -83,7 +83,7 @@ def test_a_test_that_owns_the_transport_is_left_alone(monkeypatch):
 
     class _Client:
         is_closed = False
-        async def get(self, url, params=None, headers=None):
+        async def get(self, url, params=None, headers=None, **kw):
             seen.append(url)
             return _Resp()
 

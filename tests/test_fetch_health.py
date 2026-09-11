@@ -170,7 +170,7 @@ def _flaky_client(fail_first: int, payload):
         def __init__(self, **kw):
             pass
 
-        async def get(self, url, params=None, headers=None):
+        async def get(self, url, params=None, headers=None, **kw):
             calls["n"] += 1
             return _Resp()
 
@@ -212,7 +212,7 @@ def test_get_json_retries_once_then_raises(monkeypatch):
         def __init__(self, **kw):
             pass
 
-        async def get(self, url, params=None, headers=None):
+        async def get(self, url, params=None, headers=None, **kw):
             attempts["n"] += 1
             return _Resp()
 

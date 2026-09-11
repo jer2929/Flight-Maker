@@ -252,7 +252,7 @@ def test_the_endpoint_rows_carry_their_own_metar(dataset, monkeypatch):
             return {"data": []}
         if "open-meteo" in url:
             n = len(str(p["latitude"]).split(","))
-            one = {"hourly": {"time": []}}
+            one = {"hourly": {"time": ["2026-01-01T00:00"]}}
             return [one] * n if n > 1 else one
         return []
 

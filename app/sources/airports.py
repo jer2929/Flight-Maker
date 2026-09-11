@@ -17,15 +17,65 @@ from app.services.geo import haversine_nm
 
 
 def _pick(primary: Path, fallback: Path) -> Path:
-    # Always let ensure_airport_data() decide - it self-checks the dataset version
-    # and only rebuilds when missing or stale. (Previously this ran only when the
-    # file was absent, so schema bumps like width_ft never took effect in hosting.)
-    try:
-        from scripts.refresh_airport_data import ensure_airport_data
-        ensure_airport_data()
-    except Exception:
-        pass
+    """Whichever table is on disk, preferring the refreshed one.
+
+    **Deliberately no network call, and no version check.** This runs on
+    whichever thread first touches a loader, and that thread is very often the
+    event loop: ``lru_cache`` memoises a result but does not serialise the call,
+    so the startup warm-up thread and the first request both miss and both run
+    the loader body.
+
+    This used to call ``ensure_airport_data()`` right here, which on an image
+    whose build-time dataset fetch had failed meant three synchronous
+    ``httpx.get(..., timeout=120)`` calls - about 14 MB of OurAirports CSV -
+    running *on the event loop*, inside the first route assessment after a cold
+    start. Every upstream fetch already in flight sat there unread until its
+    20 s read timeout expired, so the pilot waited the better part of a minute
+    and was then told the HRDPS forecast had not downloaded. It had; nothing was
+    there to read it. The machine keeps its rootfs across an auto-stop, so once
+    the download finally landed the next assessment was fast - which is exactly
+    the "slow and broken once, then fine" pattern that is impossible to chase.
+
+    The rebuild still happens on every boot, and still version-checks so a
+    schema bump takes effect in hosting. It happens in :func:`prepare_dataset`,
+    on the startup warm-up thread, where waiting for it costs nobody a verdict.
+    """
     return primary if primary.exists() else fallback
+
+
+def reset_caches() -> None:
+    """Drop the parsed tables so the next load re-reads them from disk.
+
+    Only needed when the files themselves change underneath a running process,
+    which is precisely what :func:`prepare_dataset` does on a boot whose image
+    shipped without them.
+    """
+    load_airports.cache_clear()
+    load_runways.cache_clear()
+    load_stations.cache_clear()
+
+
+def prepare_dataset() -> bool:
+    """Version-check the aerodrome dataset and rebuild it if stale. **Startup
+    only** - never from a request.
+
+    Returns True if the tables were rebuilt during this call, which is the
+    caller's cue to :func:`reset_caches`: a request that arrived first has
+    already parsed - and memoised - the 28-aerodrome seed, and would otherwise
+    keep serving it for the life of the process.
+
+    Failures are swallowed, exactly as they were when this lived in ``_pick``:
+    no egress means the seed, which is the app working offline rather than not
+    working at all.
+    """
+    try:
+        from scripts.refresh_airport_data import dataset_current, ensure_airport_data
+        if dataset_current():
+            return False
+        ensure_airport_data()
+        return True
+    except Exception:
+        return False
 
 
 def _to_float(value: str | None) -> float | None:
