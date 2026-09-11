@@ -35,7 +35,7 @@ def stub_upstreams(monkeypatch):
         if "open-meteo" in url:
             asked.append("openmeteo")
             n = len(str(p["latitude"]).split(","))
-            one = {"hourly": {"time": []}}
+            one = {"hourly": {"time": ["2026-01-01T00:00"]}}
             return [one] * n if n > 1 else one
         asked.append(url.rsplit("/", 1)[-1].split("?")[0])
         return []
@@ -86,6 +86,91 @@ def test_prewarm_takes_fetches_off_the_pilots_critical_path(stub_upstreams):
     cold, warm = asyncio.run(run())
     assert warm < cold, (
         f"prewarm saved nothing: {cold} requests cold, {warm} after warming")
+
+
+# ---------------------------------------------------------------------------
+# Warming the route the pilot has actually named
+# ---------------------------------------------------------------------------
+#
+# The route-independent half of the warmup was always the easy half. The
+# expensive fetch a route assessment makes is the full-variable HRDPS forecast
+# for both ends and the three sampled midpoints, and until the destination is
+# named there is nothing to ask for. Naming it is the moment that changes, and
+# it happens seconds before Assess is clicked - so the page warms the route then.
+#
+# What makes it worth anything is that the keys match exactly. A warmup whose
+# cache key is a rounding error away from the real one costs an upstream request
+# and helps nobody, which is why both sides derive the point list from one
+# function (``orchestrator.route_forecast_plan``).
+
+
+def test_naming_a_route_warms_that_route_s_forecast(stub_upstreams):
+    from app import orchestrator
+    from app.sources import openmeteo
+
+    with TestClient(main.app) as client:
+        body = client.get("/api/prewarm?dep=CYFD&dest=CYQG").json()
+
+    assert "route_hrdps" in body["warmed"], body
+
+    dep, dest = ap.get_airport("CYFD"), ap.get_airport("CYQG")
+    points, days = orchestrator.route_forecast_plan(dep, dest)
+    missing = [pt for pt in points
+               if cache.get(openmeteo._point_key(pt[0], pt[1], days)) is None]
+    assert not missing, (
+        f"{len(missing)} of {len(points)} route points were not warmed under the "
+        f"key the assessment reads - the warmup spent a request on nothing")
+
+
+def test_the_warmed_route_costs_the_assessment_nothing(stub_upstreams):
+    """The measurement: the endpoint forecast is free once the route is warm."""
+    from app import orchestrator
+    from app.sources import openmeteo
+
+    async def run():
+        dep, dest = ap.get_airport("CYFD"), ap.get_airport("CYQG")
+        points, days = orchestrator.route_forecast_plan(dep, dest)
+
+        cache.clear()
+        stub_upstreams.clear()
+        await openmeteo.forecast_points(points, days)
+        cold = len(stub_upstreams)
+
+        cache.clear()
+        await main.prewarm(dep="CYFD", dest="CYQG")
+        stub_upstreams.clear()
+        await openmeteo.forecast_points(points, days)
+        return cold, len(stub_upstreams)
+
+    cold, warm = asyncio.run(run())
+    assert cold > 0, "the cold path made no request - the stub is not wired up"
+    assert warm == 0, f"still {warm} requests after warming the route"
+
+
+def test_a_route_with_no_destination_warms_exactly_what_it_used_to():
+    """The page calls this on load, before any destination exists. That call
+    must stay the route-independent warmup it has always been."""
+    import inspect
+    src = inspect.getsource(main.prewarm)
+    assert 'jobs["route_hrdps"]' in src
+    assert "if a is not None and b is not None and a.ident != b.ident:" in src, (
+        "the route forecast must be conditional on a resolved destination - "
+        "warming the home base against itself is a request for nothing")
+
+
+def test_the_page_warms_the_route_once_the_destination_resolves():
+    js = _app_js()
+    assert "function maybeWarmRoute()" in js
+    # Fired from the one place both ends of the route and the ETD already
+    # converge, so it cannot be left off a path that changes the flight.
+    assert "  maybeWarmRoute();" in js
+    # A complete identifier, not a prefix: a debounce alone still warms three
+    # times on the way to typing "CYQG".
+    assert "ctx.dest.length < 4" in js
+    # Deduplicated, or every re-derivation of day/night re-warms.
+    assert "if (key === WARMED_ROUTE) return;" in js
+    # Never awaited, failures ignored - same contract as the on-load warmup.
+    assert "fetch(`/api/prewarm?${p}`).catch(() => {});" in js
 
 
 def test_a_failed_prewarm_is_silent(monkeypatch):

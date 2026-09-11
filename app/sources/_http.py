@@ -38,12 +38,20 @@ automatically, so this can never turn a working fetch into a failing one.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import time
+from contextlib import contextmanager
 
 import httpx
 
 from app.config import get_settings
 
 RETRY_DELAY_S = 1.0
+
+# The floor on what is worth asking for. Below this a request cannot realistically
+# connect and read an answer, so spending the last of a budget on it only delays
+# the honest "this did not download" by a second.
+MIN_ATTEMPT_S = 2.0
 
 # How long to wait to *reach* a host, as opposed to how long to wait for its
 # answer. ``request_timeout`` used to be applied as httpx's blanket timeout, so
@@ -68,10 +76,13 @@ _client: httpx.AsyncClient | None = None
 _client_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _timeout() -> httpx.Timeout:
-    read = get_settings().request_timeout
-    return httpx.Timeout(connect=CONNECT_TIMEOUT_S, read=read,
-                         write=WRITE_TIMEOUT_S, pool=read)
+def _timeout(read: float | None = None) -> httpx.Timeout:
+    """The timeout for one attempt. ``read`` defaults to the full
+    ``request_timeout``; :func:`_get` passes what the budget allows instead."""
+    if read is None:
+        read = get_settings().request_timeout
+    return httpx.Timeout(connect=min(CONNECT_TIMEOUT_S, read), read=read,
+                         write=min(WRITE_TIMEOUT_S, read), pool=read)
 
 
 def get_client() -> httpx.AsyncClient:
@@ -101,19 +112,125 @@ async def _get(url: str, params, headers, attempts: int, extract):
     ``extract`` runs inside the try on purpose: a 200 carrying a truncated or
     malformed body is exactly the transient this retry exists for, and it is
     indistinguishable from a good response until you try to decode it.
+
+    **Every attempt is sized by what is left of the request's budget** (see
+    :func:`budget`). Without one the read timeout is ``request_timeout``, as it
+    always was; with one, the attempts share the time remaining. This is what
+    stops one unresponsive host from setting the page's latency: two attempts at
+    a 20 s read plus the delay between them is 41 seconds of a pilot watching a
+    spinner, and ``openmeteo.forecast_points`` can chain a batch and a per-point
+    fallback for double that. The answer at the end of it is the same "this did
+    not download" a bounded wait would have given, forty seconds earlier.
     """
     last: Exception | None = None
     for i in range(attempts):
+        read = _attempt_read_s(attempts - i)
+        if read is None:               # budget gone - fail now, honestly
+            raise last or httpx.TimeoutException(
+                f"request budget exhausted before fetching {url}", request=None)
         try:
             client = get_client()
-            resp = await client.get(url, params=params, headers=headers)
+            resp = await client.get(url, params=params, headers=headers,
+                                    timeout=_timeout(read))
             resp.raise_for_status()
             return extract(resp)
         except Exception as exc:  # timeout, 5xx, 429, malformed body
             last = exc
-            if i + 1 < attempts:
-                await asyncio.sleep(RETRY_DELAY_S)
+            if i + 1 >= attempts:
+                break
+            delay = _retry_delay_s(exc)
+            if delay is None:          # no room left for another go
+                break
+            await asyncio.sleep(delay)
     raise last
+
+
+def _retry_delay_s(exc: Exception) -> float | None:
+    """How long to wait before trying again, or None to stop trying.
+
+    Normally the flat :data:`RETRY_DELAY_S` - long enough to ride out a dropped
+    connection, short enough not to be an outage of our own. Two things override
+    it:
+
+    * **A rate limit says how long to wait.** Re-asking a 429 one second later
+      is not a retry, it is a second violation; Open-Meteo and aviationweather
+      both answer these with ``Retry-After``. Honour it when it fits in what is
+      left of the budget, and give up rather than sit on a machine doing nothing
+      when it does not.
+    * **The budget cannot fit another attempt.** Sleeping and then failing for
+      want of time is the worst of both.
+    """
+    delay = RETRY_DELAY_S
+    resp = getattr(exc, "response", None)
+    if resp is not None and resp.status_code in (429, 503):
+        try:
+            delay = max(delay, float(resp.headers.get("Retry-After", "")))
+        except (TypeError, ValueError):
+            pass                       # absent, or an HTTP-date we won't parse
+    left = remaining()
+    if left is not None and left - delay < MIN_ATTEMPT_S:
+        return None
+    return delay
+
+
+# ---------------------------------------------------------------------------
+# The per-request time budget
+# ---------------------------------------------------------------------------
+# A route assessment is ~19 fetches in one gather, and the pilot waits for the
+# slowest of them. Each one's own ceiling was ``attempts x request_timeout``,
+# which nothing bounded in aggregate: a single unresponsive host cost 41 seconds
+# and a batch-then-fallback chain cost 82. A deadline set once, at the top of the
+# request, turns that into "answer with whatever landed, and say what didn't".
+#
+# A ContextVar for the same reason ``fetch_health`` uses one: asyncio tasks copy
+# the context at creation, so every gathered child of a request sees the deadline
+# its parent set, and two concurrent requests never see each other's.
+_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "http_deadline", default=None)
+
+
+@contextmanager
+def budget(seconds: float | None):
+    """Give everything fetched inside this block ``seconds`` between them.
+
+    Nested budgets do not extend one another: the tighter deadline wins, so a
+    sub-request can shorten its own leash but never lengthen the one it is on.
+    Passing None leaves any existing deadline alone.
+    """
+    if not seconds or seconds <= 0:
+        yield
+        return
+    mine = time.monotonic() + seconds
+    current = _deadline.get()
+    token = _deadline.set(mine if current is None else min(current, mine))
+    try:
+        yield
+    finally:
+        _deadline.reset(token)
+
+
+def remaining() -> float | None:
+    """Seconds left in the active budget, or None if there isn't one."""
+    deadline = _deadline.get()
+    return None if deadline is None else deadline - time.monotonic()
+
+
+def _attempt_read_s(attempts_left: int) -> float | None:
+    """The read timeout for the next attempt, or None if there is no time for it.
+
+    With no budget this is ``request_timeout``, exactly as before. With one, the
+    remaining time is shared evenly across the attempts still to come, so a
+    two-attempt fetch under a 25 s budget gets roughly 12 s a go rather than 20
+    plus 20 - and the retry, which exists to ride out a dropped connection, is
+    still there to be spent.
+    """
+    ceiling = get_settings().request_timeout
+    left = remaining()
+    if left is None:
+        return ceiling
+    if left < MIN_ATTEMPT_S:
+        return None
+    return min(ceiling, max(MIN_ATTEMPT_S, left / max(1, attempts_left)))
 
 
 async def get_json(url: str, params: dict | list, *,

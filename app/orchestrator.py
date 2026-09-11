@@ -1642,6 +1642,27 @@ def _stamp_route_groups(checks: list[LimitCheck], dep_a, dest_a) -> None:
         c.source_text = wf.by_field_text.get(field) or None
 
 
+def route_forecast_plan(dep: Airport, dest: Airport
+                       ) -> tuple[list[tuple[float, float]], int]:
+    """The HRDPS points and horizon :func:`assess_route` will ask for.
+
+    Pulled out so ``/api/prewarm`` can warm *this* route rather than only the
+    home base. The keys have to match exactly or the warmup is a wasted request
+    that helps nobody, and that is far too easy to let drift when the two sides
+    derive the list separately - so there is one derivation and both call it.
+
+    Determined entirely by the two aerodromes and the pilot's cruise speed: the
+    ETD does not enter into it, because the horizon is the whole timeline plus
+    the leg, not the hours around one departure.
+    """
+    distance = haversine_nm(dep.lat, dep.lon, dest.lat, dest.lon)
+    days = days_for(get_settings().timeline_hours
+                    + int(flight_time_hr(distance, get_cruise_kt())) + 1)
+    points = [(dep.lat, dep.lon), (dest.lat, dest.lon)]
+    points += _route_midpoints(dep, dest)
+    return points, days
+
+
 async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threats: list[str],
                        flight_rules: str = "vfr",
                        etd: datetime | None = None) -> RouteAssessment | None:
@@ -1696,9 +1717,12 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     t_prov = flight_time_hr(distance, get_cruise_kt())
     eta_prov = etd_utc + timedelta(hours=t_prov)
 
-    # Fetch far enough ahead that a late ETD plus a long leg still lands inside
+    # The points and the horizon this route's forecast is fetched over. Shared
+    # with ``/api/prewarm`` (see ``route_forecast_plan``) so the page can start
+    # this download while the pilot is still setting the flight up, and ``days``
+    # reaches far enough ahead that a late ETD plus a long leg still lands inside
     # the forecast we asked for.
-    days = days_for(settings.timeline_hours + int(t_prov) + 1)
+    fc_points, days = route_forecast_plan(dep, dest)
     corridor = _corridor_airports(dep, dest, distance)
 
     # Every product below depends only on the route geometry, never on another
@@ -1719,9 +1743,8 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # forecast, so they go out as one batched request instead of five - see
     # ``openmeteo.forecast_points``, which still caches (and reuses) them
     # per point and falls back to five requests if the batch can't be trusted.
-    point_fcs_job = _safe(openmeteo.forecast_points(
-        [(dep.lat, dep.lon), (dest.lat, dest.lon)] + list(mids), days),
-        [], fetch_health.HRDPS)
+    point_fcs_job = _safe(openmeteo.forecast_points(fc_points, days),
+                          [], fetch_health.HRDPS)
     # The pad the hazard fetch is scoped by, and the pad the FIR test below
     # re-derives. They have to be the same number - a narrower pad on the test
     # would set aside, on its region alone, a bulletin the fetch had already

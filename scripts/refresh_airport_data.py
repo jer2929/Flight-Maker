@@ -15,9 +15,12 @@ questions:
 Usable two ways:
   * CLI (run anywhere the network is open; also run at Docker build time):
         python scripts/refresh_airport_data.py
-  * Imported: ``ensure_airport_data()`` is called lazily on first app load and
-    populates the dataset if it's missing and the network is reachable. Falls
-    back silently to the bundled seed otherwise.
+  * Imported: ``ensure_airport_data()`` is called once at app startup, from the
+    warm-up thread in ``app.main``'s lifespan, and populates the dataset if it's
+    missing and the network is reachable. Falls back silently to the bundled seed
+    otherwise. It must never be called from a request: it blocks for as long as
+    three multi-megabyte downloads take, and on the event loop that stalls every
+    weather fetch already in flight (see ``app.sources.airports._pick``).
 """
 from __future__ import annotations
 
@@ -147,7 +150,13 @@ def build_airport_data() -> tuple[int, int, int]:
     return len(out_airports), len(out_runways), len(out_stations)
 
 
-def _dataset_current() -> bool:
+def dataset_current() -> bool:
+    """Is the built dataset present and at the current schema version?
+
+    Public because ``app.sources.airports.prepare_dataset`` asks it *before*
+    rebuilding: knowing whether a rebuild is about to happen is what tells the
+    app to drop a table it may already have parsed from the seed.
+    """
     if not (DATA_DIR / "airports_ca.csv").exists():
         return False
     if not (DATA_DIR / "stations_ca.csv").exists():
@@ -165,7 +174,7 @@ def ensure_airport_data() -> bool:
 
     Returns True if the full dataset is present, False to fall back to the seed.
     """
-    if _dataset_current():
+    if dataset_current():
         return True
     try:
         build_airport_data()

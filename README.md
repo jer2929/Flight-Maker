@@ -794,9 +794,13 @@ invented ones.
 ## Airport data
 
 The full **all-Canada + US-border** dataset is baked into the Docker image at
-build time, and is **auto-bootstrapped** from OurAirports on first launch
-anywhere the network is open. Until then a bundled seed of ~28 common ON/QC/border
-fields is used. To (re)build it manually:
+build time — and the build *fails* if that fetch fails, rather than shipping an
+image that quietly falls back to the seed. At startup the app version-checks the
+baked copy in a background thread and rebuilds it only if the schema has moved;
+that check never runs on a request, because it can take three multi-megabyte
+downloads and on the event loop that stalls every weather fetch in flight. Until
+it lands, a bundled seed of ~28 common ON/QC/border fields is used. To (re)build
+it manually:
 
 ```bash
 python scripts/refresh_airport_data.py
@@ -822,20 +826,57 @@ auto-deploys on every push to `main`.
 dollars a month — and it means the first request of the day wakes a stopped
 machine with an empty cache and no open connection to any upstream.
 
-Three things narrow that gap without paying for an always-on machine. The page
+Four things narrow that gap without paying for an always-on machine. The page
 calls `/api/config` on load, which wakes the machine before the pilot has typed
 anything, and then `/api/prewarm`, which pulls the products that don't depend on
 the route (the national SIGMET/AIRMET/CWA/G-AIRMET feeds and the home base) and
 opens the upstream connections while they are still choosing a destination.
+**Naming a destination warms that route too** — the page calls `/api/prewarm`
+again with the two aerodromes, which starts the full-variable HRDPS forecast for
+both ends and the three midpoints downloading seconds before Assess is clicked.
 Startup parses the airport dataset in a thread rather than leaving it to the
 first request. And the fetching itself is cheaper: a cold route is 19 upstream
 requests rather than 24, all of them sharing pooled HTTP/2 connections to the
 three hosts instead of opening a TLS session each.
 
 None of it changes what the pilot is shown. The prewarm writes the same values
-under the same cache keys with the same TTLs a live request would, and it is
-deliberately outside `fetch_health.collect()` — a warmup can never put a banner
-on the page, and a real request will re-fetch and report an outage honestly.
+under the same cache keys with the same TTLs a live request would — the route's
+point list comes from the same function `assess_route` uses, so a warmed key can
+never miss by a rounding error — and it is deliberately outside
+`fetch_health.collect()`: a warmup can never put a banner on the page, and a real
+request will re-fetch and report an outage honestly.
+
+### Why a slow upstream can no longer set the page's latency
+
+Every API request carries a **time budget** (`FM_REQUEST_BUDGET`, 25 s), and every
+attempt inside it is sized by what is left. `request_timeout` only ever bounded a
+single attempt, and nothing bounded the chain: against an Open-Meteo that stops
+answering, `forecast_points` falls back from one batched request to five
+per-point ones and each ensemble blend retries with a second model set, which
+measured **122 seconds** end to end. The answer at the end of it was the same
+"the HRDPS data did not download" that was already decided inside the first
+twenty seconds — and no pilot waits that out, so they hit the button again and
+put a second copy of the whole fan-out on a machine already struggling.
+
+The same scenario now lands in 25 seconds, with the card rendered and the banner
+naming what is missing. A rate limit is also read properly: a `429` carrying
+`Retry-After` is waited out for as long as it asks when that fits the budget, and
+abandoned rather than hammered when it doesn't.
+
+### Why "pull the data again" used to do nothing for half an hour
+
+Open-Meteo reports a rate limit as a JSON body, and a truncated or degraded
+answer is a `200` right up until you look inside it. Either one used to be stored
+under the point's cache key for the full `FM_OPENMETEO_CACHE_TTL` (30 min). From
+then on every assessment read it as a cache **hit**, found no hours in it, and
+told the pilot the HRDPS forecast had not downloaded — without ever asking again.
+Pressing "Pull the data again" could not help, because asking again was exactly
+what the cache was preventing; it came right on its own half an hour later.
+
+A response with no populated `hourly.time` is no longer a forecast: the client
+raises instead of returning it, `cache.once` stores nothing when the factory
+raises, and the next request really does go and ask. The banner still says what
+is missing — that part was always honest — it is just no longer stuck saying it.
 
 While an assessment runs, the elapsed time ticks next to the button and stays
 there when it lands ("data fetched in 11.8 s"), so a long pull reads as work

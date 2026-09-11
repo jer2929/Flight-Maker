@@ -121,6 +121,22 @@ class Settings(BaseSettings):
 
     request_timeout: float = 20.0
 
+    # The wall clock one API request gets to spend on upstreams, in total.
+    #
+    # ``request_timeout`` bounds a single attempt; nothing bounded the sum, and
+    # the sum is what the pilot experiences. Two attempts at 20 s plus the delay
+    # between them is 41 seconds for one unresponsive host, and
+    # ``openmeteo.forecast_points`` can chain a batched request and a per-point
+    # fallback for twice that - a minute and a half of spinner ending in the
+    # same "this did not download" that 25 seconds would have given.
+    #
+    # Set from the other end: how long is a pilot willing to wait before an
+    # answer stops being useful. Attempts inside the budget are sized to fit it
+    # (see ``sources._http._attempt_read_s``), so lowering this shortens every
+    # attempt rather than lopping off the last one, and a normal warm assessment
+    # - a few seconds - never comes near it.
+    request_budget: float = 25.0
+
 
 @lru_cache
 def get_settings() -> Settings:

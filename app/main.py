@@ -36,13 +36,31 @@ _EMPTY_FC = {"type": "FeatureCollection", "features": []}
 
 
 def _load_datasets() -> None:
-    """Parse the airport/runway/station tables into memory.
+    """Bring the aerodrome dataset up to date, then parse it into memory.
 
-    All three are ``lru_cache``d and parse multi-thousand-row CSVs into pydantic
-    models on first touch, so whoever touches them first pays for all of it.
-    Left to itself that is the pilot, mid-assessment. Doing it at startup moves
-    the cost into the window where the machine is booting anyway.
+    Both halves belong off the event loop, for different reasons.
+
+    The **rebuild** is three synchronous multi-megabyte downloads. It normally
+    does nothing at all - the Dockerfile bakes the dataset in and this only
+    version-checks it - but on an image whose build-time fetch failed it is the
+    full 14 MB, and it used to run from ``airports._pick``, i.e. on whichever
+    thread first touched a loader. ``lru_cache`` memoises without serialising,
+    so that thread was routinely the event loop inside the first assessment
+    after a cold start: every weather fetch already in flight went unread until
+    its read timeout expired, and the pilot got a 45-second wait ending in
+    "the HRDPS forecast did not download".
+
+    The **parse** is multi-thousand-row CSVs into pydantic models, and whoever
+    touches them first pays for all of it. Left to itself that is the pilot,
+    mid-assessment; doing it here moves the cost into the window where the
+    machine is booting anyway.
+
+    The ``reset_caches`` between them closes the last gap: if a request beat us
+    to it, it parsed the 28-aerodrome seed and memoised it, and without this the
+    process would serve that seed until it next stopped.
     """
+    if ap.prepare_dataset():
+        ap.reset_caches()
     ap.load_airports()
     ap.load_runways()
     ap.load_stations()
@@ -50,11 +68,11 @@ def _load_datasets() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # In a thread: this is CPU-bound parsing, and ``_pick`` can additionally go
-    # to the network if the baked dataset is missing (see
-    # ``scripts.refresh_airport_data``). Neither belongs on the event loop while
-    # the platform's health check is waiting for an answer. Fire-and-forget -
-    # if it fails, the first request pays for the load exactly as it does today.
+    # In a thread, and *only* in a thread: see ``_load_datasets``. This is the
+    # one place the dataset rebuild is allowed to happen, because it is the one
+    # place where blocking costs nobody a verdict. Fire-and-forget - a request
+    # that arrives before it finishes reads whatever table is already on disk
+    # rather than waiting for this one.
     warm = asyncio.create_task(asyncio.to_thread(_load_datasets))
     try:
         yield
@@ -117,7 +135,8 @@ async def config():
 
 
 @app.get("/api/prewarm")
-async def prewarm():
+async def prewarm(dep: str | None = None, dest: str | None = None,
+                  tas: float | None = None):
     """Pull the products that don't depend on which route the pilot picks.
 
     The first assessment of the day is the slow one, and most of why is that
@@ -159,6 +178,25 @@ async def prewarm():
 
     ``awc.pireps`` is left out: its cache key is built from the route's bounding
     box, so prewarming it could only ever add an entry nobody reads.
+
+    **Naming a route warms that route's forecast too.** With ``dep``/``dest``
+    (and the pilot's ``tas``, which sets the horizon), this also pulls the
+    full-variable HRDPS forecast for the departure, the destination and the three
+    sampled midpoints - the single most expensive fetch a route assessment makes,
+    and the one that leaves the page saying "the HRDPS data did not download"
+    when it doesn't land. The page calls this the moment a destination resolves
+    to a real aerodrome, which is typically seconds before Assess is clicked, so
+    the request is already in flight or already cached when the pilot commits.
+
+    The points and horizon come from ``orchestrator.route_forecast_plan``, which
+    is the same derivation ``assess_route`` uses. That is not tidiness: a warmup
+    whose cache key is a rounding error away from the real one is a request that
+    costs an upstream call and helps nobody.
+
+    Deliberately *not* warmed for a named route: the CFPS products. Their cache
+    key is the sorted chunk of sites in the query, and a route asks for its
+    endpoints together with the nearby reporting stations and the enroute
+    candidates - so warming ``[dep, dest]`` writes a key nothing ever reads.
     """
     from app.sources import awc, cfps, openmeteo
 
@@ -179,12 +217,22 @@ async def prewarm():
         jobs["hrdps"] = openmeteo.forecast(
             origin.lat, origin.lon, orchestrator.days_for(s.timeline_hours))
 
-    results = await asyncio.gather(*jobs.values(), return_exceptions=True)
+    a = ap.get_airport(dep or s.origin)
+    b = ap.get_airport(dest) if dest else None
+    if a is not None and b is not None and a.ident != b.ident:
+        with cruise_override(tas):
+            points, days = orchestrator.route_forecast_plan(a, b)
+        jobs["route_hrdps"] = openmeteo.forecast_points(points, days)
+
+    with _http.budget(s.request_budget):
+        results = await asyncio.gather(*jobs.values(), return_exceptions=True)
     warmed = [name for name, r in zip(jobs, results)
               if not isinstance(r, BaseException)]
     # Awaited rather than backgrounded on purpose: a fire-and-forget task can be
     # killed mid-flight when the platform stops an idle machine, and holding the
-    # request open is what tells it the machine is not idle.
+    # request open is what tells it the machine is not idle. Budgeted for the
+    # other side of that coin: a warmup that hangs is billed machine-seconds
+    # doing nothing, and there is nobody waiting on it to notice.
     return {"warmed": warmed, "count": len(warmed), "of": len(jobs)}
 
 
@@ -299,7 +347,7 @@ async def route(
     dep = dep or s.origin
     manual = [t for t in threats.split(",") if t]
     with limits_override(_parse_prefs(prefs)), cruise_override(tas), \
-            fetch_health.collect() as health:
+            _http.budget(s.request_budget), fetch_health.collect() as health:
         result = await orchestrator.assess_route(dep, dest, mode, manual,
                                                  flight_rules=flight_rules,
                                                  etd=_parse_etd(etd))
@@ -324,7 +372,8 @@ async def circuits(
     s = get_settings()
     ident = (aerodrome or s.origin).upper()
     manual = [t for t in threats.split(",") if t]
-    with limits_override(_parse_prefs(prefs)), fetch_health.collect() as health:
+    with limits_override(_parse_prefs(prefs)), _http.budget(s.request_budget), \
+            fetch_health.collect() as health:
         result = await orchestrator.assess_circuits(ident, mode, manual,
                                                     flight_rules=flight_rules,
                                                     etd=_parse_etd(etd))
@@ -350,7 +399,8 @@ async def gfa(
         return JSONResponse({"error": "unknown departure", "products": {}}, status_code=404)
     from app.sources import cfps
     try:
-        result = await cfps.gfa(a.ident, debug=bool(debug))
+        with _http.budget(get_settings().request_budget):
+            result = await cfps.gfa(a.ident, debug=bool(debug))
     except Exception as e:  # network/shape issues degrade to an empty panel
         return JSONResponse({"error": str(e), "products": {}})
     return JSONResponse(result)
@@ -371,7 +421,8 @@ async def wms_times(layer: str = Query(default="RADAR_1KM_RRAI")):
     if layer not in geomet.WMS_LAYERS:
         return JSONResponse({"error": f"unknown layer {layer}"})
     try:
-        result = await geomet.layer_times(layer)
+        with _http.budget(get_settings().request_budget):
+            result = await geomet.layer_times(layer)
     except Exception as e:
         return JSONResponse({"error": str(e)})
     if not result:
@@ -410,7 +461,8 @@ async def flight_category(dep: str = Query(...), dest: str = Query(default=None)
                                 s.hazard_route_sample_nm)
             if b else [(a.lat, a.lon)])
     try:
-        stations, meta = await fc.collect(path)
+        with _http.budget(s.request_budget):
+            stations, meta = await fc.collect(path)
     except Exception as e:
         return JSONResponse({"error": str(e), "geojson": _EMPTY_FC})
     return JSONResponse({"geojson": fc.to_feature_collection(stations), **meta})
@@ -447,10 +499,11 @@ async def isobars(dep: str = Query(...), dest: str = Query(default=None),
                                 s.hazard_route_sample_nm)
             if b else [(a.lat, a.lon)])
     try:
-        geojson, meta = await iso.collect(
-            path, etd,
-            pad_nm=s.isobar_corridor_nm, max_span_deg=s.isobar_max_span_deg,
-            n=s.isobar_grid_n, interval=s.isobar_interval_hpa)
+        with _http.budget(s.request_budget):
+            geojson, meta = await iso.collect(
+                path, etd,
+                pad_nm=s.isobar_corridor_nm, max_span_deg=s.isobar_max_span_deg,
+                n=s.isobar_grid_n, interval=s.isobar_interval_hpa)
     except Exception as e:
         return JSONResponse({"error": str(e), "geojson": iso.EMPTY})
     return JSONResponse({"geojson": geojson, **meta})
@@ -479,7 +532,7 @@ async def suggest(
     radius = radius or s.default_radius_nm
     manual = [t for t in threats.split(",") if t]
     with limits_override(_parse_prefs(prefs)), cruise_override(tas), \
-            fetch_health.collect() as health:
+            _http.budget(s.request_budget), fetch_health.collect() as health:
         results = await orchestrator.suggest(
             radius, mode, manual, surface, min_length_ft, into_wind,
             go_only=go_only, max_time_min=max_time_min, max_crosswind=max_crosswind,

@@ -257,9 +257,9 @@ def test_forecast_many_variable_subset_has_its_own_cache_key():
         # pooled client per event loop and checks it is still open first.
         is_closed = False
 
-        async def get(self, url, params=None, headers=None):
+        async def get(self, url, params=None, headers=None, **kw):
             captured.append(params["hourly"])
-            return _Resp([{"hourly": {"time": []}}])
+            return _Resp([{"hourly": {"time": ["2026-01-01T00:00"]}}])
 
     import httpx
     real = httpx.AsyncClient
@@ -483,3 +483,103 @@ def test_a_short_batch_is_refused_rather_than_mispaired(monkeypatch):
 def test_forecast_points_handles_the_trivial_cases():
     cache.clear()
     assert asyncio.run(openmeteo.forecast_points([], 3)) == []
+
+
+# ---------------------------------------------------------------------------
+# A response that isn't a forecast must never be cached as one
+# ---------------------------------------------------------------------------
+#
+# This was a thirty-minute outage the app inflicted on itself. Open-Meteo reports
+# a rate limit as a JSON body, and a truncated or degraded answer is a 200 right
+# up until you look inside it. Either one used to be stored under the point's key
+# for the full ``openmeteo_cache_ttl``; from then on every assessment read it as
+# a cache HIT, found no hours in it, and told the pilot the HRDPS forecast had
+# not downloaded - without ever asking again. "Pull the data again" did nothing,
+# because pulling the data again is precisely what the cache was preventing, and
+# it came right on its own half an hour later.
+#
+# That is the worst way for a bug to behave: it wears the weather service's face
+# and it clears up before anyone can catch it in the act.
+def _bad_body():
+    return {"error": True, "reason": "Minutely API request limit exceeded"}
+
+
+def test_a_rate_limit_body_is_not_cached_as_a_forecast(monkeypatch):
+    from app.sources import _http, cache
+
+    calls = {"n": 0}
+
+    async def get_json(url, params, *, headers=None, attempts=2):
+        calls["n"] += 1
+        return _bad_body()
+
+    monkeypatch.setattr(_http, "get_json", get_json)
+    cache.clear()
+
+    async def twice():
+        for _ in range(2):
+            with pytest.raises(openmeteo.UnusableForecast):
+                await openmeteo.forecast(43.1, -80.3, 3)
+
+    asyncio.run(twice())
+    assert calls["n"] == 2, (
+        "the second assessment was served the rate-limit body out of cache - "
+        "it will report HRDPS missing until the TTL expires and never retry")
+    assert cache.get(openmeteo._point_key(43.1, -80.3, 3)) is None
+
+
+def test_the_reason_upstream_gave_survives_into_the_error(monkeypatch):
+    """A rate limit and a malformed body are the same shape here and very
+    different problems. Whoever reads the log should be able to tell them apart."""
+    from app.sources import _http
+
+    async def get_json(url, params, *, headers=None, attempts=2):
+        return _bad_body()
+
+    monkeypatch.setattr(_http, "get_json", get_json)
+    with pytest.raises(openmeteo.UnusableForecast, match="Minutely API request limit"):
+        asyncio.run(openmeteo.forecast(43.1, -80.3, 3))
+
+
+def test_a_batch_missing_its_hours_is_not_cached_either(monkeypatch):
+    """``forecast_many`` is one request, so a body that answered it properly
+    carries hours for every point - a point outside the model's domain still
+    comes back with the hours, filled with nulls."""
+    from app.sources import _http, cache
+
+    async def get_json(url, params, *, headers=None, attempts=2):
+        return [{"hourly": {"time": ["2026-01-01T00:00"]}}, _bad_body()]
+
+    monkeypatch.setattr(_http, "get_json", get_json)
+    cache.clear()
+
+    with pytest.raises(openmeteo.UnusableForecast):
+        asyncio.run(openmeteo.forecast_many([(43.0, -80.0), (44.0, -81.0)], 2))
+    assert cache._store == {}, "a degraded batch was cached"
+
+
+def test_forecast_points_writes_back_only_real_forecasts(monkeypatch):
+    """The per-point write-back is what every later lookup of that point reads.
+
+    ``forecast_points`` degrades to ``{}`` for a point it could not get, which is
+    right - the card renders and the banner says so. Caching that ``{}`` under
+    the point's key would make the next assessment inherit it.
+    """
+    from app.sources import cache
+
+    good = {"hourly": {"time": ["2026-01-01T00:00"]}}
+
+    async def batch(points, days=2, hourly=None):
+        return [good, {}]
+
+    monkeypatch.setattr(openmeteo, "forecast_many", batch)
+    cache.clear()
+
+    pts = [(43.0, -80.0), (44.0, -81.0)]
+    out = asyncio.run(openmeteo.forecast_points(pts, 2))
+
+    assert out[0] == good and out[1] == {}
+    assert cache.get(openmeteo._point_key(43.0, -80.0, 2)) == good
+    assert cache.get(openmeteo._point_key(44.0, -81.0, 2)) is None, (
+        "an empty forecast was cached - the next assessment of this point "
+        "inherits it and reports HRDPS missing without asking")

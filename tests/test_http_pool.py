@@ -33,7 +33,7 @@ class _StubClient:
         self.gets = 0
         _StubClient.made.append(self)
 
-    async def get(self, url, params=None, headers=None):
+    async def get(self, url, params=None, headers=None, **kw):
         self.gets += 1
         return _StubResp()
 
