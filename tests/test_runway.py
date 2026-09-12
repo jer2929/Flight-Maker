@@ -71,24 +71,65 @@ def test_best_runway_calm_returns_zero():
     assert sol.crosswind_kt == 0.0
 
 
-def test_gust_crosswind_uses_half_gust_factor():
+def test_gust_components_resolve_the_peak_gust():
+    """The ``*_kt_gust`` components are the peak gust across the runway, not
+    half of it.
+
+    This used to apply the half-gust factor - ``wind + 0.5 * (gust - wind)`` -
+    which is the Vref additive flown on the approach, a speed correction, and
+    the wrong quantity to test a limit against. A crosswind limit, personal or
+    POH-demonstrated, is written against the wind as reported, gusts included.
+    """
     # Wind 320/14 gust 24 on runway 05 (heading 050): 90deg crosswind.
     rws = [rwy("05", 50, "23", 230)]
     sol = best_runway(rws, wind_dir_true=320, wind_kt=14, gust_kt=24)
-    # effective gust speed = 14 + 0.5*(24-14) = 19
     assert sol.crosswind_kt_gust is not None
     assert sol.crosswind_kt_gust > sol.crosswind_kt
-    assert math.isclose(sol.crosswind_kt_gust, 19, abs_tol=0.5)
+    assert math.isclose(sol.crosswind_kt_gust, 24, abs_tol=0.5)
+    # Wind 050/14 gust 24 straight down runway 05: full headwind, at the peak.
+    head = best_runway(rws, wind_dir_true=50, wind_kt=14, gust_kt=24)
+    assert head.headwind_kt_gust is not None
+    assert head.headwind_kt_gust > head.headwind_kt
+    assert math.isclose(head.headwind_kt_gust, 24, abs_tol=0.5)
 
 
-def test_gust_headwind_uses_half_gust_factor():
-    # Wind 050/14 gust 24 straight down runway 05: full headwind, gust-adjusted.
+def test_the_peak_gust_is_what_a_crosswind_limit_sees():
+    """The reported case. 01008G18KT at Billy Bishop clears a 9 kt limit on the
+    half-gust (8.9 kt) and does not on the peak (12.3 kt)."""
+    rws = [rwy("06", 53, "24", 233)]
+    sol = best_runway(rws, wind_dir_true=10, wind_kt=8, gust_kt=18)
+    assert sol.crosswind_kt_gust > 9.0
+    assert math.isclose(sol.crosswind_kt_gust, 12.3, abs_tol=0.3)
+
+
+def test_a_variable_wind_is_not_a_zero_crosswind():
+    """VRB has a speed but no direction, so there is no angle to resolve and no
+    into-wind runway to pick. The worst case is all of it across.
+
+    A missing direction used to take the calm branch, so VRB18G26KT printed
+    "Crosswind 0 kt on RWY 05" and ticked the check - against a wind that can
+    put its full 26 kt across any runway on the field.
+    """
     rws = [rwy("05", 50, "23", 230)]
-    sol = best_runway(rws, wind_dir_true=50, wind_kt=14, gust_kt=24)
-    # effective gust speed = 14 + 0.5*(24-14) = 19
-    assert sol.headwind_kt_gust is not None
-    assert sol.headwind_kt_gust > sol.headwind_kt
-    assert math.isclose(sol.headwind_kt_gust, 19, abs_tol=0.5)
+    sol = best_runway(rws, wind_dir_true=None, wind_kt=18, gust_kt=26)
+    assert sol.wind_variable is True
+    assert sol.crosswind_kt == 18
+    assert sol.crosswind_kt_gust == 26
+    assert sol.headwind_kt == 0.0
+    # Genuinely calm is still zero, and does not claim to be variable.
+    calm = best_runway(rws, wind_dir_true=None, wind_kt=None)
+    assert calm.crosswind_kt == 0.0 and calm.wind_variable is False
+    assert best_runway(rws, wind_dir_true=None, wind_kt=0).wind_variable is False
+
+
+def test_a_variable_wind_reaches_every_runway_component():
+    """The per-runway list is what the pilot scans for an alternative, so it
+    cannot show a calm field while the card shows 18 kt across."""
+    rws = [rwy("05", 50, "23", 230), rwy("14", 130, "32", 310)]
+    comps = all_runway_components(rws, wind_dir_true=None, wind_kt=18, gust_kt=26)
+    assert comps and all(c.wind_variable for c in comps)
+    assert all(c.crosswind_kt == 18 and c.crosswind_kt_gust == 26 for c in comps)
+    assert all(c.headwind_kt == 0.0 and c.tailwind_kt == 0.0 for c in comps)
 
 
 def test_all_runway_components_carry_gusts():

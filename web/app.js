@@ -3255,7 +3255,12 @@ function runwaysBlock(a, surface) {
     const note = off ? ` <span class="rwy-offsurface-tag">${tag}</span>` : "";
     return `<div class="rwy-comp-row${off ? " rwy-offsurface" : ""}"><span class="rwy-diag-sm">${windRunwaySvg(c, w, { compact: true })}</span><div class="rwy-comp">RWY ${c.ident} ${dirM(c.heading_mag, c.heading_true)} · ${dimsText(c)}${note} · head ${Math.round(c.headwind_kt)} kt${gust(c.headwind_kt_gust)} / xwind ${Math.round(c.crosswind_kt)} kt${gust(c.crosswind_kt_gust)}</div></div>`;
   }).join("");
-  return `<details class="runways"><summary>Usable runways into wind: ${usable.length} <span class="hint">(no tailwind component)</span></summary>${rows}</details>`;
+  // A variable wind (a METAR's VRB) has no direction to resolve, so the backend
+  // reports the worst case - all of it across - on every end, and they all read
+  // alike. Without a word here that looks like a bug rather than the answer.
+  const vrb = usable.some((c) => c.wind_variable)
+    ? ` <span class="hint">- wind variable, so every end shows the worst case</span>` : "";
+  return `<details class="runways"><summary>Usable runways${vrb ? "" : " into wind"}: ${usable.length} <span class="hint">(no tailwind component)</span>${vrb}</summary>${rows}</details>`;
 }
 
 function linksHtml(a) {

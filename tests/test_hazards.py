@@ -104,13 +104,31 @@ def test_quiet_icing_row_passes_without_a_warning_triangle():
 
 
 def test_icing_row_describes_the_model_layer_without_gating():
+    """Never a NO-GO - this module does not gate on a model - but not a clean
+    tick either.
+
+    ``advisory`` is "passed, but needs human review" (``models.LimitCheck``),
+    and a supercooled layer through the climb is exactly that. The flag used to
+    be raised only for a PIREP or a regional report, so the model's own finding
+    shipped as a plain pass - and the browser files a plain pass behind
+    "N checks passed", which is where the classic clear-ice band ended up.
+    """
     bands = [{"base_ft": 3500, "top_ft": 7800, "warmest_c": -3.0,
               "coldest_c": -11.0, "prime": True}]
     c = _run(icing_bands=bands, freezing_level_ft=3100)["icing"]
-    assert c.passed and not c.advisory          # informational, never a NO-GO
+    assert c.passed          # informational, never a NO-GO
+    assert c.advisory        # but not hidden behind a green tick
     assert "3,500-7,800 ft" in c.actual_text
     assert "-3 to -11 C" in c.actual_text
     assert "freezing level ~3,100 ft" in c.actual_text
+
+
+def test_icing_row_stays_quiet_when_there_is_no_cloud_below_freezing():
+    """The other half of the same rule: an advisory that fires on every flight
+    is one every pilot learns to scroll past."""
+    c = _run(icing_bands=[], freezing_level_ft=9000)["icing"]
+    assert c.passed and not c.advisory
+    assert "no model cloud below freezing" in c.actual_text
 
 
 def test_icing_model_layer_outside_the_planned_altitude_is_not_mentioned():
@@ -118,6 +136,8 @@ def test_icing_model_layer_outside_the_planned_altitude_is_not_mentioned():
               "coldest_c": -20.0, "prime": False}]
     c = _run(icing_bands=bands, planned_high_ft=6500)["icing"]
     assert c.passed and "no model cloud below freezing" in c.actual_text
+    # Nothing in the altitudes flown, so nothing to review.
+    assert not c.advisory
 
 
 def test_icing_fails_on_severe_airmet_text():

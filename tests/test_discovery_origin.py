@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app import orchestrator
+from app.config import limits_override
 from app.models import Verdict
 from app.sources import awc, cfps, openmeteo
 
@@ -193,18 +194,28 @@ def test_go_only_filters_on_the_merged_verdict(upstreams):
 
 def test_cruise_row_is_advisory_and_never_moves_the_verdict(upstreams):
     """A deck too low for a hemispheric cruising altitude is not a NO-GO - the
-    rule only applies above 3,000 ft AGL. The row says so and stays advisory."""
+    rule only applies above 3,000 ft AGL. The row says so and stays advisory.
+
+    The pilot's ceiling minimum is lowered to 1,000 ft for this one, which is
+    what it takes to reach the case at all: with the gate on the right datum
+    (see ``winds_aloft.deck_msl_ft``), a deck that blocks every VFR level from a
+    ~900 ft field sits below 3,100 ft AGL, so the default 4,000 ft XC minimum
+    would have failed the card on the ceiling row long before the cruising
+    altitude became the interesting part. That is the row's whole premise -
+    losing the hemispheric altitudes is not, by itself, a reason not to go.
+    """
     # Everything reported is clear; only the *model* puts a deck at ~1,000 ft,
     # which is below every VFR level but above nobody's reported ceiling.
     upstreams["cloud_base_m"] = 300.0
-    res = _suggest()
-    assert res
-    a = next(x for x in res if _cruise_row(x) is not None)
-    row = _cruise_row(a)
-    assert row.advisory and row.passed
-    assert a.verdict == Verdict.GO
-    assert row.key not in {c.key for c in _failing(a)}
-    assert not any("cruising altitude" in r for r in a.reasons)
+    with limits_override({"ceiling_agl_ft": {"day_xc": 1000, "day_circuit": 800}}):
+        res = _suggest()
+        assert res
+        a = next(x for x in res if _cruise_row(x) is not None)
+        row = _cruise_row(a)
+        assert row.advisory and row.passed
+        assert a.verdict == Verdict.GO
+        assert row.key not in {c.key for c in _failing(a)}
+        assert not any("cruising altitude" in r for r in a.reasons)
 
 
 def test_cruise_row_names_the_aerodrome_the_deck_is_over(upstreams):
@@ -216,6 +227,27 @@ def test_cruise_row_names_the_aerodrome_the_deck_is_over(upstreams):
     assert row.location in {DEP, a.airport.ident}
     assert row.location in row.actual_text
     assert "3,000 ft AGL" in row.actual_text
+
+
+def test_a_deck_the_field_elevation_clears_no_longer_kills_the_pick(upstreams):
+    """The bug this file's ``cloud_base_m`` cases kept hidden.
+
+    A 4,800 ft AGL deck over Brantford (815 ft) sits at 5,615 ft MSL, and 4,500 -
+    the lowest westbound VFR level - is 1,115 ft underneath it. The gate used to
+    compare the MSL level against the AGL ceiling and conclude that nothing
+    cleared it, so every westbound candidate carried "no VFR cruising altitude
+    clears the 4,800 ft deck" on a day with a legal one. The error was the field
+    elevation, so it grew with it: from a 3,550 ft aerodrome the same test
+    returned a cruising altitude below the runway.
+    """
+    # The default METAR is OVC048 everywhere, and the model deck is far above it.
+    res = _suggest()
+    west = [a for a in res if a.altitude and a.altitude.altitude_ft % 2000 == 500]
+    assert west, "the seed dataset should have a westbound candidate"
+    for a in west:
+        assert _cruise_row(a) is None, (
+            f"{a.airport.ident}: a legal level exists under a 4,800 ft deck")
+        assert a.altitude.altitude_ft == 4500
 
 
 def test_future_etd_reads_the_origin_forecast_too(upstreams):
