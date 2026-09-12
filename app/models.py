@@ -72,9 +72,9 @@ class RunwayWind(BaseModel):
     heading_true: float
     heading_mag: Optional[float] = None
     headwind_kt: float  # negative = tailwind
-    headwind_kt_gust: Optional[float] = None  # using gust + half-gust factor
+    headwind_kt_gust: Optional[float] = None  # resolved from the peak gust
     crosswind_kt: float
-    crosswind_kt_gust: Optional[float] = None  # using gust + half-gust factor
+    crosswind_kt_gust: Optional[float] = None  # resolved from the peak gust
     length_ft: Optional[float] = None
     width_ft: Optional[float] = None
     surface: Optional[str] = None
@@ -84,6 +84,11 @@ class RunwayWind(BaseModel):
     # from ``surface_label`` breaks on the raw-string fallback for surfaces the
     # label table has never heard of.
     is_hard: Optional[bool] = None
+    # The wind had a speed but no direction (a METAR's VRB), so the components
+    # above are the WORST CASE - all of the wind across - rather than a solution
+    # for an angle. Carried so the card can say which it is: "9 kt" and "up to
+    # 9 kt from any direction" are different claims about the same runway.
+    wind_variable: bool = False
 
 
 class RunwayComponent(BaseModel):
@@ -98,10 +103,11 @@ class RunwayComponent(BaseModel):
     surface_label: Optional[str] = None
     is_hard: Optional[bool] = None   # see RunwayWind.is_hard
     headwind_kt: float       # positive = headwind, negative = tailwind
-    headwind_kt_gust: Optional[float] = None   # using gust + half-gust factor
+    headwind_kt_gust: Optional[float] = None   # resolved from the peak gust
     crosswind_kt: float      # magnitude
-    crosswind_kt_gust: Optional[float] = None  # using gust + half-gust factor
+    crosswind_kt_gust: Optional[float] = None  # resolved from the peak gust
     tailwind_kt: float       # positive only when there is a tailwind, else 0
+    wind_variable: bool = False   # see RunwayWind.wind_variable
 
 
 class LimitCheck(BaseModel):

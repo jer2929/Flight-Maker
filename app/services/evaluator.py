@@ -245,6 +245,11 @@ def conditions_checks(
     if best_runway is not None:
         xw = best_runway.crosswind_kt_gust or best_runway.crosswind_kt
         xw_label = f" on RWY {best_runway.runway_ident}"
+        # A variable wind has no angle to resolve, so the figure is the worst
+        # case rather than a solution for one runway. Say so, or a pilot reads a
+        # number that looks like the others and is a different kind of claim.
+        if best_runway.wind_variable:
+            xw_label = " from any direction (wind variable)"
     checks.append(_attribute(_num_check(
         "crosswind", "Crosswind", w["crosswind_max_kt"], xw,
         unit="kt", source=wind_src, actual_suffix=xw_label,
@@ -482,15 +487,46 @@ def prob_checks(*, labels, wind_kt=None, gust_kt=None, ceiling_agl_ft=None,
 
 
 def _num_check(key, label, limit, actual, unit, source=None, actual_suffix="") -> LimitCheck:
-    """Max-type limit (actual must be ≤ limit)."""
+    """Max-type limit (actual must be ≤ limit), gated on the value it prints.
+
+    ``printed_kt`` rather than ``:.0f`` for two reasons, and both were visible on
+    real cards.
+
+    The row used to print a rounded value and gate on the raw one, so a 20.4 kt
+    wind rendered "20 kt" and failed a limit reading "≤ 20 kt" - the two numbers
+    the pilot can see agreeing with each other and disagreeing with the tick
+    beside them. Rounding before the comparison is the same rule
+    :func:`gust_spread_kt` already applies to the spread, and for the same
+    stated reason: the printed wind is the whole truth, so a row that fails names
+    a number that is genuinely over the limit.
+
+    And ``:.0f`` is banker's rounding, where ``Math.round`` in the browser is
+    half-up. An 8.5 kt crosswind printed "8 kt" in this row and "9 kt" in the
+    runway component list on the same page. ``printed_kt`` is the existing
+    helper written to match the browser; using it here is what makes the page
+    agree with itself.
+    """
     if actual is None:
         return LimitCheck(key=key, label=label, limit_text=f"≤ {limit} {unit}",
                           actual_text="no data", passed=True, source=source)
+    shown = printed_kt(actual) if unit == "kt" else round(actual)
     return LimitCheck(
         key=key, label=label, limit_text=f"≤ {limit} {unit}",
-        actual_text=f"{actual:.0f} {unit}{actual_suffix}",
-        passed=actual <= limit, source=source,
+        actual_text=f"{shown:.0f} {unit}{actual_suffix}",
+        passed=shown <= limit, source=source,
     )
+
+
+def printed_ceiling_ft(v: float) -> float:
+    """A ceiling in the hundreds of feet the card prints it in.
+
+    The one reader for it, because the row's value and the row's verdict have to
+    come from the same number. Gating on the raw value while printing this one
+    put "Ceiling (XC) 4,000 ft AGL ✗" next to "≥ 4,000 ft AGL" on any deck
+    between 3,950 and 3,999 ft - and the model interpolates ceilings, so those
+    are ordinary values, not edge cases. Same rule as ``printed_kt`` for winds.
+    """
+    return round(v / 100) * 100
 
 
 def _ceiling_check(limit, actual, wx_source, src, mode="xc", circuit_limit=None) -> LimitCheck:
@@ -519,18 +555,35 @@ def _ceiling_check(limit, actual, wx_source, src, mode="xc", circuit_limit=None)
         if wx_source == Source.OBSERVED:
             return LimitCheck(actual_text="no ceiling (clear/SCT)", passed=True, **base)
         return LimitCheck(actual_text="no data", passed=True, **base)
-    val = round(actual / 100) * 100
-    if mode == "endpoint" and actual < limit:
+    # Every test below reads the printed value, not the raw one - see
+    # ``printed_ceiling_ft``. That includes the notes: a 995 ft deck printed as
+    # "1,000 ft AGL" should not then be described as IMC.
+    val = printed_ceiling_ft(actual)
+    if mode == "endpoint" and val < limit:
         if circuit_limit is None:
             note = "below your IFR minimum"
-        elif actual < 1000:
+        elif val < 1000:
             note = "IMC"
-        elif actual < circuit_limit:
+        elif val < circuit_limit:
             note = "below circuit minimum"
         else:
             note = "circuit OK, below XC minimum"
-        return LimitCheck(actual_text=f"{val:,} ft AGL - {note}", passed=False, **base)
-    return LimitCheck(actual_text=f"{val:,} ft AGL", passed=actual >= limit, **base)
+        return LimitCheck(actual_text=f"{val:,.0f} ft AGL - {note}", passed=False, **base)
+    return LimitCheck(actual_text=f"{val:,.0f} ft AGL", passed=val >= limit, **base)
+
+
+def printed_amount(value: float, unit: str) -> float:
+    """The value :func:`fmt_amount` will print, as a number.
+
+    Paired with ``fmt_amount`` so the row's verdict is read off the figure the
+    row shows. Under 3 SM nothing is rounded and this is the identity; at or
+    above it, an 8.9 SM forecast prints "9 SM" and has to pass a 9 SM minimum,
+    rather than showing the pilot two numbers that agree and a tick that does
+    not. See ``printed_kt`` for the same rule on winds.
+    """
+    if unit == "SM" and value < 3:
+        return value
+    return round(value)
 
 
 def fmt_amount(value: float, unit: str) -> str:
@@ -547,14 +600,14 @@ def fmt_amount(value: float, unit: str) -> str:
 
 
 def _min_check(key, label, limit, actual, unit, source=None) -> LimitCheck:
-    """Min-type limit (actual must be ≥ limit)."""
+    """Min-type limit (actual must be ≥ limit), gated on the value it prints."""
     if actual is None:
         return LimitCheck(key=key, label=label, limit_text=f"≥ {limit} {unit}",
                           actual_text="no data", passed=True, source=source)
     return LimitCheck(
         key=key, label=label, limit_text=f"≥ {limit} {unit}",
         actual_text=f"{fmt_amount(actual, unit)} {unit}",
-        passed=actual >= limit, source=source,
+        passed=printed_amount(actual, unit) >= limit, source=source,
     )
 
 

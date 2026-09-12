@@ -450,8 +450,21 @@ def weather_checks(
         if frz:
             bits.append(frz)
         bits.append(f"confirm on the GFA icing panel below ({gfa_region})")
+        # Advisory whenever there is something to look at, and the model's own
+        # finding counts. This used to raise the flag only for a PIREP or a
+        # regional report, so a row reading "model shows cloud below freezing
+        # 1,800-8,089 ft (cloud at -2 to -14 C)" shipped as a plain pass - and
+        # ``clGroup`` in the browser files a plain pass behind "N checks
+        # passed". The classic supercooled-liquid band, through the whole climb,
+        # collapsed under a green tick.
+        #
+        # ``advisory`` is defined as "passed, but needs human review"
+        # (``models.LimitCheck``), which is exactly what a modelled icing layer
+        # in the altitudes you are about to fly is: not a NO-GO - this module
+        # never gates - but not a clean check either. It stays quiet on the days
+        # there are no bands, which is most of them.
         add("icing", "Forecast icing", False, " - ".join(bits), limit=mod_limit,
-            advisory=bool(icing_pirep or icing_region))
+            advisory=bool(icing_pirep or icing_region or bands))
 
     # 5. Moderate turbulence at low level, same two-source treatment.
     turb_rpt = _area_report("turbulence")

@@ -106,6 +106,30 @@ def wind_components(wind_dir_true: float, wind_kt: float, runway_heading_true: f
     return headwind, crosswind
 
 
+def gust_component_speed(wind_kt: Optional[float],
+                         gust_kt: Optional[float]) -> Optional[float]:
+    """The wind speed the ``*_kt_gust`` components are resolved from: the **peak
+    gust**, or None where nothing gusts above the steady wind.
+
+    This used to be the half-gust factor, ``wind + 0.5 * (gust - wind)``, and
+    that is a real technique applied to the wrong quantity. Half the gust factor
+    is what you add to Vref on the approach - a speed correction, chosen because
+    flying the whole gust increment costs runway you may not have. A crosswind
+    *limit* is a different statement: the pilot's number, and the POH's maximum
+    demonstrated figure, are both written against the wind as reported, gusts
+    included. Assessing 01008G18KT as though it were 13 kt cleared a 9 kt
+    personal limit on a runway that sees 12.3 kt when it gusts.
+
+    The card was also arguing with itself about it. The gust-spread row one line
+    above reads the full peak - see ``gust_spread_floor_kt`` in ``limits.yaml``,
+    which exists precisely so that spread means the same thing against a model
+    as against a METAR's G - while the crosswind row read half of it.
+    """
+    if not gust_kt or wind_kt is None or gust_kt <= wind_kt:
+        return None
+    return gust_kt
+
+
 def _ends(runways: list[Runway]) -> list[tuple[str, float, Runway]]:
     ends: list[tuple[str, float, Runway]] = []
     for rw in runways:
@@ -144,7 +168,7 @@ def best_runway(
         if matching:
             ends = matching
 
-    def mk(ident, hdg, rw, hw, xw, hwg=None, xwg=None):
+    def mk(ident, hdg, rw, hw, xw, hwg=None, xwg=None, variable=False):
         return RunwayWind(
             runway_ident=ident, heading_true=hdg, headwind_kt=round(hw, 1),
             headwind_kt_gust=(round(hwg, 1) if hwg is not None else None),
@@ -152,13 +176,31 @@ def best_runway(
             length_ft=rw.length_ft, width_ft=rw.width_ft,
             surface=rw.surface, surface_label=surface_label(rw.surface),
             is_hard=surface_is_hard(rw.surface),
+            wind_variable=variable,
         )
 
-    if wind_dir_true is None or wind_kt is None or wind_kt <= 0:
+    # Genuinely calm, or no wind at all: zero components on the longest runway.
+    if wind_kt is None or wind_kt <= 0:
         ident, hdg, rw = max(ends, key=lambda e: e[2].length_ft or 0)
         return mk(ident, hdg, rw, 0.0, 0.0)
 
-    gust_speed = wind_kt + 0.5 * (gust_kt - wind_kt) if (gust_kt and gust_kt > wind_kt) else None
+    # Variable direction (a METAR's VRB) with a wind in it. There is no
+    # into-wind runway to pick and no angle to resolve, so the honest component
+    # is the worst one the wind could produce: all of it across.
+    #
+    # This used to report a **zero** crosswind, because a missing direction took
+    # the calm branch above. VRB18G26KT on an otherwise clear day therefore
+    # printed "Crosswind 0 kt on RWY 05 ✓" - a tick on a check nobody had made,
+    # against a wind that can put its full 26 kt across any runway on the field.
+    # VRB with a speed in it is not light and variable; it is a direction
+    # swinging 60 degrees or more, which is what a gust front looks like.
+    if wind_dir_true is None:
+        ident, hdg, rw = max(ends, key=lambda e: e[2].length_ft or 0)
+        gust = gust_component_speed(wind_kt, gust_kt)
+        return mk(ident, hdg, rw, 0.0, wind_kt, 0.0 if gust else None, gust,
+                  variable=True)
+
+    gust_speed = gust_component_speed(wind_kt, gust_kt)
     best: Optional[RunwayWind] = None
     for ident, hdg, rw in ends:
         hw, xw = wind_components(wind_dir_true, wind_kt, hdg)
@@ -183,13 +225,19 @@ def all_runway_components(
     wants to see that the grass strip exists - just not billed as the main one.
     """
     out: list[RunwayComponent] = []
-    calm = wind_dir_true is None or wind_kt is None or wind_kt <= 0
-    gust_speed = (wind_kt + 0.5 * (gust_kt - wind_kt)
-                  if (not calm and gust_kt and gust_kt > wind_kt) else None)
+    calm = wind_kt is None or wind_kt <= 0
+    # Same three cases as ``best_runway``, and for the same reasons: calm is
+    # zero, a variable direction is all of it across, and a resolved direction
+    # is resolved against the peak gust rather than half of it.
+    variable = not calm and wind_dir_true is None
+    gust_speed = None if calm else gust_component_speed(wind_kt, gust_kt)
     for ident, hdg, rw in _ends(runways):
         if calm:
             hw = xw = 0.0
             hwg = xwg = None
+        elif variable:
+            hw, xw = 0.0, wind_kt
+            hwg, xwg = (0.0, gust_speed) if gust_speed is not None else (None, None)
         else:
             hw, xw = wind_components(wind_dir_true, wind_kt, hdg)
             hwg, xwg = wind_components(wind_dir_true, gust_speed, hdg) if gust_speed is not None else (None, None)
@@ -200,5 +248,6 @@ def all_runway_components(
             headwind_kt=round(hw, 1), headwind_kt_gust=(round(hwg, 1) if hwg is not None else None),
             crosswind_kt=round(xw, 1), crosswind_kt_gust=(round(xwg, 1) if xwg is not None else None),
             tailwind_kt=round(-hw, 1) if hw < 0 else 0.0,
+            wind_variable=variable,
         ))
     return out

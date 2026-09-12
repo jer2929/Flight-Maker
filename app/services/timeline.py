@@ -20,7 +20,7 @@ from app.services import sky
 from app.services import weather as wx
 from app.services.evaluator import SEVERITY, evaluate, gating_hazards, prob_summary
 from app.services.runway import best_runway
-from app.services.winds_aloft import recommend_altitude
+from app.services.winds_aloft import deck_msl_ft, recommend_altitude
 from app.sources import openmeteo
 
 # WMO weather codes -> {label, hazard, heavy}. Only thunderstorm/freezing map to a
@@ -342,9 +342,15 @@ def _cruise_for_hour(fc: dict, i: int, cruise: dict | None,
     # scan limit - the strip must not claim an aeroplane is on top of something
     # whose height nobody knows.
     tops = openmeteo.deck_top(fc.get("hourly", {}), i)
+    # ``ceiling_ft`` is AGL over the ground this forecast was taken at, and the
+    # cruising altitudes are MSL, so the two are put on one datum before they are
+    # compared - see ``winds_aloft.deck_msl_ft``. The forecast's own elevation is
+    # the right ground for it: this hour's deck is the deck at this point, not at
+    # the departure field the rest of ``cruise`` describes.
     rec = recommend_altitude(
         levels, cruise["course_true"], cruise["cruise_kt"],
-        course_mag=cruise.get("course_mag"), ceiling_ft=ceiling_ft,
+        course_mag=cruise.get("course_mag"),
+        ceiling_msl_ft=deck_msl_ft(ceiling_ft, openmeteo.field_elevation_ft(fc)),
         flight_rules=flight_rules,
         distance_nm=cruise.get("distance_nm"),
         field_elev_ft=cruise.get("field_elev_ft"),

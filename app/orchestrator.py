@@ -9,6 +9,7 @@ import asyncio
 import math
 import re
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 from app.config import get_cruise_kt, get_limits, get_settings
 from app.models import (
@@ -55,7 +56,11 @@ from app.services.evaluator import (
     decision,
     derive_threats,
     gating_hazards,
+    fmt_amount,
     gust_spread_kt,
+    printed_amount,
+    printed_ceiling_ft,
+    printed_kt,
     threat_check_list,
     threat_result_label,
     threat_verdict,
@@ -70,7 +75,12 @@ from app.services.geo import (
 )
 from app.services.runway import (all_runway_components, best_runway, fill_headings,
                                  surface_matches)
-from app.services.winds_aloft import clears_ceiling, lowest_ceiling, recommend_altitude
+from app.services.winds_aloft import (
+    clears_ceiling,
+    deck_msl_ft,
+    lowest_ceiling,
+    recommend_altitude,
+)
 from app.sources import airports as ap
 from app.sources import awc, cfps, openmeteo
 
@@ -267,6 +277,12 @@ def _point_at(fc: dict, when: datetime | None = None) -> dict:
         "sct_base_ft": layer["sct_base_ft"],
         "max_cover_pct": layer["max_cover_pct"],
         "scan_top_ft": layer["scan_top_ft"],
+        # The ground this sample's AGL heights are measured from - the model's
+        # own grid-cell elevation at this point, not the departure field's. The
+        # cruising-altitude gate needs it to put ``ceiling_ft`` on the same datum
+        # as the cruise levels (``winds_aloft.deck_msl_ft``); along one route the
+        # terrain moves, so one elevation for the whole leg is not good enough.
+        "elevation_ft": elevation_ft,
         # Cloud tops, MSL. Under names that carry the datum: every other height in
         # this dict is AGL, and mixing the two is a field-elevation-sized error.
         "tops_msl_ft": tops.get("highest_top_msl_ft"),
@@ -728,9 +744,9 @@ def _endpoint_weather_at(metar: str | None, taf: str | None,
                                       ensemble, field_elev_ft)
 
 
-def _card_ceilings(ws: WeatherSummary | None) -> list[float | None]:
-    """Every ceiling this endpoint's card reports: the headline value, and the
-    TAF's worst case across the flight window.
+def _card_ceilings_agl(ws: WeatherSummary | None) -> list[float | None]:
+    """Every ceiling this endpoint's card reports, **AGL**: the headline value,
+    and the TAF's worst case across the flight window.
 
     Used to gate the cruising altitude. On a future ETD the window worst case
     *is* the headline, so the two agree; on a "now" departure the headline is an
@@ -740,6 +756,10 @@ def _card_ceilings(ws: WeatherSummary | None) -> list[float | None]:
 
     PROB30/PROB40 ceilings are deliberately left out: a 30-40% chance is never a
     limit anywhere else on the card, so it does not move the altitude either.
+
+    AGL, as the card prints them and as a personal minimum is written. A caller
+    feeding these to the cruising-altitude gate pairs each with the elevation it
+    was measured over and converts - see ``winds_aloft.deck_msl_ft``.
     """
     if ws is None:
         return []
@@ -1580,11 +1600,17 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     checks: list[LimitCheck] = []
 
     # Sustained wind - worst (max) at the endpoints only.
+    #
+    # Every row below gates on the value it PRINTS, via the ``printed_*``
+    # helpers in the evaluator - see ``evaluator._num_check`` for why. These rows
+    # are a second rendering of the same rule, so they have to round the same
+    # way, or the route card and the endpoint cards disagree about one wind.
     wind_pts = [(lbl, wk, src) for lbl, wk, _g, _c, _v, src, _t in endpoint_pts if wk is not None]
     if wind_pts:
         lbl, val, src = max(wind_pts, key=lambda t: t[1])
+        shown = printed_kt(val)
         checks.append(LimitCheck(key="wind", label="Sustained wind", limit_text=f"≤ {w['sustained_max_kt']} kt",
-                                 actual_text=f"{val:.0f} kt", passed=val <= w["sustained_max_kt"],
+                                 actual_text=f"{shown:.0f} kt", passed=shown <= w["sustained_max_kt"],
                                  location=lbl, source=src))
     else:
         checks.append(LimitCheck(key="wind", label="Sustained wind", limit_text=f"≤ {w['sustained_max_kt']} kt",
@@ -1606,9 +1632,13 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     # Crosswind - worst endpoint best-runway (enroute has no runway).
     xw = _worst_crosswind(dep_a, dest_a)
     if xw is not None:
-        val = xw.crosswind_kt_gust or xw.crosswind_kt
+        val = printed_kt(xw.crosswind_kt_gust or xw.crosswind_kt)
+        # See ``evaluator.conditions_checks``: a variable wind has no runway
+        # solution, so the figure is the worst case and the row says so.
+        where = ("from any direction (wind variable)" if xw.wind_variable
+                 else f"on RWY {xw.runway_ident}")
         checks.append(LimitCheck(key="crosswind", label="Crosswind", limit_text=f"≤ {w['crosswind_max_kt']} kt",
-                                 actual_text=f"{val:.0f} kt on RWY {xw.runway_ident}",
+                                 actual_text=f"{val:.0f} kt {where}",
                                  passed=val <= w["crosswind_max_kt"], location=xw.runway_ident))
 
     # Ceiling - IFR uses ifr_minimums section; VFR uses hard_limits.
@@ -1629,10 +1659,11 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                    for lbl, _w, _g, ce, _v, src, txt in pts if ce is not None]
     if route_ceils:
         lbl, val, src, txt = min(route_ceils, key=lambda t: t[1])
+        shown = printed_ceiling_ft(val)
         checks.append(LimitCheck(key="ceiling", label="Ceiling (XC, route)",
                                  limit_text=f"≥ {ceil_limit:,.0f} ft AGL",
-                                 actual_text=f"{round(val / 100) * 100:,} ft AGL",
-                                 passed=val >= ceil_limit, location=lbl, source=src,
+                                 actual_text=f"{shown:,.0f} ft AGL",
+                                 passed=shown >= ceil_limit, location=lbl, source=src,
                                  source_text=txt))
     else:
         # No ceiling value anywhere on the route. That single fact has four very
@@ -1690,24 +1721,26 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
     # which the route row above will not do when a worse point sits enroute.
     # Notes here and in ``evaluator._ceiling_check`` are one rule - change both.
     for lbl, _w, _g, ce, _v, src, txt in (pts[0], pts[-1]):
-        if ce is None or ce >= ceil_limit:
+        # Printed value, printed verdict, printed note - one number, as in
+        # ``evaluator._ceiling_check``.
+        cv = None if ce is None else printed_ceiling_ft(ce)
+        if cv is None or cv >= ceil_limit:
             continue
-        cv = round(ce / 100) * 100
         if circuit_limit is None:
             checks.append(LimitCheck(key="ceiling_endpoint", label="Ceiling (departure/dest)",
                                      limit_text=f"≥ {ceil_limit:,.0f} ft AGL",
-                                     actual_text=f"{cv:,} ft AGL - below your IFR minimum",
+                                     actual_text=f"{cv:,.0f} ft AGL - below your IFR minimum",
                                      passed=False, location=lbl, source=src, source_text=txt))
-        elif ce < circuit_limit:
-            note = "IMC" if ce < 1000 else "below circuit minimum"
+        elif cv < circuit_limit:
+            note = "IMC" if cv < 1000 else "below circuit minimum"
             checks.append(LimitCheck(key="ceiling_endpoint", label="Ceiling (departure/dest)",
                                      limit_text=f"≥ {circuit_limit:,.0f} ft AGL (circuit)",
-                                     actual_text=f"{cv:,} ft AGL - {note}", passed=False,
+                                     actual_text=f"{cv:,.0f} ft AGL - {note}", passed=False,
                                      location=lbl, source=src, source_text=txt))
         else:
             checks.append(LimitCheck(key="ceiling_endpoint", label="Ceiling (departure/dest)",
                                      limit_text=f"≥ {circuit_limit:,.0f} ft AGL (circuit)",
-                                     actual_text=f"{cv:,} ft AGL - circuits only",
+                                     actual_text=f"{cv:,.0f} ft AGL - circuits only",
                                      passed=True, advisory=True, location=lbl, source=src,
                                      source_text=txt))
 
@@ -1717,8 +1750,13 @@ def _route_conditions_checks(dep_a, dest_a, enroute: list[dict], mode: str, flig
                for lbl, _w, _g, _c2, vi, src, txt in pts if vi is not None]
     if vis_pts:
         lbl, val, src, txt = min(vis_pts, key=lambda t: t[1])
+        # ``fmt_amount`` rather than a bare ``:g``, so this row and the endpoint
+        # cards' visibility row print one number for one visibility - they used
+        # to render 8.9 SM as "8.9 SM" here and "9 SM" there - and both gate on
+        # the figure they print (``printed_amount``).
         checks.append(LimitCheck(key="visibility", label="Visibility (XC)", limit_text=f"≥ {vis_limit} SM",
-                                 actual_text=f"{val:g} SM", passed=val >= vis_limit, location=lbl,
+                                 actual_text=f"{fmt_amount(val, 'SM')} SM",
+                                 passed=printed_amount(val, "SM") >= vis_limit, location=lbl,
                                  source=src, source_text=txt))
     else:
         checks.append(LimitCheck(key="visibility", label="Visibility (XC)", limit_text=f"≥ {vis_limit} SM",
@@ -2101,28 +2139,46 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # Gate the (VFR) cruising altitude on the minimum ceiling along the whole
     # route - departure, enroute midpoints and destination - so a recommended
     # level never clashes with a cloud deck. Each end contributes both of the
-    # ceilings its card reports (see ``_card_ceilings``): the headline value AND
+    # ceilings its card reports (see ``_card_decks_msl``): the headline value AND
     # the TAF's worst case across the flight window, so a TEMPO deck an hour into
     # a "now" departure gates the pick even though the METAR is clear right now.
     # The destination is derived here (before its full assessment) with the same
     # helper, scoped to the provisional flight window.
+    #
+    # "Lowest" is decided in MSL, and each point brings its own ground with it:
+    # the ends their aerodrome elevation, each midpoint the model's elevation
+    # where it was sampled. Cruising altitudes are MSL, so an AGL comparison
+    # here was wrong by the field elevation - see ``winds_aloft.deck_msl_ft``.
     dest_ws_prov = _endpoint_weather_at(metars.get(dest.ident), tafs.get(dest.ident),
                                         dest_segs, dest_fc, dest_ens,
                                         when=eta_prov, is_now=is_now,
                                         span=arrival_span(etd_utc, eta_prov),
                                         field_elev_ft=dest.elevation_ft)
-    gate_ceiling = lowest_ceiling(_card_ceilings(dep_a.weather)
-                                  + _card_ceilings(dest_ws_prov)
-                                  + [e.get("ceiling_ft") for e in enroute])
+
+    def _route_deck(dep_ws, dest_ws) -> _Deck:
+        """The lowest deck anywhere on this route, MSL, with its AGL twin."""
+        pts: list[tuple[float | None, float | None, str | None]] = []
+        for ws, port, role in ((dep_ws, dep, "departure"), (dest_ws, dest, "destination")):
+            if ws is None:
+                continue
+            pts.append((ws.ceiling_agl_ft, port.elevation_ft, f"{port.ident} ({role})"))
+            if ws.window_forecast is not None:
+                pts.append((ws.window_forecast.ceiling_agl_ft, port.elevation_ft,
+                            f"{port.ident} ({role})"))
+        pts += [(e.get("ceiling_ft"), e.get("elevation_ft"), e.get("label"))
+                for e in enroute]
+        return _lowest_deck_msl(pts)
+
+    gate_deck = _route_deck(dep_a.weather, dest_ws_prov)
     # Winds aloft at the mid-leg hour, not at the ETD: a 2 h leg's cruise wind is
     # better represented by the middle of the flight than by its first minute.
     levels = (_winds_aloft_at(dep_fc, etd_utc + timedelta(hours=t_prov / 2))
               if dep_fc else [])
 
-    def _pick_altitude(ceiling_ft: float | None,
+    def _pick_altitude(deck: _Deck,
                        tops_msl_ft: float | None = None,
                        tops_source: str | None = None) -> AltitudeRecommendation | None:
-        """The best level under ``ceiling_ft``, magnetic wind directions filled.
+        """The best level under ``deck``, magnetic wind directions filled.
 
         ``tops_msl_ft`` must be passed on EVERY call, including the ceiling re-gate
         further down: a second pick made without it silently drops the on-top
@@ -2130,7 +2186,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
         altogether.
         """
         rec = recommend_altitude(levels, bearing, get_cruise_kt(),
-                                 course_mag=bearing_mag, ceiling_ft=ceiling_ft,
+                                 course_mag=bearing_mag, ceiling_msl_ft=deck.msl_ft,
                                  flight_rules=flight_rules, distance_nm=distance,
                                  field_elev_ft=dep.elevation_ft,
                                  tops_msl_ft=tops_msl_ft, tops_source=tops_source)
@@ -2157,7 +2213,7 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
                       _tops_pirep(raw_hazards, route_pts, etd_utc, eta_prov, now,
                                   settings),
                       dep, dest)
-    alt = _pick_altitude(gate_ceiling, prov_tops["planning_msl_ft"],
+    alt = _pick_altitude(gate_deck, prov_tops["planning_msl_ft"],
                          prov_tops["source"])
 
     # --- Flight window (pass 2 of 2) ------------------------------------------
@@ -2288,17 +2344,21 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # anywhere on the route. This can only lower it, so the ETA (computed from
     # the faster, higher level) stays a conservative estimate rather than being
     # iterated a third time - see the two-pass note above.
-    gate_ceiling = lowest_ceiling([gate_ceiling, *ceiling_points,
-                                   *_card_ceilings(dep_a.weather),
-                                   *_card_ceilings(dest_a.weather)])
+    # Rebuilt from the finished cards, then taken against the provisional deck so
+    # the gate can only tighten. Same MSL rule as the first pass.
+    final_deck = _route_deck(dep_a.weather, dest_a.weather)
+    if gate_deck.msl_ft is not None and (
+            final_deck.msl_ft is None or gate_deck.msl_ft < final_deck.msl_ft):
+        final_deck = gate_deck
+    gate_deck = final_deck
     # Two reasons to ask again: the pick no longer clears a deck the page prints,
     # or the finished tops figure is not the provisional one the pick was made
     # against. Forgetting the second is how a card ends up claiming "on top" of a
     # deck that turned out to be higher than the first pass thought.
     tops_for_pick = route_tops["planning_msl_ft"]
-    if alt and (not clears_ceiling(alt.altitude_ft, gate_ceiling, flight_rules)
+    if alt and (not clears_ceiling(alt.altitude_ft, gate_deck.msl_ft, flight_rules)
                 or tops_for_pick != prov_tops["planning_msl_ft"]):
-        alt = _pick_altitude(gate_ceiling, tops_for_pick, route_tops["source"])
+        alt = _pick_altitude(gate_deck, tops_for_pick, route_tops["source"])
         dest_a.altitude = alt   # the card carries the same pick as the header
 
     cruise_alt = alt.altitude_ft if alt else None
@@ -2569,10 +2629,14 @@ async def assess_route(dep_ident: str, dest_ident: str, mode: str, manual_threat
     # Say which deck did it, rather than dropping the altitude line in silence -
     # and say what to do instead: the hemispheric rule only applies above 3,000
     # ft AGL, so the flight is planned below that or it doesn't go.
-    if alt is None and levels and flight_rules != "ifr" and gate_ceiling is not None:
+    if alt is None and levels and flight_rules != "ifr" and gate_deck.msl_ft is not None:
+        # Named in AGL, and at the point that reported it: the gate works in MSL
+        # but a deck is a height above ground everywhere a pilot meets one, and
+        # the lowest deck on the route is often not over either aerodrome.
+        where = f" at {gate_deck.at}" if gate_deck.at else ""
         notes.append(
-            f"No VFR cruising altitude clears the {round(gate_ceiling / 100) * 100:,.0f} ft "
-            "ceiling - plan to cruise below 3,000 ft AGL, where the hemispheric rule "
+            f"No VFR cruising altitude clears the {gate_deck.text} ceiling{where} - "
+            "plan to cruise below 3,000 ft AGL, where the hemispheric rule "
             "does not apply")
     if beyond:
         notes.append(f"ETD is beyond the {settings.timeline_hours} h forecast horizon")
@@ -2822,7 +2886,14 @@ async def suggest(
     # forecaster's number wherever one does. Taking the lower of the two instead
     # let a modelled deck stand at a field whose TAF forecast none - the same
     # phantom ceiling the METAR path refuses to substitute in ``_endpoint_weather``.
-    origin_ceiling = lowest_ceiling(_card_ceilings(origin_a.weather))
+    #
+    # As MSL decks, with the origin's field elevation - see
+    # ``winds_aloft.deck_msl_ft``. The candidate's own elevation is applied to
+    # its ceilings below, so a scan out of a valley toward a plateau compares
+    # the two decks by where they actually are rather than by how far each sits
+    # above its own ground.
+    origin_decks = [(c, origin.elevation_ft, origin_ident)
+                    for c in _card_ceilings_agl(origin_a.weather)]
     # The origin's tops, sampled once for every candidate rather than per card:
     # it is the same field at the same departure time twenty times over.
     origin_tops = _point_at(origin_fc, None if is_now else etd_utc) if origin_fc else {}
@@ -2845,16 +2916,17 @@ async def suggest(
         cand_ceiling = cand_pt.get("ceiling_ft")
         # Carried with the aerodrome it came from: the gate spans both ends, and
         # a deck the pilot is told about has to say where it is.
-        prov_ceiling, _prov_at = _lowest_deck(
-            [(origin_ceiling, origin_ident), (cand_ceiling, airport.ident)])
+        prov_deck = _lowest_deck_msl(
+            origin_decks + [(cand_ceiling, airport.elevation_ft, airport.ident)])
         # Tops across both ends, the same "highest wins" the route card uses: to
         # be on top you have to clear the higher of them. A card whose tops are
         # unknown at either end passes None and keeps the wind-only pick.
-        cand_tops = _card_tops(origin_tops, cand_pt, cand_ceiling, origin_ceiling)
+        cand_tops = _card_tops(origin_tops, cand_pt, cand_ceiling,
+                               lowest_ceiling(_card_ceilings_agl(origin_a.weather)))
         alt = recommend_altitude(
             levels_now, bearing, cruise_kt,
             course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
-            ceiling_ft=prov_ceiling, flight_rules=flight_rules,
+            ceiling_msl_ft=prov_deck.msl_ft, flight_rules=flight_rules,
             distance_nm=dist, field_elev_ft=origin.elevation_ft,
             tops_msl_ft=cand_tops, tops_source="model" if cand_tops else None)
         # The arrival the card is actually assessed at, at the altitude we would
@@ -2897,20 +2969,21 @@ async def suggest(
         # headlining a 5,000 ft ceiling. Rebuilding lets the TAF win, and the
         # candidate's METAR/TAF still gates as hard as it ever did when it is the
         # lower of the two.
-        gate_ceiling, deck_at = _lowest_deck(
-            [(origin_ceiling, origin_ident),
-             *[(c, airport.ident) for c in _card_ceilings(a.weather)]])
+        gate_deck = _lowest_deck_msl(
+            origin_decks
+            + [(c, airport.elevation_ft, airport.ident)
+               for c in _card_ceilings_agl(a.weather)])
         # Re-pick whenever the real gate is not the provisional one - it can now
         # rise as well as fall, and a pick made under a deck the card never shows
         # is as wrong as one made above a deck it does. The ETA stays as assessed:
         # re-picking moves the groundspeed by a few knots over a leg already
         # rounded to the minute, and the model has nothing finer than the hour.
-        if gate_ceiling != prov_ceiling or (
-                alt and not clears_ceiling(alt.altitude_ft, gate_ceiling, flight_rules)):
+        if gate_deck.msl_ft != prov_deck.msl_ft or (
+                alt and not clears_ceiling(alt.altitude_ft, gate_deck.msl_ft, flight_rules)):
             alt = recommend_altitude(
                 levels_now, bearing, cruise_kt,
                 course_mag=round(magvar.to_magnetic(bearing, origin.lat, origin.lon)),
-                ceiling_ft=gate_ceiling, flight_rules=flight_rules,
+                ceiling_msl_ft=gate_deck.msl_ft, flight_rules=flight_rules,
                 distance_nm=dist, field_elev_ft=origin.elevation_ft,
                 tops_msl_ft=cand_tops, tops_source="model" if cand_tops else None)
             a.altitude = alt
@@ -2933,16 +3006,17 @@ async def suggest(
         # appended after the verdict was computed it could never move one: a card
         # carrying an "over your limits" bullet under a GO badge.
         if (alt is None and flight_rules == "vfr" and levels_now
-                and gate_ceiling is not None):
-            deck = f"{round(gate_ceiling / 100) * 100:,.0f} ft AGL"
-            where = f" at {deck_at}" if deck_at else ""
+                and gate_deck.msl_ft is not None):
+            # The gate is MSL; the sentence is AGL, at the field that reported
+            # it, because that is the deck the pilot will see out of the window.
+            where = f" at {gate_deck.at}" if gate_deck.at else ""
             a.limit_checks.append(LimitCheck(
                 key="vfr_cruise_ceiling", label="VFR cruising altitude",
                 limit_text="≥ 500 ft below the deck",
-                actual_text=(f"none clears the {deck} deck{where} - "
+                actual_text=(f"none clears the {gate_deck.text} deck{where} - "
                              f"plan below 3,000 ft AGL"),
                 passed=True, advisory=True, group="conditions",
-                location=deck_at or airport.ident))
+                location=gate_deck.at or airport.ident))
         # Every failing row on the finished card, including the origin's - the
         # card renders its "why" from the rows, and the timeline from these.
         a.reasons = _explicit_reasons(a.limit_checks)
@@ -3177,19 +3251,41 @@ def _route_tops(points: list[tuple[dict, str]]) -> dict:
     return out
 
 
-def _lowest_deck(pairs: list[tuple[float | None, str | None]]) -> tuple[float | None, str | None]:
-    """:func:`lowest_ceiling`, but it also says which aerodrome reported it.
+class _Deck(NamedTuple):
+    """The deck the cruising-altitude gate is working against.
 
-    The cruising-altitude gate spans both ends of the leg, so the deck that
-    lowers a pick is often nowhere near the card the pick is printed on. Telling
-    a pilot "clouds at 900 ft" on a card headlining a 4,800 ft ceiling is worse
-    than saying nothing; telling them the 900 ft is at their departure field is
-    the whole of the information.
+    Two numbers for one cloud layer, and both are needed: ``msl_ft`` is what the
+    gate compares a cruising altitude to, ``agl_ft`` is what the card prints and
+    what a pilot's minimum is written in. Keeping them together is what stops
+    the gate and the sentence explaining it drifting onto different datums -
+    which is the bug this type was introduced to close.
     """
-    known = [(v, ident) for v, ident in pairs if v is not None]
+
+    msl_ft: float | None = None
+    agl_ft: float | None = None
+    at: str | None = None       # which aerodrome or sample reported it
+
+    @property
+    def text(self) -> str:
+        """The deck as the card names it: AGL, in the hundreds of feet it prints."""
+        return "no ceiling" if self.agl_ft is None else f"{printed_ceiling_ft(self.agl_ft):,.0f} ft AGL"
+
+
+def _lowest_deck_msl(points: list[tuple[float | None, float | None, str | None]]) -> _Deck:
+    """The lowest deck in ``(ceiling_agl_ft, field_elev_ft, label)`` points.
+
+    Lowest by **MSL**, because that is the one that actually constrains a
+    cruising altitude: a 2,000 ft deck over a 3,000 ft plateau sits higher than
+    a 3,000 ft deck at sea level, and comparing their AGL figures picks the
+    wrong one. Each point brings its own ground - the endpoints their aerodrome
+    elevation, each enroute sample the model's grid-cell elevation where it was
+    taken.
+    """
+    known = [(deck_msl_ft(agl, elev), agl, lbl)
+             for agl, elev, lbl in points if agl is not None]
     if not known:
-        return None, None
-    return min(known, key=lambda p: p[0])
+        return _Deck()
+    return _Deck(*min(known, key=lambda p: p[0]))
 
 
 def _as_departure_row(c: LimitCheck, ident: str) -> LimitCheck:

@@ -15,11 +15,17 @@ for tops it is only guessing at: unknown tops leave the answer exactly as it was
 VFR is excluded - the ceiling gate below already keeps a VFR pick under the deck,
 and VFR over-the-top is conditional in ways this module cannot check.
 
-``ceiling_ft`` is the **lowest** deck the flight is planned against - both ends,
-every enroute sample, and what the TAF forecasts across the window - which
+``ceiling_msl_ft`` is the **lowest** deck the flight is planned against - both
+ends, every enroute sample, and what the TAF forecasts across the window - which
 callers build with :func:`lowest_ceiling`. A pick must never sit above a ceiling
 the same page reports, so a caller that learns of a lower deck after the fact
 re-checks with :func:`clears_ceiling` and asks again.
+
+**The gate works in MSL, the cards report AGL.** Cruising altitudes are
+altitudes; a ceiling is a height above whatever ground reported it, and along one
+route that ground moves. So every ceiling entering this module goes through
+:func:`deck_msl_ft` first, and the two parameters that take one are named for
+the datum.
 """
 from __future__ import annotations
 
@@ -121,16 +127,46 @@ def lowest_ceiling(values: Iterable[Optional[float]]) -> Optional[float]:
     return min(vals) if vals else None
 
 
-def clears_ceiling(altitude_ft: float, ceiling_ft: Optional[float],
+def deck_msl_ft(ceiling_agl_ft: Optional[float],
+                field_elev_ft: Optional[float]) -> Optional[float]:
+    """A ceiling reported **AGL**, as the **MSL** altitude the deck actually sits at.
+
+    The one converter between the two datums, because the cruising altitudes are
+    MSL and every ceiling the app reports is AGL - over the aerodrome for an
+    endpoint card, over the model's own grid cell for an enroute sample.
+
+    Mixing them was a field-elevation-sized error in the one direction that
+    matters. ``clears_ceiling`` used to compare an MSL candidate against an AGL
+    ceiling, so under a 4,500 ft AGL deck it allowed 3,500 ft at a sea-level
+    field (right) and still only 3,500 ft at a 2,400 ft field (2,000 ft lower
+    than the highest legal level under that deck), and at a 3,550 ft field it
+    returned 3,500 ft MSL - fifty feet below the runway. The same gate also
+    reported "no VFR cruising altitude clears the deck" at elevation on days
+    when two or three levels were legal.
+
+    ``None`` elevation is read as sea level, which is exactly the old behaviour:
+    a caller that cannot say where the ground is gets the conservative answer
+    rather than a guess.
+    """
+    if ceiling_agl_ft is None:
+        return None
+    return ceiling_agl_ft + (field_elev_ft or 0.0)
+
+
+def clears_ceiling(altitude_ft: float, ceiling_msl_ft: Optional[float],
                    flight_rules: str = "vfr") -> bool:
-    """Whether ``altitude_ft`` is usable under ``ceiling_ft``.
+    """Whether ``altitude_ft`` is usable under a deck at ``ceiling_msl_ft``.
+
+    **Both arguments are MSL.** Callers holding an AGL ceiling convert it with
+    :func:`deck_msl_ft` first - the parameter is named for the datum so that
+    handing it an AGL value is a visible mistake rather than a silent one.
 
     VFR needs ``VFR_CLOUD_CLEARANCE_FT`` below the deck; IFR is not gated on the
     ceiling, and no reported ceiling gates nothing.
     """
-    if flight_rules == "ifr" or ceiling_ft is None:
+    if flight_rules == "ifr" or ceiling_msl_ft is None:
         return True
-    return altitude_ft <= ceiling_ft - VFR_CLOUD_CLEARANCE_FT
+    return altitude_ft <= ceiling_msl_ft - VFR_CLOUD_CLEARANCE_FT
 
 
 def candidate_altitudes(course_mag: float, flight_rules: str = "vfr") -> list[int]:
@@ -145,7 +181,7 @@ def recommend_altitude(
     course_true: float,
     cruise_kt: float,
     course_mag: Optional[float] = None,
-    ceiling_ft: Optional[float] = None,
+    ceiling_msl_ft: Optional[float] = None,
     flight_rules: str = "vfr",
     distance_nm: Optional[float] = None,
     field_elev_ft: Optional[float] = None,
@@ -155,9 +191,16 @@ def recommend_altitude(
 ) -> Optional[AltitudeRecommendation]:
     """Pick the legal cruising altitude (<12,500) with the most tailwind.
 
-    ``tops_msl_ft`` is **MSL**, matching the candidate altitudes. Pass it and, on
-    IFR, the pick may trade a little wind to get above the deck - see the module
-    docstring. Omit it and every answer is what it was before tops existed.
+    ``ceiling_msl_ft`` and ``tops_msl_ft`` are both **MSL**, matching the
+    candidate altitudes. A caller holding an AGL ceiling - which is every
+    ceiling the app reports - converts it with :func:`deck_msl_ft` first; the
+    parameter carries the datum in its name because getting this wrong is
+    invisible at a sea-level aerodrome and puts the pick underground at a
+    mountain one.
+
+    Pass ``tops_msl_ft`` and, on IFR, the pick may trade a little wind to get
+    above the deck - see the module docstring. Omit it and every answer is what
+    it was before tops existed.
 
     VFR stays ≥500 ft below the ceiling (cloud clearance); IFR is not gated on
     the ceiling. When ``distance_nm`` is given, higher levels are capped to what
@@ -168,8 +211,20 @@ def recommend_altitude(
     if not levels:
         return None
     cm = course_mag if course_mag is not None else course_true
+    # The hemispheric levels are fixed altitudes, so at an elevated aerodrome the
+    # lowest of them is underground: 3,500 ft eastbound out of a 3,550 ft field is
+    # fifty feet below the runway, and the pick used to offer it with a
+    # groundspeed attached. A level has to be above the ground it departs from
+    # before any other test is worth running.
+    #
+    # No margin beyond the field elevation itself, deliberately. How much height
+    # a given aeroplane wants over terrain is a judgement this module has no
+    # basis for, and the hemispheric rule it is applying does not bite below
+    # 3,000 ft AGL anyway - where nothing qualifies, the caller already says
+    # "plan to cruise below 3,000 ft AGL", which is the honest answer.
+    floor = field_elev_ft or 0.0
     cands = [a for a in candidate_altitudes(cm, flight_rules)
-             if clears_ceiling(a, ceiling_ft, flight_rules)]
+             if a > floor and clears_ceiling(a, ceiling_msl_ft, flight_rules)]
     if not cands:
         return None
     # Distance realism: don't suggest climbing higher than the leg can justify.

@@ -4,6 +4,7 @@ from app.models import WindAloft
 from app.services.winds_aloft import (
     candidate_altitudes,
     clears_ceiling,
+    deck_msl_ft,
     lowest_ceiling,
     recommend_altitude,
     route_wind_component,
@@ -58,7 +59,7 @@ def test_recommend_altitude_vfr_stays_500_below_ceiling():
     # Enroute ceiling 4100, eastbound -> highest legal VFR level <= 3600 is 3500.
     levels = [WindAloft(altitude_ft=a, direction_true=270, speed_kt=20)
               for a in (3500, 5500, 7500)]
-    rec = recommend_altitude(levels, course_true=90, cruise_kt=110, ceiling_ft=4100)
+    rec = recommend_altitude(levels, course_true=90, cruise_kt=110, ceiling_msl_ft=4100)
     assert rec.altitude_ft == 3500
 
 
@@ -68,7 +69,7 @@ def test_recommend_altitude_vfr_none_when_ceiling_below_lowest_level():
     # turns this None into the "ceiling too low" reason on the card.
     levels = [WindAloft(altitude_ft=a, direction_true=270, speed_kt=20)
               for a in (3500, 5500, 7500)]
-    assert recommend_altitude(levels, course_true=90, cruise_kt=110, ceiling_ft=3000) is None
+    assert recommend_altitude(levels, course_true=90, cruise_kt=110, ceiling_msl_ft=3000) is None
 
 
 # --- the ceiling gate, on its own ---------------------------------------
@@ -101,7 +102,7 @@ def test_recommend_altitude_ifr_not_gated_on_ceiling():
         WindAloft(altitude_ft=7000, direction_true=270, speed_kt=30),   # strong tailwind
     ]
     rec = recommend_altitude(levels, course_true=90, cruise_kt=110,
-                             ceiling_ft=4100, flight_rules="ifr")
+                             ceiling_msl_ft=4100, flight_rules="ifr")
     assert rec.altitude_ft == 7000  # picked despite being above the deck
 
 
@@ -298,6 +299,78 @@ def test_the_ceiling_gate_still_applies_first():
     # VFR is gated under the deck; that gate runs before any of this and the
     # on-top branch never sees a candidate it removed.
     rec = recommend_altitude(_levels((4500, 5), (6500, 3)), WEST, 100.0,
-                             course_mag=WEST, ceiling_ft=5000,
+                             course_mag=WEST, ceiling_msl_ft=5000,
                              flight_rules="vfr", tops_msl_ft=3000)
     assert rec.altitude_ft == 4500 and rec.on_top is False
+
+
+# --- MSL vs AGL: the datum the gate works in -------------------------------
+#
+# ``clears_ceiling`` compares a cruising altitude against a deck, and the two
+# used to arrive on different datums: the candidates are MSL and every ceiling
+# the app reports is AGL. Nothing looked wrong at a sea-level aerodrome, because
+# there the two agree. Everywhere else the gate was wrong by the field
+# elevation, always in the direction of a lower pick.
+
+def test_deck_msl_ft_puts_an_agl_ceiling_on_the_candidates_datum():
+    assert deck_msl_ft(4500, 0) == 4500
+    assert deck_msl_ft(4500, 815) == 5315        # Brantford
+    assert deck_msl_ft(4500, 3550) == 8050       # a foothills aerodrome
+    # No elevation reads as sea level: the conservative answer, not a guess.
+    assert deck_msl_ft(4500, None) == 4500
+    assert deck_msl_ft(None, 815) is None
+
+
+def test_the_pick_uses_the_whole_gap_under_a_deck_at_an_elevated_field():
+    """A 4,500 ft AGL deck over an 815 ft field is at 5,315 ft MSL, and 4,500 is
+    815 ft underneath it. The old AGL-vs-MSL comparison allowed only 3,500."""
+    levels = [WindAloft(altitude_ft=a, direction_true=270, speed_kt=10)
+              for a in (2500, 5000, 10000)]
+    rec = recommend_altitude(levels, course_true=270, cruise_kt=110,
+                             course_mag=270, distance_nm=200, field_elev_ft=815,
+                             ceiling_msl_ft=deck_msl_ft(4500, 815))
+    assert rec.altitude_ft == 4500
+
+
+def test_a_pick_is_never_below_the_field_it_departs():
+    """The end state of the old bug. At a 3,550 ft aerodrome under a 5,000 ft AGL
+    deck, comparing 3,500 ft MSL against 5,000 ft AGL returned 3,500 - fifty feet
+    below the runway - and called it a cruising altitude."""
+    levels = [WindAloft(altitude_ft=a, direction_true=270, speed_kt=10)
+              for a in (2500, 5000, 10000, 13800)]
+    rec = recommend_altitude(levels, course_true=90, cruise_kt=110, course_mag=90,
+                             distance_nm=250, field_elev_ft=3550,
+                             ceiling_msl_ft=deck_msl_ft(5000, 3550))
+    assert rec.altitude_ft == 5500
+    assert rec.altitude_ft > 3550
+
+
+def test_legal_levels_at_elevation_are_not_reported_as_none():
+    """The other half: the gate used to empty the candidate list at elevation, so
+    the card said "no VFR cruising altitude clears the deck" on a day with two."""
+    levels = [WindAloft(altitude_ft=a, direction_true=270, speed_kt=10)
+              for a in (2500, 5000, 10000)]
+    # 3,500 ft AGL deck at a 3,550 ft field = 7,050 ft MSL; 3,500 and 5,500 both fit.
+    rec = recommend_altitude(levels, course_true=90, cruise_kt=110, course_mag=90,
+                             distance_nm=250, field_elev_ft=3550,
+                             ceiling_msl_ft=deck_msl_ft(3500, 3550))
+    assert rec is not None and rec.altitude_ft == 5500
+    # At sea level the same deck genuinely leaves nothing, and still says so.
+    assert recommend_altitude(levels, course_true=90, cruise_kt=110, course_mag=90,
+                              distance_nm=250, field_elev_ft=0,
+                              ceiling_msl_ft=deck_msl_ft(3500, 0)) is None
+
+
+def test_a_level_below_the_departure_field_is_never_offered():
+    """The hemispheric levels are fixed altitudes, so at an elevated aerodrome
+    the lowest of them is underground. 3,500 ft eastbound out of a 3,550 ft
+    field used to be offered, with a groundspeed on it."""
+    levels = [WindAloft(altitude_ft=a, direction_true=270, speed_kt=10)
+              for a in (2500, 5000, 10000, 13800)]
+    rec = recommend_altitude(levels, course_true=90, cruise_kt=110, course_mag=90,
+                             distance_nm=250, field_elev_ft=3550)
+    assert rec.altitude_ft > 3550
+    # Sea level still gets the lowest level, so nothing changed where it was right.
+    sea = recommend_altitude(levels, course_true=90, cruise_kt=110, course_mag=90,
+                             distance_nm=250, field_elev_ft=0)
+    assert sea.altitude_ft == 3500
